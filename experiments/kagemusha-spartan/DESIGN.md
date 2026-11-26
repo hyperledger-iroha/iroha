@@ -764,11 +764,11 @@ installed programs, projected inputs, link word and both proof encodings match. 
 values and incoming verdicts once for both circuits. Generator folding uses four independent prefix products
 per batch inversion.
 
-For a predecessor with cached source blocks, the prover obtains the first four IPA challenges from the usual
+For a predecessor with checked source blocks, the prover obtains the first four IPA challenges from the usual
 L/R messages before reducing the generator basis. Each output is a sum of 16 generators whose weights are the
 subset products of those challenges. A single GLV Straus multiplication shares doublings across the 15 weighted
-terms. For a verified two-parent Receive, later L/R messages use the intermediate bases, so each fold still runs
-in transcript order. At 262,144 input generators, four paired six-worker comparisons on the M4 Max measured
+terms. At `9116d8e860`, a verified two-parent Receive still derived later L/R messages from its intermediate
+bases. At 262,144 input generators, four paired six-worker comparisons on the M4 Max measured
 42% less CPU for the four Pallas folds and 44% less for Vesta. Every output point matched the sequential folds.
 
 The native RP57 Poseidon permutation also uses a cheaper representation for its 57 partial rounds. Write the
@@ -777,6 +777,23 @@ MDS matrix in blocks `[m a; v B]`. For passive state `Y`, the coordinates `p = a
 five per partial round, with one basis conversion at each end. The public parameters determine the transformed
 constants. Custom matrices with dependent basis rows use the dense calculation. In eight paired batches of
 16,384 complete permutations, process CPU fell 24% on each Pasta field. The pinned hash vectors agree on both.
+
+Four fresh-process pairs compared these two arithmetic changes together at `9116d8e860` with their parent
+`ac3aced67b` on the unmasked 968f bundle. The baseline ran first in pairs one and four. Mean full elapsed
+time rose from 60.142 to 62.120 s, and mean process CPU rose from 210.095 to 211.122 s. The first Send
+through final Receive averaged 39.849 and 39.621 s respectively. In a separate instrumented candidate run,
+primary proving accounted for 81.1 CPU-seconds, including 44.9 in the opening. Generator-claim folds took
+40.0 CPU-seconds across the seven operations.
+
+The wallet verifier can also retain the partial sums it checks. Split the IPA challenge vector into a four-word
+prefix and a suffix. For each contiguous generator block `G_j`, compute `B_j = ⟨s(suffix), G_j⟩` and require
+`Σ_j s(prefix)[j] B_j` to equal the claimed generator. The wallet retains 16 points per claim, about 4 KiB
+of points for the own and inherited claims on both curves. A successor matches the claim, proof, wallet owner
+and installation before consuming the blocks. A verified Receive can then compute its leading L/R messages
+from all four sources. Once the fold matches the incoming Send's own and inherited claims on both curves,
+the witness reuses those four generator verdicts. It evaluates both matrices and parses the incoming bytes
+independently. The verifier and recursive trace also evaluate the folded opening weight directly from
+its public slot factors. The prover still materializes the column weights needed for the individual L/R sums.
 
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 

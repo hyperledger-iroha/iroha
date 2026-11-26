@@ -489,6 +489,7 @@ impl VerifiedWalletHead {
 /// capability; consumed-credit admission is still specific to the receiver.
 #[derive(Clone)]
 pub struct VerifiedIncomingPayment {
+    blocks: Arc<engine::InstalledBlocks>,
     parameters_id: [u8; 32],
     manifest_digest: [u8; 32],
     bytes: Arc<[u8]>,

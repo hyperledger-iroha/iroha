@@ -13,7 +13,8 @@ use crate::{
     carrier, certificate, credential, deferral,
     fs::{ProofEntropy, Scalar},
     full,
-    ipa::Gens,
+    generator_claim::{GeneratorDecision, VerifiedBlocks},
+    ipa::{F, Gens},
     payment_wire,
     r1cs::{Circuit, Instance, Witness, WrittenWitness},
     spartan::{self, Link},
@@ -72,50 +73,92 @@ pub use unload_claim::{MAX_UNLOAD_CLAIM_BYTES, UnloadDestinations, VerifiedUnloa
 #[path = "native_epoch.rs"]
 mod selected_epoch;
 
-/// Both traces belong to this finalize call. The head came from the exact head
-/// verifier and the incoming trace came from strict decoding of the exact
-/// Payment that the native verifier accepted under these generators.
-pub(crate) struct VerifiedReceiveFolds<'a> {
+/// Exact own and inherited decisions on both curves, scoped to the generational
+/// identity of the installation whose generators produced the block points.
+pub(super) struct InstalledBlocks {
+    owner: Arc<()>,
+    installation: Arc<()>,
+    primary: [VerifiedBlocks<Eq>; 2],
+    secondary: [VerifiedBlocks<Ep>; 2],
+}
+
+impl InstalledBlocks {
+    fn belongs_to(&self, owner: &Arc<()>, parameters: &AuthenticatedParameters) -> bool {
+        Arc::ptr_eq(&self.owner, owner) && Arc::ptr_eq(&self.installation, &parameters.installation)
+    }
+}
+
+pub(crate) struct VerifiedFoldSources<'a> {
     generators: &'a full::PairGens,
-    pairs: &'a [full::TracedPair; 2],
+    pairs: &'a [full::TracedPair],
+    head: &'a InstalledBlocks,
+    second: Option<&'a InstalledBlocks>,
 }
 
 type FoldProof<'a, C> = (&'a spartan::Proof<C>, &'a crate::verifier::Trace<C>);
+type CheckedProof<'a, C> = (FoldProof<'a, C>, &'a [VerifiedBlocks<C>; 2]);
 
-/// A single curve's generators, head and Payment from the same verified Receive.
 pub(crate) struct VerifiedCurveInputs<'a, C: iroha_pasta::PastaCurve> {
     generators: &'a Gens<C>,
-    proofs: [FoldProof<'a, C>; 2],
+    proofs: [CheckedProof<'a, C>; 2],
 }
 
 impl<'a, C: iroha_pasta::PastaCurve> VerifiedCurveInputs<'a, C> {
-    pub(crate) fn into_parts(self) -> (&'a Gens<C>, [FoldProof<'a, C>; 2]) {
+    pub(crate) fn into_parts(self) -> (&'a Gens<C>, [CheckedProof<'a, C>; 2]) {
         (self.generators, self.proofs)
     }
 }
 
-impl<'a> VerifiedReceiveFolds<'a> {
+impl<'a> VerifiedFoldSources<'a> {
     fn bind(
         parameters: &'a AuthenticatedParameters,
-        payment: &VerifiedIncomingPayment,
+        head: &'a InstalledBlocks,
+        payment: &'a VerifiedIncomingPayment,
         original: &[u8],
         pairs: &'a [full::TracedPair],
     ) -> Result<Self> {
         payment.require_parameters(parameters)?;
-        let pairs: &[full::TracedPair; 2] = pairs
-            .try_into()
-            .map_err(|_| Error::Malformed("verified Receive fold proof count"))?;
-        let [head, incoming] = pairs;
+        let [pred, incoming] = pairs else {
+            return Err(Error::Malformed("verified Receive fold proof count"));
+        };
         if original != payment.exact_bytes()
-            || head.incoming_original.is_some()
+            || pred.incoming_original.is_some()
             || incoming.kind != full::SEND
             || incoming.incoming_original.as_deref() != Some(payment.exact_pair())
         {
             return Err(Error::AuthorityMismatch("verified Receive fold sources"));
         }
+        if !Arc::ptr_eq(&head.installation, &parameters.installation)
+            || !payment.blocks.belongs_to(&head.owner, parameters)
+        {
+            return Err(Error::AuthorityMismatch("generator fold installation"));
+        }
         Ok(Self {
             generators: &parameters.inner.generators,
             pairs,
+            head,
+            second: Some(&payment.blocks),
+        })
+    }
+
+    fn single(
+        parameters: &'a AuthenticatedParameters,
+        head: &'a InstalledBlocks,
+        pairs: &'a [full::TracedPair],
+    ) -> Result<Self> {
+        let [pred] = pairs else {
+            return Err(Error::Malformed("single predecessor fold proof count"));
+        };
+        if pred.incoming_original.is_some()
+            || !Arc::ptr_eq(&head.installation, &parameters.installation)
+        {
+            return Err(Error::AuthorityMismatch("single predecessor fold source"));
+        }
+        Ok(Self {
+            generators: &parameters.inner.generators,
+            pairs,
+            head,
+            second: None,
         })
     }
 
@@ -124,33 +167,40 @@ impl<'a> VerifiedReceiveFolds<'a> {
     }
 
     pub(crate) fn primary(&self) -> VerifiedCurveInputs<'a, Eq> {
-        let [head, incoming] = self.pairs;
+        let head = &self.pairs[0];
+        let second = self.pairs.get(1).unwrap_or(head);
         VerifiedCurveInputs {
             generators: &self.generators.p,
             proofs: [
-                (&head.proof_p, &head.tr_p),
-                (&incoming.proof_p, &incoming.tr_p),
+                ((&head.proof_p, &head.tr_p), &self.head.primary),
+                (
+                    (&second.proof_p, &second.tr_p),
+                    &self.second.unwrap_or(self.head).primary,
+                ),
             ],
         }
     }
 
     pub(crate) fn secondary(&self) -> VerifiedCurveInputs<'a, Ep> {
-        let [head, incoming] = self.pairs;
+        let head = &self.pairs[0];
+        let second = self.pairs.get(1).unwrap_or(head);
         VerifiedCurveInputs {
             generators: &self.generators.s,
             proofs: [
-                (&head.proof_s, &head.tr_s),
-                (&incoming.proof_s, &incoming.tr_s),
+                ((&head.proof_s, &head.tr_s), &self.head.secondary),
+                (
+                    (&second.proof_s, &second.tr_s),
+                    &self.second.unwrap_or(self.head).secondary,
+                ),
             ],
         }
     }
 }
-
 #[derive(Clone, Default)]
 pub struct NativeEngine {
     // Shared by clones until the protected finality reader changes.
     selection_owner: Arc<()>,
-    verified_payment: Arc<std::sync::Mutex<Option<AcceptedPayment>>>,
+    verified_payment: Arc<std::sync::Mutex<Option<VerifiedIncomingPayment>>>,
     verified_output: Arc<std::sync::Mutex<Option<AcceptedOutput>>>,
     selected_epoch: Option<SumeragiCommitVerifierV1>,
     time: Option<Arc<dyn TimeSource>>,
@@ -159,12 +209,6 @@ pub struct NativeEngine {
     isolated_unload_confirmation: bool,
 }
 impl sealed::Engine for NativeEngine {}
-
-/// One positive verifier result per owner. A fresh engine always verifies independently.
-struct AcceptedPayment {
-    installation: Arc<()>,
-    payment: VerifiedIncomingPayment,
-}
 
 /// The last completion output this owner's exact verifier accepted, with the
 /// head it gave. Finalization verifies the output it built, and the staged
@@ -198,10 +242,17 @@ pub(crate) struct HeadCache {
     decodes: std::sync::atomic::AtomicUsize,
 }
 
+/// The decoded pair and the four generator decisions from its complete verifier.
+#[derive(Clone)]
+struct AcceptedPair {
+    pair: full::UniformPair,
+    blocks: Arc<InstalledBlocks>,
+}
+
 struct AcceptedHead {
     owner: Arc<()>,
     head: VerifiedWalletHead,
-    pair: full::UniformPair,
+    pair: AcceptedPair,
 }
 
 /// A reconstruction accepted the exact predecessor bytes and reproduced the capsule.
@@ -210,7 +261,7 @@ pub(super) struct ResumedSelection {
     owner: Arc<()>,
     installation: Arc<()>,
     original: Arc<[u8]>,
-    predecessor: Option<full::UniformPair>,
+    predecessor: Option<AcceptedPair>,
 }
 
 impl ResumedSelection {
@@ -1322,10 +1373,40 @@ fn verify_pair(
     kind: usize,
     decoded: carrier::Decoded,
 ) -> Result<full::UniformPair> {
+    verify_pair_deciding::<(), ()>(parameters, kind, decoded).map(|(pair, _, _)| pair)
+}
+
+fn verify_pair_for_fold(
+    owner: &Arc<()>,
+    parameters: &AuthenticatedParameters,
+    kind: usize,
+    decoded: carrier::Decoded,
+) -> Result<AcceptedPair> {
+    let (pair, primary, secondary) = verify_pair_deciding::<VerifiedBlocks<Eq>, VerifiedBlocks<Ep>>(
+        &parameters.inner,
+        kind,
+        decoded,
+    )?;
+    Ok(AcceptedPair {
+        pair,
+        blocks: Arc::new(InstalledBlocks {
+            owner: Arc::clone(owner),
+            installation: Arc::clone(&parameters.installation),
+            primary,
+            secondary,
+        }),
+    })
+}
+
+fn verify_pair_deciding<P: GeneratorDecision<Eq>, S: GeneratorDecision<Ep>>(
+    parameters: &ParameterSet,
+    kind: usize,
+    decoded: carrier::Decoded,
+) -> Result<(full::UniformPair, [P; 2], [S; 2])> {
     let u = assemble_pair(parameters, kind, decoded)?;
     let r = u.r;
     let rlc = move |_: &[u8; 32]| r;
-    let vp = spartan::verify_linked_circuit_with_io(
+    let (vp, own_p) = spartan::verify_linked_circuit_deciding::<Eq, P>(
         &u.cp.shape,
         &parameters.generators.p,
         &u.ip,
@@ -1339,7 +1420,7 @@ fn verify_pair(
             .map(|keys| keys[kind].as_slice()),
     )
     .map_err(|_| Error::Rejected("primary linked proof".into()))?;
-    let vs = spartan::verify_linked_circuit_with_io(
+    let (vs, own_s) = spartan::verify_linked_circuit_deciding::<Ep, S>(
         &u.cs.shape,
         &parameters.generators.s,
         &u.is,
@@ -1357,8 +1438,17 @@ fn verify_pair(
         return Err(Error::Rejected("pair transcript binding".into()));
     }
     decide_matrix_accumulators(&parameters.generators, &u)?;
-    decide_inherited_accumulators(&parameters.generators, &vp.io, &vs.io)?;
-    Ok(u)
+    let inherited_p = decide_inherited::<Eq, P>(
+        &parameters.generators.p,
+        &vp.io,
+        "native P inherited generator accumulator",
+    )?;
+    let inherited_s = decide_inherited::<Ep, S>(
+        &parameters.generators.s,
+        &vs.io,
+        "native S inherited generator accumulator",
+    )?;
+    Ok((u, [own_p, inherited_p], [own_s, inherited_s]))
 }
 
 /// One deferred matrix accumulator, the first `n + 1` late outputs of a proof:
@@ -1387,26 +1477,14 @@ fn decide_matrix_accumulators(generators: &full::PairGens, pair: &full::UniformP
 
 /// Each linked verifier already decided its own IPA generator claim. Decide
 /// its inherited claim from the very same complete public inputs it verified.
-fn decide_inherited_accumulators(
-    generators: &full::PairGens,
-    primary_io: &[Fp],
-    secondary_io: &[Fq],
-) -> Result<()> {
-    let inherited_p = full::inherited_generator_claim_from_io(primary_io, &generators.p)
-        .map_err(Error::Malformed)?;
-    if !crate::generator_claim::decide(&generators.p, &inherited_p) {
-        return Err(Error::Rejected(
-            "native P inherited generator accumulator".into(),
-        ));
-    }
-    let inherited_s = full::inherited_generator_claim_from_io(secondary_io, &generators.s)
-        .map_err(Error::Malformed)?;
-    if !crate::generator_claim::decide(&generators.s, &inherited_s) {
-        return Err(Error::Rejected(
-            "native S inherited generator accumulator".into(),
-        ));
-    }
-    Ok(())
+fn decide_inherited<C: iroha_pasta::PastaCurve, D: GeneratorDecision<C>>(
+    generators: &Gens<C>,
+    io: &[F<C>],
+    refusal: &'static str,
+) -> Result<D> {
+    let claim =
+        full::inherited_generator_claim_from_io(io, generators).map_err(Error::Malformed)?;
+    D::decide(generators, &claim.us, claim.g).map_err(|_| Error::Rejected(refusal.into()))
 }
 
 /// Standalone accumulator decision used by compiler fixtures and mutation tests.
@@ -1417,20 +1495,25 @@ pub(crate) fn decide_accumulators(
 ) -> Result<()> {
     decide_matrix_accumulators(generators, pair)?;
     let traced = full::trace_uniform(pair.clone(), generators);
-    decide_inherited_accumulators(
-        generators,
+    decide_inherited::<Eq, ()>(
+        &generators.p,
         &traced
             .tr_p
             .circuit
             .as_ref()
             .expect("uniform primary")
             .io_full,
+        "native P inherited generator accumulator",
+    )?;
+    decide_inherited::<Ep, ()>(
+        &generators.s,
         &traced
             .tr_s
             .circuit
             .as_ref()
             .expect("uniform secondary")
             .io_full,
+        "native S inherited generator accumulator",
     )
 }
 
@@ -1476,6 +1559,7 @@ fn encode_head(
         certificate: certificate_bytes(cert),
     })
 }
+#[cfg(test)]
 fn decode_head(
     bytes: &[u8],
     parameters: &AuthenticatedParameters,
@@ -1486,6 +1570,16 @@ fn decode_head(
     certificate::Certificate,
     full::UniformPair,
 )> {
+    decode_head_with(bytes, parameters, |kind, pair| {
+        verify_pair(&parameters.inner, kind, pair)
+    })
+}
+
+fn decode_head_with<T>(
+    bytes: &[u8],
+    parameters: &AuthenticatedParameters,
+    verify: impl FnOnce(usize, carrier::Decoded) -> Result<T>,
+) -> Result<(HeadFrame, [Fp; 64], Credential, certificate::Certificate, T)> {
     let f: HeadFrame = super::decode(bytes)?;
     // A head's kind must be one of the installed programs: the signed v4
     // generation's four, a five-program generation's ArchiveSent as well.
@@ -1512,7 +1606,7 @@ fn decode_head(
     let trusted = parameters.inner.profile(f.kind as usize)?;
     let decoded =
         carrier::decode_projected_pair(&trusted, &f.pair, &proj).map_err(Error::Rejected)?;
-    let pair = verify_pair(&parameters.inner, f.kind as usize, decoded)?;
+    let pair = verify(f.kind as usize, decoded)?;
     Ok((f, profile, c, cert, pair))
 }
 
@@ -1924,11 +2018,15 @@ impl NativeEngine {
         bytes: &[u8],
         credential: &Credential,
         parameters: &AuthenticatedParameters,
-    ) -> Option<(VerifiedWalletHead, full::UniformPair)> {
+    ) -> Option<(VerifiedWalletHead, AcceptedPair)> {
         let held = parameters.verified_head.entry.lock().ok()?;
         let accepted = held.as_ref()?;
         (Arc::ptr_eq(&accepted.owner, &self.selection_owner)
             && accepted.head.require_parameters(parameters).is_ok()
+            && accepted
+                .pair
+                .blocks
+                .belongs_to(&self.selection_owner, parameters)
             && exact_credential(&accepted.head.credential, credential)
             && accepted.head.pair[..] == *bytes)
             .then(|| (accepted.head.clone(), accepted.pair.clone()))
@@ -1939,7 +2037,7 @@ impl NativeEngine {
         bytes: &[u8],
         credential: &Credential,
         parameters: &AuthenticatedParameters,
-    ) -> Result<(VerifiedWalletHead, full::UniformPair)> {
+    ) -> Result<(VerifiedWalletHead, AcceptedPair)> {
         if let Some(accepted) = self.accepted_head(bytes, credential, parameters) {
             return Ok(accepted);
         }
@@ -1948,7 +2046,9 @@ impl NativeEngine {
             .verified_head
             .decodes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let (_, profile, c, cert, pair) = decode_head(bytes, parameters)?;
+        let (_, profile, c, cert, pair) = decode_head_with(bytes, parameters, |kind, pair| {
+            verify_pair_for_fold(&self.selection_owner, parameters, kind, pair)
+        })?;
         if !exact_credential(&c, credential) {
             return Err(Error::AuthorityMismatch("requested head credential"));
         }
@@ -1976,7 +2076,7 @@ impl NativeEngine {
         &self,
         prepared: &mut PreparedOperation,
         parameters: &AuthenticatedParameters,
-    ) -> Result<full::UniformPair> {
+    ) -> Result<AcceptedPair> {
         let original = &prepared.predecessor.pair;
         if let Some(resume) = prepared.resumed_under.as_mut()
             && resume.matches(self, parameters)
@@ -2023,11 +2123,13 @@ impl NativeEngine {
     ) -> Option<VerifiedIncomingPayment> {
         if let Ok(held) = self.verified_payment.lock()
             && let Some(accepted) = held.as_ref()
-            && Arc::ptr_eq(&accepted.installation, &parameters.installation)
-            && accepted.payment.require_parameters(parameters).is_ok()
-            && accepted.payment.exact_bytes() == bytes
+            && accepted
+                .blocks
+                .belongs_to(&self.selection_owner, parameters)
+            && accepted.require_parameters(parameters).is_ok()
+            && accepted.exact_bytes() == bytes
         {
-            return Some(accepted.payment.clone());
+            return Some(accepted.clone());
         }
         None
     }
@@ -2050,7 +2152,7 @@ impl NativeEngine {
         &self,
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
-        verified_head: Option<&full::UniformPair>,
+        verified_head: Option<&AcceptedPair>,
     ) -> Result<VerifiedIncomingPayment> {
         if let Some(payment) = self.accepted_payment(bytes, parameters) {
             return Ok(payment);
@@ -2059,13 +2161,33 @@ impl NativeEngine {
         self.verify_payment_candidate(bytes, parameters, &trusted, &candidate, verified_head)
     }
 
+    /// A retained preparation can cross owners or installations. Re-establish
+    /// its exact Payment's generator decisions at the new verifier boundary.
+    fn payment_for_fold<'a>(
+        &self,
+        payment: &'a VerifiedIncomingPayment,
+        original: &[u8],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<std::borrow::Cow<'a, VerifiedIncomingPayment>> {
+        payment.require_parameters(parameters)?;
+        if payment.exact_bytes() != original {
+            return Err(Error::AuthorityMismatch("verified Receive fold sources"));
+        }
+        if payment.blocks.belongs_to(&self.selection_owner, parameters) {
+            Ok(std::borrow::Cow::Borrowed(payment))
+        } else {
+            self.verify_payment(original, parameters)
+                .map(std::borrow::Cow::Owned)
+        }
+    }
+
     fn verify_payment_candidate(
         &self,
         bytes: &[u8],
         parameters: &AuthenticatedParameters,
         trusted: &carrier::TrustedProfile,
         d: &payment_wire::Candidate,
-        verified_head: Option<&full::UniformPair>,
+        verified_head: Option<&AcceptedPair>,
     ) -> Result<VerifiedIncomingPayment> {
         authenticate_credential(
             &parameters.inner,
@@ -2083,20 +2205,25 @@ impl NativeEngine {
         // A Send's head and its outgoing Payment normally carry identical
         // linked proofs. The carrier omits ordinary IO, so bind both independently
         // reconstructed instances as well as the exact proof bytes and link word.
-        let already_verified = if let Some(head) = verified_head {
+        let reused = if let Some(head) = verified_head {
             let send = &parameters.inner.programs[full::SEND];
             let raw =
                 carrier::frame_projected_pair(trusted, &d.pair_bytes).map_err(Error::Rejected)?;
-            same_send_proof(head, send, &d.projection, &raw)
+            (head.blocks.belongs_to(&self.selection_owner, parameters)
+                && same_send_proof(&head.pair, send, &d.projection, &raw))
+            .then(|| Arc::clone(&head.blocks))
         } else {
-            false
+            None
         };
-        if !already_verified {
+        let blocks = if let Some(blocks) = reused {
+            blocks
+        } else {
             let pair = carrier::decode_projected_pair(trusted, &d.pair_bytes, &d.projection)
                 .map_err(Error::Rejected)?;
-            verify_pair(&parameters.inner, full::SEND, pair)?;
-        }
+            verify_pair_for_fold(&self.selection_owner, parameters, full::SEND, pair)?.blocks
+        };
         let payment = VerifiedIncomingPayment {
+            blocks,
             parameters_id: parameters.id,
             manifest_digest: parameters.manifest_digest,
             bytes: bytes.into(),
@@ -2109,10 +2236,7 @@ impl NativeEngine {
             pair: d.pair_bytes.as_slice().into(),
         };
         if let Ok(mut held) = self.verified_payment.lock() {
-            *held = Some(AcceptedPayment {
-                installation: Arc::clone(&parameters.installation),
-                payment: payment.clone(),
-            });
+            *held = Some(payment.clone());
         }
         Ok(payment)
     }
@@ -2900,10 +3024,13 @@ impl Engine for NativeEngine {
         let p = &parameters.inner;
         let k = kind(&witness, parameters.inner.programs.len())?;
         let mut pairs = Vec::new();
-        if k != full::BOOTSTRAP {
-            let u = self.predecessor_for_proof(&mut prepared, parameters)?;
-            pairs.push(full::trace_uniform(u, &p.generators));
-        }
+        let predecessor_blocks = if k != full::BOOTSTRAP {
+            let verified = self.predecessor_for_proof(&mut prepared, parameters)?;
+            pairs.push(full::trace_uniform(verified.pair, &p.generators));
+            Some(verified.blocks)
+        } else {
+            None
+        };
         stage.mark("predecessor trace");
         if k == full::RECEIVE {
             // Preparation and cold resume derive this pair and its verdict
@@ -2935,19 +3062,38 @@ impl Engine for NativeEngine {
             .receive
             .as_ref()
             .and_then(|receive| receive.verified.as_ref());
-        let folds = match (&witness, verified_payment) {
-            (ExactOperationWitness::Bootstrap(_), _) => None,
+        let mut recursive = full::RecursiveInputs::new(&p.generators, &pairs);
+        let folds = match (&witness, predecessor_blocks.as_deref(), verified_payment) {
+            (ExactOperationWitness::Bootstrap(_), _, _) => None,
             (
                 ExactOperationWitness::Receive {
                     incoming_payment, ..
                 },
+                Some(head),
                 Some(payment),
             ) => {
-                let sources =
-                    VerifiedReceiveFolds::bind(parameters, payment, incoming_payment, &pairs)?;
+                let payment = self.payment_for_fold(payment, incoming_payment, parameters)?;
+                let sources = VerifiedFoldSources::bind(
+                    parameters,
+                    head,
+                    &payment,
+                    incoming_payment,
+                    &pairs,
+                )?;
                 Some(
-                    full::GeneratorFolds::prepare_verified_receive(&sources, &entropy)
-                        .map_err(Error::Malformed)?,
+                    crate::prof::time("Receive folds from four retained sources", || {
+                        recursive.fold_verified_receive(&sources, &entropy)
+                    })
+                    .map_err(Error::Malformed)?,
+                )
+            }
+            (_, Some(head), _) if pairs.len() == 1 => {
+                let sources = VerifiedFoldSources::single(parameters, head, &pairs)?;
+                Some(
+                    crate::prof::time("single-parent folds from retained sources", || {
+                        full::GeneratorFolds::prepare_verified(&sources, &entropy)
+                    })
+                    .map_err(Error::Malformed)?,
                 )
             }
             _ => Some(
@@ -2956,7 +3102,6 @@ impl Engine for NativeEngine {
             ),
         };
         stage.mark("folds");
-        let recursive = full::RecursiveInputs::new(&p.generators, &pairs);
         let build_control = |control: &crate::control::Witness| -> Result<_> {
             Ok((
                 recursive

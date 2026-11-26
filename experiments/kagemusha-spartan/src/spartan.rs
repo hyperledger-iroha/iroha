@@ -465,38 +465,76 @@ pub(crate) fn b_final_slots<S: Scalar>(
     total
 }
 
-/// The batched linear relation `<x, b> = kappa` over the IPA columns, and
-/// the row weights `eq(r_row, .)`.
+/// Public scalar side of the batched opening. Only the prover materializes the
+/// column weights; both verifiers evaluate their inner product with s(u) directly.
+pub(crate) struct OpeningRelation<S> {
+    pub(crate) kappa: S,
+    pub(crate) eq_row: Vec<S>,
+    pub(crate) coefficient: S,
+    pub(crate) r_col: Vec<S>,
+}
+impl<S: Scalar> OpeningRelation<S> {
+    pub(crate) fn folded_weight(&self, shape: &Shape, ch: &Challenges<S>, us: &[S]) -> S {
+        assert_eq!(us.len(), shape.col_bits, "generator claim dimension");
+        b_final_slots(shape, ch, self.coefficient, &self.r_col, us)
+    }
+}
+
+/// Evaluate the verifier's matrix at its transcript point before constructing
+/// the batched opening.
 pub(crate) fn relation<S: Scalar>(
     shape: &Shape,
     ch: &Challenges<S>,
     io: &[S],
     rel: &dyn Rel<S>,
-) -> (Vec<S>, S, Vec<S>, S, Vec<S>) {
-    let rx: Vec<S> = ch.rx.concat();
-    let ry: Vec<S> = ch.ry.concat();
+) -> OpeningRelation<S> {
+    let rx = ch.rx.concat();
+    let ry = ch.ry.concat();
     let (ma, mb, mc) = rel.matrix_evals(shape, &rx, &ry);
     relation_at(
         shape,
         ch,
         io,
+        &ry,
         ch.rabc[0] * ma + ch.rabc[1] * mb + ch.rabc[2] * mc,
     )
 }
 
-/// [`relation`] with the inner final's matrix value `M(r_x, r_y) = r_A A~ +
-/// r_B B~ + r_C C~` given: the verifier evaluates its program; the prover's
-/// folded `M(r_x, .)` table is that value after the last inner round.
-pub(crate) fn relation_at<S: Scalar>(
+/// Form the three constant terms in the batched relation: the last outer
+/// check, the first inner claim and the last inner check. The prover obtains
+/// the same matrix evaluation from the last entry of its folded table.
+fn relation_at<S: Scalar>(
     shape: &Shape,
     ch: &Challenges<S>,
     io: &[S],
+    ry: &[S],
     m_value: S,
-) -> (Vec<S>, S, Vec<S>, S, Vec<S>) {
+) -> OpeningRelation<S> {
+    let outer = ch.alpha.pow_vartime([ch.rx.len() as u64]);
+    let inner = outer * ch.alpha;
+    let matrix = inner * ch.alpha.pow_vartime([ch.ry.len() as u64]) * m_value;
+    let claim = ch.rabc[0] * ch.v[0] + ch.rabc[1] * ch.v[1] + ch.rabc[2] * ch.v[2];
+    let r_sel = ry[0];
+    let kappa = outer * (ch.v[0] * ch.v[1] - ch.v[2])
+        + inner * claim
+        + matrix * r_sel * r1cs::io_eval(shape, io, &ry[1..]);
+    OpeningRelation {
+        kappa,
+        eq_row: eq_table(&ry[1..1 + shape.row_bits]),
+        coefficient: matrix * (S::ONE - r_sel),
+        r_col: ry[1 + shape.row_bits..].to_vec(),
+    }
+}
+
+/// Dense column weights for the prover's cross terms at each IPA round.
+fn dense_weights<S: Scalar>(
+    shape: &Shape,
+    ch: &Challenges<S>,
+    relation: &OpeningRelation<S>,
+) -> Vec<S> {
     let (outer_off, inner_off) = tail_offsets(shape);
     let (ob, ib) = (shape.outer_blocks(), shape.inner_blocks());
     let mut b = vec![S::ZERO; shape.cols()];
-    let mut kappa = S::ZERO;
     let mut apow = S::ONE;
 
     // Outer: sum_{y in {0,1}^k} eq(tau_i, y) t_i(y) = t_{i-1}(r_{i-1}), t_0 := 0.
@@ -522,11 +560,9 @@ pub(crate) fn relation_at<S: Scalar>(
     for (grid, weight) in grid_weights(&ch.rx[last]).iter().enumerate() {
         b[outer_off[last] + at[grid]] += apow * weight;
     }
-    kappa += apow * (ch.v[0] * ch.v[1] - ch.v[2]);
     apow *= ch.alpha;
 
     // Inner: sum_{y in {0,1}^k} q_i(y) = q_{i-1}(r'_{i-1}), q_0 := claim.
-    let claim = ch.rabc[0] * ch.v[0] + ch.rabc[1] * ch.v[1] + ch.rabc[2] * ch.v[2];
     for (i, &k) in ib.iter().enumerate() {
         let at = slot_positions(k);
         for &grid in &boolean_positions(k) {
@@ -537,28 +573,20 @@ pub(crate) fn relation_at<S: Scalar>(
             for (grid, weight) in grid_weights(&ch.ry[i - 1]).iter().enumerate() {
                 b[inner_off[i - 1] + at[grid]] -= apow * weight;
             }
-        } else {
-            kappa += apow * claim;
         }
         apow *= ch.alpha;
     }
     // Inner final: q_last(r'_last) = M(rx, ry) ((1 - r_sel) w~(r_yw) + r_sel io~(r_yw)).
-    let ry: Vec<S> = ch.ry.concat();
     let last = ib.len() - 1;
     let at = slot_positions(ib[last]);
     for (grid, weight) in grid_weights(&ch.ry[last]).iter().enumerate() {
         b[inner_off[last] + at[grid]] += apow * weight;
     }
-    let r_sel = ry[0];
-    let r_row = &ry[1..1 + shape.row_bits];
-    let r_col = &ry[1 + shape.row_bits..];
-    let eq_col = eq_table(r_col);
-    let coefficient = apow * m_value * (S::ONE - r_sel);
+    let eq_col = eq_table(&relation.r_col);
     b[..shape.active_cols()]
         .par_iter_mut()
         .zip(eq_col.par_iter())
-        .for_each(|(weight, e)| *weight -= coefficient * e);
-    kappa += apow * m_value * r_sel * r1cs::io_eval(shape, io, &ry[1..]);
+        .for_each(|(weight, e)| *weight -= relation.coefficient * e);
     // Round slot i is opened as gamma^(i+1) times its values (separation of
     // every commitment by a challenge drawn after all of them).
     let gamma_inv = ch.gamma.invert().expect("nonzero challenge");
@@ -569,7 +597,7 @@ pub(crate) fn relation_at<S: Scalar>(
             .iter_mut()
             .for_each(|w| *w *= scale);
     }
-    (b, kappa, eq_table(r_row), coefficient, r_col.to_vec())
+    b
 }
 
 fn fold_top<S: Field>(table: &[S], r: &[S]) -> Vec<S> {
@@ -1941,7 +1969,9 @@ fn prove_rows<C: PastaCurve>(
     let clock_rel = Instant::now();
     // M(r_x, r_y): the folded table's one value (no matrix program run).
     assert_eq!(m.len(), 1, "the inner rounds bind every variable");
-    let (weights, kappa, eq_row, _, _) = relation_at(shape, &ch, &inst.io, m[0]);
+    let relation = relation_at(shape, &ch, &inst.io, &ch.ry.concat(), m[0]);
+    let weights = dense_weights(shape, &ch, &relation);
+    let OpeningRelation { kappa, eq_row, .. } = relation;
     timings.relation = clock_rel.elapsed().as_secs_f64();
     let powers = gamma_powers(gamma, tail_values.len());
     let x_clock = Instant::now();
@@ -2251,9 +2281,27 @@ pub(crate) fn verify_linked_circuit_with_io<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
     mounted_key: Option<&[Aff<C>]>,
 ) -> Result<VerifiedLink<F<C>>, String> {
+    verify_linked_circuit_deciding::<C, ()>(shape, gens, inst, bytes, link, circuit, mounted_key)
+        .map(|(verified, ())| verified)
+}
+
+/// Verify a linked circuit proof. The wallet may retain the checked generator
+/// blocks for its subsequent predecessor fold.
+pub(crate) fn verify_linked_circuit_deciding<
+    C: PastaCurve,
+    D: crate::generator_claim::GeneratorDecision<C>,
+>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    bytes: &[u8],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    mounted_key: Option<&[Aff<C>]>,
+) -> Result<(VerifiedLink<F<C>>, D), String> {
     let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io, mounted_key)?;
-    verify_inner(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
-        .map(|o| o.expect("linked"))
+    verify_inner_deciding::<C, D>(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
+        .map(|(o, decision)| (o.expect("linked"), decision))
 }
 
 pub fn verify_linked<C: PastaCurve>(
@@ -2309,6 +2357,23 @@ fn verify_inner<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
     fixed: &[Aff<C>],
 ) -> Result<Option<VerifiedLink<F<C>>>, String> {
+    verify_inner_deciding::<C, ()>(
+        shape, gens, inst, bytes, separated, claims, link, circuit, fixed,
+    )
+    .map(|(result, ())| result)
+}
+
+fn verify_inner_deciding<C: PastaCurve, D: crate::generator_claim::GeneratorDecision<C>>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    bytes: &[u8],
+    separated: bool,
+    claims: &[Claim<C>],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    fixed: &[Aff<C>],
+) -> Result<(Option<VerifiedLink<F<C>>>, D), String> {
     shape.check();
     let nf = circuit.fixed_rows(shape);
     if nf > shape.rows() || fixed.len() != nf || circuit.wallet_rows() > nf {
@@ -2382,16 +2447,23 @@ fn verify_inner<C: PastaCurve>(
         alpha,
         gamma,
     };
-    let (weights, kappa, eq_row, coefficient, r_col) = relation(shape, &ch, &io_full, rel.as_ref());
+    let opening = relation(shape, &ch, &io_full, rel.as_ref());
     let rounds: Vec<Aff<C>> = proof.outer.iter().chain(&proof.inner).copied().collect();
-    let p = combined_commitment::<C>(&proof.rows, &rounds, &eq_row, gamma);
-    let (us, b_final) = ipa::verify(gens, &mut t, &p, weights, kappa, &proof.ipa, claims)?;
-    // The circuits evaluate the closed form; it must equal the O(C) fold.
-    assert!(
-        b_final_slots(shape, &ch, coefficient, &r_col, &us) == b_final,
-        "closed-form b_final"
-    );
-    Ok(link_out.map(|(word, _)| VerifiedLink { word, io: io_full }))
+    let p = combined_commitment::<C>(&proof.rows, &rounds, &opening.eq_row, gamma);
+    let decision = ipa::verify::<C, D>(
+        gens,
+        &mut t,
+        &p,
+        shape.cols(),
+        opening.kappa,
+        &proof.ipa,
+        claims,
+        |us| opening.folded_weight(shape, &ch, us),
+    )?;
+    Ok((
+        link_out.map(|(word, _)| VerifiedLink { word, io: io_full }),
+        decision,
+    ))
 }
 
 /// `q_0 = t_0 + J` with `sum_y eq(tau_0, y) q_0(y) = 0` and `q_0(r_0) = t_0(r_0)`:
@@ -2642,6 +2714,172 @@ mod table_tests {
         };
         shape.check();
         shape
+    }
+
+    #[test]
+    fn factored_opening_weights_match_dense_restrictions_on_both_fields() {
+        fn check<S: Scalar>() {
+            let mut rng = SpikeRng::new(b"opening weights");
+            for (sx, col_bits, k) in [(3, 6, 1), (7, 8, 2), (8, 10, 3)] {
+                let shape = Shape {
+                    label: "opening weights",
+                    sx,
+                    row_bits: 2,
+                    col_bits,
+                    k,
+                };
+                shape.check();
+                let mut blocks = |lengths: Vec<usize>| {
+                    lengths
+                        .into_iter()
+                        .map(|n| (0..n).map(|_| rng.scalar::<S>()).collect())
+                        .collect()
+                };
+                let mut ch = Challenges {
+                    rx: blocks(shape.outer_blocks()),
+                    ry: blocks(shape.inner_blocks()),
+                    tau: (0..sx).map(|_| rng.scalar()).collect(),
+                    v: std::array::from_fn(|_| rng.scalar()),
+                    rabc: std::array::from_fn(|_| rng.scalar()),
+                    alpha: rng.scalar(),
+                    gamma: S::from(13),
+                };
+                let io: Vec<S> = (0..7).map(|_| rng.scalar()).collect();
+                let matrix = rng.scalar();
+                for case in 0..3 {
+                    if case > 0 {
+                        // Boolean points immediately before and at the reserved slot boundary.
+                        let column = shape.active_cols() - usize::from(case == 1);
+                        let mut bits = (0..col_bits)
+                            .rev()
+                            .map(|j| S::from(((column >> j) & 1) as u64));
+                        for r in ch.ry.iter_mut().flatten().skip(1 + shape.row_bits) {
+                            *r = bits.next().unwrap();
+                        }
+                        ch.alpha = if case == 1 { S::ONE } else { S::from(2) };
+                        ch.gamma = S::ONE;
+                    }
+                    let opening = relation_at(&shape, &ch, &io, &ch.ry.concat(), matrix);
+                    let weights = dense_weights(&shape, &ch, &opening);
+                    for us in [
+                        vec![S::ZERO; col_bits],
+                        vec![S::ONE; col_bits],
+                        (0..col_bits).map(|_| rng.scalar()).collect(),
+                    ] {
+                        let mut dense = weights.clone();
+                        for &u in &us {
+                            let half = dense.len() / 2;
+                            let (lo, hi) = dense.split_at_mut(half);
+                            lo.iter_mut().zip(hi).for_each(|(l, h)| *l += u * *h);
+                            dense.truncate(half);
+                        }
+                        assert_eq!(opening.folded_weight(&shape, &ch, &us), dense[0]);
+                    }
+                }
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
+
+    #[test]
+    fn linked_verification_and_trace_use_the_provers_opening_weights() {
+        fn check<C: PastaCurve>() {
+            use crate::generator_claim::VerifiedBlocks;
+            let shape = Shape {
+                label: "linked opening weights",
+                sx: 10,
+                row_bits: 2,
+                col_bits: 7,
+                k: 1,
+            };
+            let gens = Gens::<C>::new(shape.cols());
+            let link = Link::First {
+                rho: [2; 32],
+                r: [3; 32],
+            };
+            for count in [0, 2] {
+                let (instance, witness, claims) =
+                    crate::verifier::instance::<C>(shape, &gens, count, 8, b"linked opening");
+                let (proof, word, _) = prove_linked(
+                    &shape,
+                    &gens,
+                    &instance,
+                    &witness,
+                    &mut SpikeRng::new(b"prove linked opening"),
+                    &claims,
+                    &link,
+                );
+                let bytes = proof.to_bytes();
+                let verify = |bytes: &[u8], claims: &[Claim<C>]| {
+                    verify_linked(&shape, &gens, &instance, bytes, claims, &link)
+                };
+                let trace = |proof: &Proof<C>, claims: &[Claim<C>]| {
+                    crate::verifier::trace(&shape, &gens, &instance, proof, claims, &link)
+                };
+                assert_eq!(verify(&bytes, &claims), Ok(word));
+                let valid = trace(&proof, &claims);
+                assert!(valid.accepts);
+                let ch = Challenges {
+                    tau: valid.tau,
+                    rx: valid.rx,
+                    v: proof.v,
+                    rabc: valid.rabc,
+                    ry: valid.ry,
+                    alpha: valid.alpha,
+                    gamma: valid.gamma,
+                };
+                let opening = relation(&shape, &ch, &instance.io, &crate::r1cs::Toy);
+                let weights = dense_weights(&shape, &ch, &opening);
+                let dense = |us: &[F<C>]| -> F<C> {
+                    ipa::s_vector(us)
+                        .into_iter()
+                        .zip(&weights)
+                        .map(|(a, b)| a * b)
+                        .sum()
+                };
+                assert_eq!(valid.b_final, dense(&valid.us));
+                assert_eq!(
+                    valid.claim_values,
+                    claims.iter().map(|c| dense(&c.us)).collect::<Vec<_>>()
+                );
+                let mut bad = proof.clone();
+                bad.ipa.g_final = C::identity().to_affine();
+                assert!(verify(&bad.to_bytes(), &claims).is_err());
+                let mut bad_response = proof.clone();
+                bad_response.ipa.z1 += F::<C>::ONE;
+                assert!(verify(&bad_response.to_bytes(), &claims).is_err());
+                if count == 0 {
+                    let collect = |bytes: &[u8]| {
+                        verify_linked_circuit_deciding::<C, VerifiedBlocks<C>>(
+                            &shape,
+                            &gens,
+                            &instance,
+                            bytes,
+                            &link,
+                            &ToyCircuit,
+                            None,
+                        )
+                    };
+                    assert_eq!(collect(&bytes).unwrap().0.word, word);
+                    assert!(collect(&bad.to_bytes()).is_err());
+                    assert!(collect(&bad_response.to_bytes()).is_err());
+                    let mut short = proof;
+                    short.ipa.lr.pop();
+                    assert!(verify(&short.to_bytes(), &claims).is_err());
+                    assert!(!trace(&short, &claims).accepts);
+                } else {
+                    for length in [shape.col_bits - 1, shape.col_bits + 1] {
+                        let mut wrong = claims.clone();
+                        wrong[0].us.resize(length, F::<C>::ONE);
+                        assert!(verify(&bytes, &wrong).is_err());
+                        assert!(!trace(&proof, &wrong).accepts);
+                    }
+                }
+            }
+        }
+        check::<Pallas>();
+        check::<Vesta>();
     }
 
     /// The fixed-base table window the retired bucket-table commits used

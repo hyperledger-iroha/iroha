@@ -173,33 +173,29 @@ fn begin<C: PastaCurve>(gens: &Gens<C>, t: &mut Transcript<C>, p: &C, kappa: &F<
     C::from(gens.u) * zeta
 }
 
-/// Absorbs the inherited claims and folds them into the commitment, the
-/// value and (for the prover) the vector: returns (P', kappa', xi, s_j).
-pub fn fold_claims<C: PastaCurve>(
+/// Bind the inherited claims in order. The prover opens their full vectors;
+/// the verifier evaluates the same scalar inner products in factored form.
+fn fold_claims<C: PastaCurve>(
     t: &mut Transcript<C>,
     p: &C,
-    b: &[F<C>],
     kappa: F<C>,
     claims: &[Claim<C>],
-) -> (C, F<C>, Vec<Vec<F<C>>>) {
+    mut value: impl FnMut(&[F<C>], F<C>) -> F<C>,
+) -> (C, F<C>) {
     if claims.is_empty() {
-        return (*p, kappa, Vec::new());
+        return (*p, kappa);
     }
     for claim in claims {
         t.point(b"ipa/claim", &claim.g);
     }
     let xi: F<C> = t.endo_challenge(b"ipa/xi");
     let (mut p2, mut k2, mut power) = (*p, kappa, F::<C>::ONE);
-    let mut svecs = Vec::with_capacity(claims.len());
     for claim in claims {
         power *= xi;
-        let s = s_vector(&claim.us);
-        assert_eq!(s.len(), b.len(), "claim over the same generators");
-        k2 += power * inner(&s, b);
+        k2 += power * value(&claim.us, power);
         p2 += C::from(claim.g) * power;
-        svecs.push(s.into_iter().map(|v| v * power).collect());
     }
-    (p2, k2, svecs)
+    (p2, k2)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -218,10 +214,13 @@ pub fn prove<C: PastaCurve>(
     let mut x = Zeroizing::new(x);
     let n = x.len();
     assert!(n.is_power_of_two() && b.len() == n && gens.g.len() == n);
-    let (p, kappa, svecs) = fold_claims(t, p, &b, kappa, claims);
-    for s in &svecs {
-        x.iter_mut().zip(s).for_each(|(v, w)| *v += w);
-    }
+    let (p, kappa) = fold_claims(t, p, kappa, claims, |us, power| {
+        let s = s_vector(us);
+        assert_eq!(s.len(), b.len(), "claim over the same generators");
+        let value = inner(&s, &b);
+        x.iter_mut().zip(s).for_each(|(v, w)| *v += power * w);
+        value
+    });
     let u_point = begin(gens, t, &p, &kappa);
     let h = C::from(gens.h);
     // U as a base of the L/R sums: the value and blind terms are folded into
@@ -331,14 +330,7 @@ pub fn prove<C: PastaCurve>(
 
 /// `s_i = prod_j u_j^{bit_j(i)}`, round 1 the most significant bit.
 pub fn s_vector<S: Field>(us: &[S]) -> Vec<S> {
-    let mut s = Vec::new();
-    fill_s_vector(&mut s, us);
-    s
-}
-
-fn fill_s_vector<S: Field>(s: &mut Vec<S>, us: &[S]) {
-    s.clear();
-    s.reserve_exact(1 << us.len());
+    let mut s = Vec::with_capacity(1 << us.len());
     s.push(S::ONE);
     // Add one more significant index bit at a time. The old prefix is the
     // low half and remains in place; only the new high half is written.
@@ -347,49 +339,54 @@ fn fill_s_vector<S: Field>(s: &mut Vec<S>, us: &[S]) {
             s.push(s[i] * u);
         }
     }
+    s
 }
 
-pub fn verify<C: PastaCurve>(
+/// Exact generator decision for verification that does not need the individual
+/// block sums. The generators and all transcript challenges are public.
+pub(crate) fn decide_generator<C: PastaCurve>(
+    gens: &Gens<C>,
+    us: &[F<C>],
+    point: Aff<C>,
+) -> Result<(), String> {
+    let result = msm_public::<C>(&s_vector(us), &gens.g, MemoryBudget::DEFAULT)
+        .map_err(|e| format!("ipa: msm {e:?}"))?;
+    if result.to_affine() != point {
+        return Err("ipa: folded generator".into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify<C: PastaCurve, D: crate::generator_claim::GeneratorDecision<C>>(
     gens: &Gens<C>,
     t: &mut Transcript<C>,
     p: &C,
-    mut b: Vec<F<C>>,
+    n: usize,
     kappa: F<C>,
     proof: &IpaProof<C>,
     claims: &[Claim<C>],
-) -> Result<(Vec<F<C>>, F<C>), String> {
-    let n = b.len();
+    folded_weight: impl Fn(&[F<C>]) -> F<C>,
+) -> Result<D, String> {
     if !n.is_power_of_two() || proof.lr.len() != n.trailing_zeros() as usize || gens.g.len() != n {
         return Err("ipa: round count".into());
     }
-    let (p, kappa, _) = fold_claims(t, p, &b, kappa, claims);
+    if claims.iter().any(|claim| claim.us.len() != proof.lr.len()) {
+        return Err("ipa: inherited claim dimension".into());
+    }
+    let (p, kappa) = fold_claims(t, p, kappa, claims, |us, _| folded_weight(us));
     let u_point = begin(gens, t, &p, &kappa);
     let mut folded = p + u_point * kappa;
     let mut us = Vec::with_capacity(proof.lr.len());
-    let mut len = n;
     for (l, r) in &proof.lr {
         t.point(b"ipa/L", l);
         t.point(b"ipa/R", r);
         let u: F<C> = t.endo_challenge(b"ipa/u");
         folded = folded * u + C::from(*l) * u.square() + C::from(*r);
-        let half = len / 2;
-        let (b_lo, b_hi) = b.split_at_mut(half);
-        b_lo.par_iter_mut()
-            .zip(b_hi.par_iter())
-            .for_each(|(lo, hi)| *lo += u * hi);
-        b.truncate(half);
         us.push(u);
-        len = half;
     }
-    // Only the final folded scalar survives. Reuse its full-length backing
-    // allocation for the public coefficients of the generator decision.
-    let b_final = b[0];
-    fill_s_vector(&mut b, &us);
-    let g_final = msm_public::<C>(&b, &gens.g, MemoryBudget::DEFAULT)
-        .map_err(|e| format!("ipa: msm {e:?}"))?;
-    if g_final.to_affine() != proof.g_final {
-        return Err("ipa: folded generator".into());
-    }
+    let b_final = folded_weight(&us);
+    let decision = D::decide(gens, &us, proof.g_final)?;
     t.point(b"ipa/G", &proof.g_final);
     t.point(b"ipa/A", &proof.a);
     let c: F<C> = t.endo_challenge(b"ipa/c");
@@ -401,7 +398,7 @@ pub fn verify<C: PastaCurve>(
     if bool::from(C::from(proof.a).is_identity()) {
         return Err("ipa: identity commitment".into());
     }
-    Ok((us, b_final))
+    Ok(decision)
 }
 
 #[cfg(test)]
@@ -411,14 +408,10 @@ mod generator_tests {
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
 
     #[test]
-    fn generator_weights_reuse_the_folded_buffer() {
+    fn generator_weights_follow_the_transcript_bit_order() {
         fn check<S: Field>(two: S) {
-            let mut buffer = vec![S::ZERO; 8];
-            let allocation = buffer.as_ptr();
-            buffer.truncate(1);
             for u in [&[two, S::ZERO, two][..], &[]] {
-                fill_s_vector(&mut buffer, u);
-                assert_eq!(buffer.as_ptr(), allocation);
+                let buffer = s_vector(u);
                 for (index, &value) in buffer.iter().enumerate() {
                     let expected = u.iter().rev().enumerate().fold(S::ONE, |v, (bit, x)| {
                         if index & (1 << bit) == 0 { v } else { v * x }

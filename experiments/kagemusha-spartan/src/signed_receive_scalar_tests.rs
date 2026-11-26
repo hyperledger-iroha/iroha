@@ -309,6 +309,7 @@ fn resumed_predecessor_matches_full_verification_only_for_bound_original_and_own
     let independently_verified = other_engine
         .predecessor_for_proof(&mut prepared, &parameters)
         .unwrap();
+    let independently_verified = independently_verified.pair;
     let full_check = start.elapsed();
     assert!(
         prepared
@@ -322,6 +323,7 @@ fn resumed_predecessor_matches_full_verification_only_for_bound_original_and_own
     let pred = engine
         .predecessor_for_proof(&mut prepared, &parameters)
         .unwrap();
+    let pred = pred.pair;
     eprintln!(
         "signed Receive predecessor full check {full_check:?}, retained {:?}",
         start.elapsed()
@@ -469,14 +471,14 @@ fn same_fold_trace<C: PastaCurve>(
 /// Opus review: the signed counterparty Receive through the verified fold.
 /// Its native verdict binds the exact frozen Payment and proof bytes; every
 /// generator claim the verified fold reuses (own and inherited, head and
-/// incoming, both curves) is decided true exactly as traced, so the batched
-/// rounds close without a fallback; and both curves' folds and fold traces equal
-/// the stock derived folds from the same entropy. Prints wall and process CPU
+/// incoming, both curves) is decided true exactly as traced. The checked blocks
+/// produce the same folds and fold traces on both curves as
+/// the stock decomposition from the same entropy. Prints wall and process CPU
 /// seconds, stock and verified alternating (stock, verified, verified, stock).
 #[test]
 #[ignore = "requires the signed device bundle and retained counterparty Receive originals"]
 fn signed_receive_verified_folds_match_stock_on_both_curves() {
-    let (parameters, capsule, wallet) = signed_receive_fixture();
+    let (mut parameters, capsule, wallet) = signed_receive_fixture();
     let record = CompletionRecord::decode(
         &std::fs::read(wallet.join("counterparty-receive-completion.norito")).unwrap(),
         capsule.wallet(),
@@ -544,46 +546,102 @@ fn signed_receive_verified_folds_match_stock_on_both_curves() {
         );
     }
     let original = incoming_payment.as_ref();
+    let head = &prepared
+        .resumed_under
+        .as_ref()
+        .unwrap()
+        .predecessor
+        .as_ref()
+        .unwrap()
+        .blocks;
     assert!(matches!(
-        VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs[..1]),
+        VerifiedFoldSources::bind(&parameters, head, payment, original, &pairs[..1]),
         Err(Error::Malformed("verified Receive fold proof count"))
     ));
     assert!(matches!(
-        VerifiedReceiveFolds::bind(&parameters, payment, &original[1..], &pairs),
+        VerifiedFoldSources::bind(&parameters, head, payment, &original[1..], &pairs),
         Err(Error::AuthorityMismatch("verified Receive fold sources"))
     ));
     let mut other_manifest = payment.clone();
     other_manifest.manifest_digest[0] ^= 1;
     assert!(matches!(
-        VerifiedReceiveFolds::bind(&parameters, &other_manifest, original, &pairs),
+        VerifiedFoldSources::bind(&parameters, head, &other_manifest, original, &pairs),
         Err(Error::AuthorityMismatch(
             "verified Payment parameter manifest"
         ))
     ));
+    let genesis = parameters.genesis_commit_verifier();
+    let checkpoint = genesis
+        .export_epoch_checkpoint(genesis.initial_commit_epoch())
+        .unwrap();
+    let reselected = engine
+        .with_protected_epoch(&parameters, &checkpoint)
+        .unwrap();
+    assert!(reselected.accepted_payment(original, &parameters).is_none());
+    let independent = reselected
+        .payment_for_fold(payment, original, &parameters)
+        .unwrap();
+    assert!(!Arc::ptr_eq(&payment.blocks, &independent.blocks));
+    assert!(matches!(
+        VerifiedFoldSources::bind(&parameters, head, &independent, original, &pairs),
+        Err(Error::AuthorityMismatch("generator fold installation"))
+    ));
     pairs.swap(0, 1);
     assert!(matches!(
-        VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
+        VerifiedFoldSources::bind(&parameters, head, payment, original, &pairs),
         Err(Error::AuthorityMismatch("verified Receive fold sources"))
     ));
     pairs.swap(0, 1);
     let original_pair = pairs[1].incoming_original.take().unwrap();
     assert!(matches!(
-        VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs),
+        VerifiedFoldSources::bind(&parameters, head, payment, original, &pairs),
         Err(Error::AuthorityMismatch("verified Receive fold sources"))
     ));
     pairs[1].incoming_original = Some(original_pair);
     let entropy = ProofEntropy::fresh().unwrap();
+    let general = full::RecursiveInputs::new(&p.generators, &pairs).incoming_witness_values();
+    assert_eq!(general.0, [1; 10]);
+    {
+        let sources =
+            VerifiedFoldSources::bind(&parameters, head, payment, original, &pairs).unwrap();
+        let mut other = full::RecursiveInputs::new(&p.generators, &pairs[..1]);
+        assert!(matches!(
+            other.fold_verified_receive(&sources, &entropy),
+            Err("verified Receive recursive inputs")
+        ));
+    }
+
+    // The original bytes are held constant here to ensure a mismatched
+    // traced claim cannot qualify the sibling generator predicates.
+    pairs[1].tr_p.us[0] += Fp::ONE;
+    {
+        let sources =
+            VerifiedFoldSources::bind(&parameters, head, payment, original, &pairs).unwrap();
+        let mut refused = full::RecursiveInputs::new(&p.generators, &pairs);
+        assert!(matches!(
+            refused.fold_verified_receive(&sources, &entropy),
+            Err("verified generator claim mismatch")
+        ));
+        let (verdicts, primary_matrix, secondary_matrix) = refused.incoming_witness_values();
+        assert_eq!(verdicts[4], 0);
+        assert_eq!(verdicts[5..], general.0[5..]);
+        assert_eq!((primary_matrix, secondary_matrix), (general.1, general.2));
+    }
+    pairs[1].tr_p.us[0] -= Fp::ONE;
+
     let stock = || full::GeneratorFolds::prepare(&p.generators, &pairs, &entropy).unwrap();
     let verified = || {
-        full::GeneratorFolds::prepare_verified_receive(
-            &VerifiedReceiveFolds::bind(&parameters, payment, original, &pairs).unwrap(),
-            &entropy,
-        )
-        .unwrap()
+        let mut inputs = full::RecursiveInputs::new(&p.generators, &pairs);
+        let sources =
+            VerifiedFoldSources::bind(&parameters, head, payment, original, &pairs).unwrap();
+        let folds = inputs.fold_verified_receive(&sources, &entropy).unwrap();
+        (folds, inputs)
     };
     let (s1, s1_wall, s1_cpu) = measured(stock);
-    let (v1, v1_wall, v1_cpu) = measured(verified);
-    let (v2, v2_wall, v2_cpu) = measured(verified);
+    let ((v1, first), v1_wall, v1_cpu) = measured(verified);
+    let ((v2, second), v2_wall, v2_cpu) = measured(verified);
+    assert_eq!(first.incoming_witness_values(), general);
+    assert_eq!(second.incoming_witness_values(), general);
     let (s2, s2_wall, s2_cpu) = measured(stock);
     for (other, label) in [(&v1, "verified 1"), (&v2, "verified 2"), (&s2, "stock 2")] {
         same_fold(&s1.p, &other.p, &format!("primary fold, {label}"));
@@ -594,6 +652,36 @@ fn signed_receive_verified_folds_match_stock_on_both_curves() {
     eprintln!(
         "opus-review signed Receive GeneratorFolds: stock wall {s1_wall:.3} {s2_wall:.3} s cpu {s1_cpu:.3} {s2_cpu:.3} s; verified wall {v1_wall:.3} {v2_wall:.3} s cpu {v1_cpu:.3} {v2_cpu:.3} s"
     );
+    let single = VerifiedFoldSources::single(&parameters, head, &pairs[..1]).unwrap();
+    let single = full::GeneratorFolds::prepare_verified(&single, &entropy).unwrap();
+    let repeated = full::GeneratorFolds::prepare(&p.generators, &pairs[..1], &entropy).unwrap();
+    same_fold(&repeated.p, &single.p, "single-parent primary");
+    same_fold(&repeated.s, &single.s, "single-parent secondary");
+    same_fold_trace(&repeated.tp, &single.tp, "single-parent primary trace");
+    same_fold_trace(&repeated.ts, &single.ts, "single-parent secondary trace");
+
+    // A preparation retained under the same manifest may finalize after a
+    // reinstall. Rebind the exact head and Payment before deriving its folds.
+    parameters.installation = Arc::new(());
+    let remounted = engine
+        .payment_for_fold(payment, original, &parameters)
+        .unwrap();
+    let (_, own) = engine
+        .verified_head_and_pair(
+            &prepared.predecessor.pair,
+            &prepared.predecessor.credential,
+            &parameters,
+        )
+        .unwrap();
+    assert!(!Arc::ptr_eq(&payment.blocks, &remounted.blocks));
+    assert!(!Arc::ptr_eq(head, &own.blocks));
+    let sources =
+        VerifiedFoldSources::bind(&parameters, &own.blocks, &remounted, original, &pairs).unwrap();
+    let fresh = full::GeneratorFolds::prepare_verified(&sources, &entropy).unwrap();
+    same_fold(&s1.p, &fresh.p, "remounted primary");
+    same_fold(&s1.s, &fresh.s, "remounted secondary");
+    same_fold_trace(&s1.tp, &fresh.tp, "remounted primary trace");
+    same_fold_trace(&s1.ts, &fresh.ts, "remounted secondary trace");
 }
 
 /// Process CPU seconds (user + system, every thread) for the review timings.

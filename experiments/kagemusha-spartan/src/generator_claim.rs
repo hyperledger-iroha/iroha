@@ -8,18 +8,19 @@
 //!
 //! Each private source is a tensor, `s(u) = s(u[..D]) (x) s(u[D..])`.
 //! The general producer derives exact per-source block points before folding.
-//! A native Receive with two previously verified parents can instead compute
-//! the same leading rounds by a secret MSM on each coefficient half. The
-//! secret MSMs are variable time in the private coefficients (TODO.md G8).
+//! A wallet can retain those block points when its native verifier decides a
+//! public claim and use them when proving a successor. Private source MSMs
+//! are variable time in the private coefficients (TODO.md G8).
 use crate::{
     fs::{ProofEntropy, Scalar, SpikeRng, Transcript},
     ipa::{Aff, Claim, F, Gens, s_vector},
 };
 use ff::{Field, PrimeField};
 use group::{Curve, Group};
-use iroha_pasta::msm::{MemoryBudget, msm_public};
+use iroha_pasta::msm::{MemoryBudget, SharedMemoryBudget, msm_public, msm_public_cancellable};
 use iroha_pasta::poseidon::PoseidonField;
 use iroha_pasta::{PastaAffine, PastaCurve};
+use rayon::prelude::*;
 use zeroize::{Zeroize, Zeroizing};
 
 pub const SOURCE_COUNT: usize = 4;
@@ -40,12 +41,16 @@ pub struct Fold<C: PastaCurve> {
     pub output: Claim<C>,
 }
 
+impl<C: PastaCurve> Zeroize for Claim<C> {
+    fn zeroize(&mut self) {
+        self.g.zeroize();
+        self.us.zeroize();
+    }
+}
+
 impl<C: PastaCurve> Drop for Fold<C> {
     fn drop(&mut self) {
-        for source in &mut self.sources {
-            source.g.zeroize();
-            source.us.zeroize();
-        }
+        self.sources.zeroize();
         self.masks.zeroize();
         self.d.zeroize();
         for (l, r) in &mut self.lr {
@@ -247,6 +252,102 @@ pub fn decide<C: PastaCurve>(gens: &Gens<C>, claim: &Claim<C>) -> bool {
 /// `j`-th of the `2^depth` equal public index blocks `G_j` of the generator prefix.
 type Blocks<C> = Zeroizing<Vec<Aff<C>>>;
 
+mod decision_kind {
+    pub trait Sealed {}
+    impl Sealed for () {}
+    impl<C: iroha_pasta::PastaCurve> Sealed for super::VerifiedBlocks<C> {}
+}
+
+/// Both native decision modes enforce the exact public generator equality.
+pub(crate) trait GeneratorDecision<C: PastaCurve>: decision_kind::Sealed + Sized {
+    fn decide(gens: &Gens<C>, us: &[F<C>], point: Aff<C>) -> Result<Self, String>;
+}
+
+impl<C: PastaCurve> GeneratorDecision<C> for () {
+    fn decide(gens: &Gens<C>, us: &[F<C>], point: Aff<C>) -> Result<Self, String> {
+        crate::ipa::decide_generator(gens, us, point)
+    }
+}
+
+impl<C: PastaCurve> GeneratorDecision<C> for VerifiedBlocks<C> {
+    fn decide(gens: &Gens<C>, us: &[F<C>], point: Aff<C>) -> Result<Self, String> {
+        Self::decide(gens, us, point).map_err(str::to_owned)
+    }
+}
+
+/// The block decomposition of an exact public generator decision. Only the
+/// verifier constructs it, and the fold must match both parts of its claim.
+pub(crate) struct VerifiedBlocks<C: PastaCurve> {
+    point: Aff<C>,
+    us: Zeroizing<Vec<F<C>>>,
+    blocks: Blocks<C>,
+}
+
+impl<C: PastaCurve> VerifiedBlocks<C> {
+    pub(crate) fn decide(gens: &Gens<C>, us: &[F<C>], point: Aff<C>) -> Result<Self, &'static str> {
+        if us.len() >= usize::BITS as usize {
+            return Err("generator source dimension");
+        }
+        let bases = gens
+            .g
+            .get(..1usize << us.len())
+            .ok_or("generator source dimension")?;
+        let depth = BLOCK_DEPTH.min(us.len());
+        let tail = &us[depth..];
+        let width = 1 << tail.len();
+        let shared = SharedMemoryBudget::process_default();
+        let blocks = if tail.iter().all(|u| bool::from(u.is_zero())) {
+            // s(0,...,0) selects the first generator of each block.
+            Zeroizing::new(bases.chunks_exact(width).map(|block| block[0]).collect())
+        } else {
+            let weights = Zeroizing::new(s_vector(tail));
+            let sums = Zeroizing::new(
+                bases
+                    .par_chunks_exact(width)
+                    .map(|block| {
+                        msm_public_cancellable::<C>(
+                            &weights,
+                            block,
+                            MemoryBudget::DEFAULT,
+                            &shared,
+                            None,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| "generator source resource bound")?,
+            );
+            let mut affine = Zeroizing::new(vec![Aff::<C>::default(); sums.len()]);
+            C::batch_normalize(&sums, &mut affine[..]);
+            affine
+        };
+        let head = Zeroizing::new(s_vector(&us[..depth]));
+        let root =
+            msm_public_cancellable::<C>(&head, &blocks, MemoryBudget::DEFAULT, &shared, None)
+                .map_err(|_| "generator source resource bound")?;
+        if root != C::from(point) {
+            return Err("generator claim mismatch");
+        }
+        Ok(Self {
+            point,
+            us: Zeroizing::new(us.to_vec()),
+            blocks,
+        })
+    }
+
+    fn for_claim(&self, claim: &Claim<C>, k: usize) -> Result<Blocks<C>, &'static str> {
+        if self.point != claim.g || claim.us.len() != k || *self.us != claim.us {
+            return Err("verified generator claim mismatch");
+        }
+        Ok(self.blocks.clone())
+    }
+}
+
+impl<C: PastaCurve> Drop for VerifiedBlocks<C> {
+    fn drop(&mut self) {
+        self.point.zeroize();
+    }
+}
+
 /// Evaluate a private lineage challenge vector's tail on every public generator
 /// block, one variable-time secret MSM of the same private weights per block.
 fn source_blocks<C: PastaCurve>(
@@ -374,25 +475,35 @@ pub(crate) fn prove_verified_predecessors<C: PastaCurve>(
 where
     F<C>: Scalar,
 {
-    let (gens, [head, incoming]) = verified.into_parts();
-    let claims = |(proof, trace): (&crate::spartan::Proof<C>, &crate::verifier::Trace<C>)| {
-        let own = Claim {
+    let (gens, parents) = verified.into_parts();
+    if !gens.g.len().is_power_of_two() || gens.g.len() < 2 {
+        return Err("generator source dimension");
+    }
+    let k = gens.g.len().ilog2() as usize;
+    let mut sources = Zeroizing::new(Vec::with_capacity(SOURCE_COUNT));
+    let mut blocks = Vec::with_capacity(SOURCE_COUNT);
+    for ((proof, trace), checked) in parents {
+        let inherited = crate::full::inherited_generator_claim(trace, gens)?;
+        sources.push(Claim {
             g: proof.ipa.g_final,
             us: trace.us.clone(),
-        };
-        let inherited = crate::full::inherited_generator_claim(trace, gens)?;
-        Ok::<_, &'static str>([own, inherited])
-    };
-    fold_verified_points(
+        });
+        sources.push(inherited);
+        for (claim, verified) in sources[sources.len() - 2..].iter().zip(checked) {
+            blocks.push(verified.for_claim(claim, k)?);
+        }
+    }
+    prove_checked_with_rng(
         gens,
         relation,
-        claims(head)?,
-        claims(incoming)?,
-        entropy,
-        purpose,
+        std::mem::take(&mut *sources),
+        &blocks,
+        BLOCK_DEPTH.min(k),
+        &mut entropy.stream(purpose),
     )
 }
 
+#[cfg(test)]
 fn fold_verified_points<C: PastaCurve>(
     gens: &Gens<C>,
     relation: [u8; 32],

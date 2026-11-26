@@ -107,6 +107,47 @@ fn source_blocks_partition_the_public_generators() {
 }
 
 #[test]
+fn checked_public_blocks_require_the_exact_generator_claim_on_both_curves() {
+    fn check<C: PastaCurve>() {
+        let gens = Gens::<C>::new(1 << 7);
+        for k in 0..=7 {
+            let challenges = (0..k)
+                .map(|i| scalar::<F<C>>(9 + i as u64))
+                .collect::<Vec<_>>();
+            for us in [challenges, vec![F::<C>::ZERO; k]] {
+                let g = msm_public::<C>(&s_vector(&us), &gens.g[..1 << k], MemoryBudget::DEFAULT)
+                    .unwrap()
+                    .to_affine();
+                let claim = Claim { g, us };
+                let checked = VerifiedBlocks::decide(&gens, &claim.us, claim.g).unwrap();
+                let blocks = checked.for_claim(&claim, k).unwrap();
+                assert_eq!(blocks.len(), 1 << BLOCK_DEPTH.min(k));
+                if k > 0 {
+                    let private = source_blocks(&gens, &claim.us, BLOCK_DEPTH.min(k)).unwrap();
+                    assert_eq!(*blocks, *private);
+                    let mut changed = claim.clone();
+                    changed.us[k / 2] += F::<C>::ONE;
+                    assert!(checked.for_claim(&changed, k).is_err());
+                }
+                let different = Claim {
+                    us: claim.us.clone(),
+                    g: (C::from(claim.g) + C::from(gens.h)).to_affine(),
+                };
+                assert!(checked.for_claim(&different, k).is_err());
+                assert!(checked.for_claim(&claim, k + 1).is_err());
+                assert!(VerifiedBlocks::decide(&gens, &claim.us, different.g).is_err());
+            }
+        }
+        assert!(VerifiedBlocks::decide(&gens, &[F::<C>::ONE; 8], gens.g[0]).is_err());
+        assert!(
+            VerifiedBlocks::decide(&gens, &[F::<C>::ONE; usize::BITS as usize], gens.g[0]).is_err()
+        );
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
 fn leading_block_rounds_match_full_width_rounds_exactly() {
     fn check<C: PastaCurve>()
     where

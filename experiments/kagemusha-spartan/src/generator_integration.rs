@@ -113,8 +113,8 @@ impl GeneratorFolds {
         Self::prepare_inner(gens, pairs, entropy, None)
     }
 
-    pub(crate) fn prepare_verified_receive(
-        receipt: &crate::native::engine::VerifiedReceiveFolds<'_>,
+    pub(crate) fn prepare_verified(
+        receipt: &crate::native::engine::VerifiedFoldSources<'_>,
         entropy: &crate::fs::ProofEntropy,
     ) -> Result<Self, &'static str> {
         let (gens, pairs) = receipt.sources();
@@ -125,7 +125,7 @@ impl GeneratorFolds {
         gens: &PairGens,
         pairs: &[TracedPair],
         entropy: &crate::fs::ProofEntropy,
-        verified: Option<&crate::native::engine::VerifiedReceiveFolds<'_>>,
+        verified: Option<&crate::native::engine::VerifiedFoldSources<'_>>,
     ) -> Result<Self, &'static str> {
         if !(1..=2).contains(&pairs.len()) {
             return Err("generator fold proof count");

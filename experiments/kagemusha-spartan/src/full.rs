@@ -2106,6 +2106,10 @@ mod tests {
         let mut raw = incoming_encoding(&pairs[1]).bytes;
         {
             let inputs = RecursiveInputs::new(&gens, &pairs);
+            assert!(matches!(
+                inputs.incoming_generators,
+                IncomingGeneratorDecisions::Evaluate
+            ));
             let evidence = inputs.incoming();
             assert!(std::ptr::eq(evidence, inputs.incoming()));
             assert_eq!(evidence.wire.bytes, raw);
@@ -5147,6 +5151,14 @@ pub(crate) struct RecursiveInputs<'a> {
     gens: &'a PairGens,
     pairs: &'a [TracedPair],
     incoming: std::sync::OnceLock<IncomingEvidence>,
+    incoming_generators: IncomingGeneratorDecisions,
+}
+
+/// A successful checked Receive fold matched both original incoming claims
+/// on both curves under this exact pair of generators and traced inputs.
+enum IncomingGeneratorDecisions {
+    Evaluate,
+    VerifiedByFold,
 }
 
 impl<'a> RecursiveInputs<'a> {
@@ -5155,12 +5167,38 @@ impl<'a> RecursiveInputs<'a> {
             gens,
             pairs,
             incoming: std::sync::OnceLock::new(),
+            incoming_generators: IncomingGeneratorDecisions::Evaluate,
         }
     }
 
+    pub(crate) fn fold_verified_receive(
+        &mut self,
+        sources: &crate::native::engine::VerifiedFoldSources<'_>,
+        entropy: &crate::fs::ProofEntropy,
+    ) -> Result<GeneratorFolds, &'static str> {
+        let (gens, pairs) = sources.sources();
+        if pairs.len() != 2 || !std::ptr::eq(self.gens, gens) || !std::ptr::eq(self.pairs, pairs) {
+            return Err("verified Receive recursive inputs");
+        }
+        let folds = GeneratorFolds::prepare_verified(sources, entropy)?;
+        self.incoming_generators = IncomingGeneratorDecisions::VerifiedByFold;
+        Ok(folds)
+    }
+
     fn incoming(&self) -> &IncomingEvidence {
-        self.incoming
-            .get_or_init(|| IncomingEvidence::evaluate(self.gens, &self.pairs[1]))
+        self.incoming.get_or_init(|| {
+            IncomingEvidence::evaluate(self.gens, &self.pairs[1], &self.incoming_generators)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn incoming_witness_values(&self) -> ([u128; incoming_codec::VERDICT_BITS], Fp, Fq) {
+        let evidence = self.incoming();
+        (
+            evidence.verdicts,
+            evidence.primary_matrix,
+            evidence.secondary_matrix,
+        )
     }
 
     pub(crate) fn primary(
@@ -5259,38 +5297,51 @@ struct IncomingEvidence {
 }
 
 impl IncomingEvidence {
-    fn evaluate(gens: &PairGens, pair: &TracedPair) -> Self {
+    fn evaluate(
+        gens: &PairGens,
+        pair: &TracedPair,
+        generators: &IncomingGeneratorDecisions,
+    ) -> Self {
         let wire = incoming_encoding(pair);
         let parse = incoming_codec::native_bits(pair, &wire);
         let primary_matrix = gens.defer_p.eval(&pair.acc_p.point);
         let secondary_matrix = gens.defer_s.eval(&pair.acc_s.point);
+        let [own_p, inherited_p, own_s, inherited_s] = match generators {
+            IncomingGeneratorDecisions::VerifiedByFold => [1; 4],
+            IncomingGeneratorDecisions::Evaluate => [
+                u128::from(crate::generator_claim::decide(
+                    &gens.p,
+                    &crate::ipa::Claim {
+                        g: pair.proof_p.ipa.g_final,
+                        us: pair.tr_p.us.clone(),
+                    },
+                )),
+                u128::from(
+                    inherited_generator_claim(&pair.tr_p, &gens.p)
+                        .is_ok_and(|c| crate::generator_claim::decide(&gens.p, &c)),
+                ),
+                u128::from(crate::generator_claim::decide(
+                    &gens.s,
+                    &crate::ipa::Claim {
+                        g: pair.proof_s.ipa.g_final,
+                        us: pair.tr_s.us.clone(),
+                    },
+                )),
+                u128::from(
+                    inherited_generator_claim(&pair.tr_s, &gens.s)
+                        .is_ok_and(|c| crate::generator_claim::decide(&gens.s, &c)),
+                ),
+            ],
+        };
         let verdicts = [
             u128::from(pair.tr_p.accepts),
             u128::from(pair.tr_s.accepts),
             u128::from(primary_matrix == pair.acc_p.value),
             u128::from(secondary_matrix == pair.acc_s.value),
-            u128::from(crate::generator_claim::decide(
-                &gens.p,
-                &crate::ipa::Claim {
-                    g: pair.proof_p.ipa.g_final,
-                    us: pair.tr_p.us.clone(),
-                },
-            )),
-            u128::from(
-                inherited_generator_claim(&pair.tr_p, &gens.p)
-                    .is_ok_and(|c| crate::generator_claim::decide(&gens.p, &c)),
-            ),
-            u128::from(crate::generator_claim::decide(
-                &gens.s,
-                &crate::ipa::Claim {
-                    g: pair.proof_s.ipa.g_final,
-                    us: pair.tr_s.us.clone(),
-                },
-            )),
-            u128::from(
-                inherited_generator_claim(&pair.tr_s, &gens.s)
-                    .is_ok_and(|c| crate::generator_claim::decide(&gens.s, &c)),
-            ),
+            own_p,
+            inherited_p,
+            own_s,
+            inherited_s,
             parse[0],
             parse[1],
         ];
@@ -5308,7 +5359,7 @@ fn incoming_verdict_values(
     gens: &PairGens,
     pair: &TracedPair,
 ) -> [u128; incoming_codec::VERDICT_BITS] {
-    IncomingEvidence::evaluate(gens, pair).verdicts
+    IncomingEvidence::evaluate(gens, pair, &IncomingGeneratorDecisions::Evaluate).verdicts
 }
 
 fn bind_verdict<S: Scalar>(

@@ -110,11 +110,14 @@ fn predecessor_pair_reuse_is_exact_and_bound() {
             "{case}: second verification is reused"
         );
         assert!(
-            same_head(&head1, &head2) && same_pair(&pair1, &pair2),
+            same_head(&head1, &head2) && same_pair(&pair1.pair, &pair2.pair),
             "{case}: reuse"
         );
         let (_, profile, c, cert, independent) = decode_head(head, &parameters).unwrap();
-        assert!(same_pair(&pair2, &independent), "{case}: independent pair");
+        assert!(
+            same_pair(&pair2.pair, &independent),
+            "{case}: independent pair"
+        );
         assert!(head2.profile == profile && exact_credential(&head2.credential, &c));
         assert_eq!(
             certificate_bytes(&head2.certificate),
@@ -217,7 +220,7 @@ fn predecessor_pair_reuse_is_exact_and_bound() {
             "{case}: a restart verifies in full"
         );
         assert!(
-            same_head(&head1, &fresh) && same_pair(&pair1, &fresh_pair),
+            same_head(&head1, &fresh) && same_pair(&pair1.pair, &fresh_pair.pair),
             "{case}: restart"
         );
     }
@@ -340,8 +343,8 @@ fn resume_with_reused_predecessor_rebuilds_the_same_preparation() {
         );
         assert!(
             same_pair(
-                a.predecessor.as_ref().unwrap(),
-                b.predecessor.as_ref().unwrap()
+                &a.predecessor.as_ref().unwrap().pair,
+                &b.predecessor.as_ref().unwrap().pair
             ),
             "{label}: pair"
         );
@@ -381,11 +384,13 @@ pub(in crate::native) fn check_signed_receive_inputs(
     )?;
     let before = decodes(parameters);
     let hit = owner.predecessor_for_proof(direct, parameters)?;
-    assert!(same_pair(&expected_pair, &hit));
+    assert!(same_pair(&expected_pair.pair, &hit.pair));
+    assert!(Arc::ptr_eq(&expected_pair.blocks, &hit.blocks));
     assert_eq!(decodes(parameters), before);
     let other = NativeEngine::default();
     let miss = other.predecessor_for_proof(direct, parameters)?;
-    assert!(same_pair(&expected_pair, &miss));
+    assert!(same_pair(&expected_pair.pair, &miss.pair));
+    assert!(!Arc::ptr_eq(&expected_pair.blocks, &miss.blocks));
     assert_eq!(decodes(parameters), before + 1);
     direct.predecessor.credential.signature[0] ^= 1;
     assert!(matches!(

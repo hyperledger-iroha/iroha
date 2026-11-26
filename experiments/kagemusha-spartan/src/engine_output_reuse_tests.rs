@@ -77,6 +77,7 @@ fn outgoing_payment_reuses_only_the_exact_verified_send() {
     let (_, pair) = engine
         .verified_head_and_pair(&head, &credential, &parameters)
         .unwrap();
+    let pair = pair.pair;
     let (trusted, candidate) = NativeEngine::payment_candidate(&payments[0], &parameters).unwrap();
     let send = &parameters.inner.programs[full::SEND];
     let raw = carrier::frame_projected_pair(&trusted, &candidate.pair_bytes).unwrap();
