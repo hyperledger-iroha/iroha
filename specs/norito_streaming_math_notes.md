@@ -34,7 +34,9 @@ the top-left, top-right, bottom-left and bottom-right samples of one such
 quartet. For frequency indices `u,v`, an 8×8 projection uses a 4×4 array
 with entries `a + (-1)^v b + (-1)^u c + (-1)^(u+v) d`. The encoder forms
 the four arrays once and evaluates each frequency from its parity group.
-The 16 weights of each projection are the outer product of the vertical and
+The encoder folds directly from the source and collocated prediction rows. At
+nonzero quantizers the band moments already supply the DC sum. The 16 weights
+of each projection are the outer product of the vertical and
 horizontal basis factors. In the Q15 transform these products are exact Q30
 integers. A signed 64-bit dot product accumulates all terms before rounding.
 Scalar code and AArch64 NEON use this same integer sum.
@@ -84,8 +86,10 @@ folded entries for this bound, since a constant contributes only to DC up to
 the table error above. The tighter of the two bounds determines which
 weights to evaluate. Each group's projections are stored in ascending weight
 order. The first weight above the threshold ends that group. The default
-path quantizes each visited projection immediately. RDO also receives its
-reference coefficient before selecting levels.
+path quantizes each visited projection immediately. For step `s` and integer
+coefficient magnitude `m`, the first nonzero level has magnitude one when
+`floor(s/2) < m < 2s − floor(s/2)`. The encoder restores its sign directly.
+RDO receives the reference coefficient before selecting levels.
 
 Each block needs two integer moments, the sum of the residuals and their
 squared sum. The encoder computes one band of eight scanlines before writing
@@ -109,14 +113,22 @@ the reference summation order at those boundaries and otherwise restores
 the sign to the integer quotient. Predicted blocks with
 all zero levels retain their pixels in place. With RDO disabled, successive
 such blocks share a bulk write of the standard DC-delta and end-marker
-records. At Q0 the early copy requires every predicted pixel to match.
+records. At Q0 the early copy requires every predicted pixel to match. Reconstruction uses the collocated
+pixel before overwriting it. The encoder can retain the three plane buffers
+between segments because the first Intra frame ignores prior pixels and
+writes every sample needed by the following frame.
 
 When each of the first five zigzag AC levels lies in `{-1, 0, 1}` and
 all higher AC levels are zero, five base-three digits identify one of 243
 patterns. Together with the 8×8 tile position, frame class and DC significance,
 these digits determine the block's ordered entropy records. The recorder
 counts repeated patterns by multiplicity and emits each block's ordered
-tokens. The same support bound limits the run/level writer's zigzag scan.
+tokens. For unmapped contexts, changing the signs of occupied ternary AC
+positions preserves the context sequence, symbol widths and zero runs. An
+encoder therefore keeps one prefix per five-bit occupancy mask, tile, frame
+class and DC significance. It flips the sign bit at the affected nonzero
+records when it copies a prefix. Per-segment histograms count the resulting
+signed records. The table has at most 32 × 256 entries of at most 25 records. The same support bound limits the run/level writer's zigzag scan.
 
 Each repeated pattern contains a significance-RLE record, so the segment's
 entropy stream is the masked symbol byte of each record. The recorder projects

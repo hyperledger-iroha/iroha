@@ -1872,11 +1872,12 @@ level must quantize to zero. It computes the residual sums and squared sums
 for one row of blocks at a time. The forward transform folds the block into four
 reflection groups. Within each group it evaluates frequencies in order of quantization weight
 and stops when the remaining levels are provably zero. Integer dot products
-produce the retained coefficients, with reference-order evaluation at
-ambiguous binary64 rounding boundaries. Prediction
+produce the retained coefficients directly from the source and predictor rows,
+with reference-order evaluation at ambiguous binary64 rounding boundaries. Prediction
 reuses the reference pixels when all residual levels quantize to zero.
 The bundled entropy recorder counts repeated low-frequency patterns and neutral
-zero suffixes by multiplicity. Matching aligned spans in successive reports
+zero suffixes by multiplicity. Unmapped sparse prefixes with the same occupied
+AC positions share their context sequence across signs. Matching aligned spans in successive reports
 reuse both the records and their projected symbols. The encoder writes luma
 and chroma run/level records directly into the frame buffer.
 Reconstruction sums the contributions of the nonzero coefficients in raster

@@ -1080,6 +1080,7 @@ fn repeated_report_reuses_only_equal_aligned_patterns() {
 #[test]
 fn five_ac_templates_preserve_rle_and_reports_across_key_allocation_orders() {
     let mut previous = None;
+    let mut prefixes = SparsePrefixes::default();
     for phase in [0, 37, 242] {
         let mut slots = [Vec::new(), Vec::new()];
         let [mut cached, mut direct] = slots.each_mut().map(|slots| {
@@ -1094,6 +1095,7 @@ fn five_ac_templates_preserve_rle_and_reports_across_key_allocation_orders() {
                 None,
             )
         });
+        cached.cached_prefixes = Some(&mut prefixes);
         let (mut payload, mut reference) = (Vec::new(), Vec::new());
         let (mut prev_dc, mut reference_dc) = (0, 0);
         for i in 0..3 * FIRST_FIVE_CLASSES {
@@ -1153,6 +1155,149 @@ fn five_ac_templates_preserve_rle_and_reports_across_key_allocation_orders() {
             crate::core::to_bytes(&direct.finish(None)).unwrap()
         );
         previous = Some(report);
+        assert_eq!(
+            prefixes
+                .pages
+                .iter()
+                .flatten()
+                .filter(|span| span.len != 0)
+                .count(),
+            32
+        );
+    }
+}
+
+#[test]
+fn sparse_prefix_signs_match_the_direct_recorder_at_every_width() {
+    for width in 1..=4 {
+        let mut cache = SparsePrefixes::default();
+        let mut slots = Vec::new();
+        let mut direct = BundleStreamRecorder::new(
+            &mut slots,
+            width,
+            FrameDimensions::new(64, 64),
+            16,
+            default_bundle_tables(),
+            BundleAcceleration::None,
+            0,
+            None,
+        );
+        for class in (0..FIRST_FIVE_CLASSES).rev() {
+            let mut digits = class;
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = 4;
+            for &slot in &ZIG_ZAG[1..6] {
+                levels[slot] = [0, 1, -1][digits % 3];
+                digits /= 3;
+            }
+            let tile = 9;
+            let end = if class < 9 {
+                FIRST_AC_TAIL_ORDER
+            } else {
+                ZERO_TAIL_ORDER
+            };
+            let start = direct.bundles.len();
+            direct.record_ac_range(tile, &levels, FrameType::Intra, 1..end);
+            direct.record_eob();
+            let reference = &direct.bundles[start..];
+            let (support, signs) = SPARSE_MASKS[class];
+            let key = usize::from(support) * 256 + 128 + usize::from(tile);
+            let mut restored = Vec::new();
+            if cache.append(key, signs, width, &mut restored).is_none() {
+                cache.insert(key, signs, reference);
+                assert!(cache.append(key, signs, width, &mut restored).is_some());
+            }
+            assert_eq!(
+                crate::core::to_bytes(&restored).unwrap(),
+                crate::core::to_bytes(&reference.to_vec()).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn segment_retries_and_plane_changes_match_a_fresh_encoder() {
+    let dims = FrameDimensions::new(30, 18);
+    let make_plane = |n: usize, seed: usize| -> Vec<u8> {
+        (0..n)
+            .map(|i| (i * (11 + seed) + (i >> 3) * 31 + seed) as u8)
+            .collect()
+    };
+    let frames = (1..=3)
+        .map(|s| RawFrame::new(dims, make_plane(dims.pixel_count(), s)).unwrap())
+        .collect::<Vec<_>>();
+    let colors = (1..=3)
+        .map(|s| {
+            Chroma420Frame::new(
+                dims,
+                make_plane(dims.pixel_count() / 4, s),
+                make_plane(dims.pixel_count() / 4, 7 + s),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for quantizer in [0, 16] {
+        let config = BaselineEncoderConfig {
+            frame_dimensions: dims,
+            quantizer,
+            ..BaselineEncoderConfig::default()
+        };
+        let mut warm = BaselineEncoder::new(config.clone());
+        for (step, (count, color)) in [(1, false), (3, true), (2, false), (1, true), (3, true)]
+            .into_iter()
+            .enumerate()
+        {
+            if step == 3 {
+                let mut invalid = frames.clone();
+                invalid[1].luma.pop();
+                assert!(
+                    warm.encode_segment_with_chroma(0, 0, 3, &invalid, Some(&colors), None)
+                        .is_err()
+                );
+            }
+            // The first Intra frame must overwrite storage from any previous segment.
+            for plane in &mut warm.reconstruction {
+                plane.fill(0xb5);
+            }
+            let chroma = color.then_some(&colors[..count]);
+            let actual = warm
+                .encode_segment_with_chroma(4, 0, 3, &frames[..count], chroma, None)
+                .unwrap();
+            let mut fresh = BaselineEncoder::new(config.clone());
+            let expected = fresh
+                .encode_segment_with_chroma(4, 0, 3, &frames[..count], chroma, None)
+                .unwrap();
+            assert_eq!(actual.chunks, expected.chunks);
+            assert_eq!(
+                crate::core::to_bytes(warm.bundled_telemetry().unwrap()).unwrap(),
+                crate::core::to_bytes(fresh.bundled_telemetry().unwrap()).unwrap()
+            );
+            if count == 1 {
+                assert!(fresh.reconstruction.iter().all(Vec::is_empty));
+            }
+        }
+    }
+}
+
+#[test]
+fn ac_magnitude_one_shortcut_agrees_at_quantization_boundaries() {
+    for q in 1..=255 {
+        for w in BASELINE_QUANT_MATRIX {
+            let step = q * i32::from(w);
+            let h = step / 2;
+            for boundary in [h, step * 2 - h, step * 3 - h] {
+                for x in boundary - 1..=boundary + 1 {
+                    for v in [x, -x, i32::MIN, i32::MAX] {
+                        let expected = if v.unsigned_abs() <= h as u32 {
+                            0
+                        } else {
+                            quantize_level(v, step)
+                        };
+                        assert_eq!(quantize_ac(v, step), expected);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1359,11 +1504,12 @@ fn dc_only_after_quantization_matches_full_block_coding() {
             0,
         );
         let mut payload = vec![0xeb; FRAME_HEADER_LEN];
-        let recon = BaselineEncoder::encode_frame_payload(
+        let mut recon = reference.unwrap_or_default();
+        BaselineEncoder::encode_frame_payload(
             &mut payload,
             &frame,
             kind,
-            reference,
+            &mut recon,
             dims,
             16,
             true,
@@ -1372,7 +1518,7 @@ fn dc_only_after_quantization_matches_full_block_coding() {
         );
         assert_eq!(payload[..FRAME_HEADER_LEN], [0xeb; FRAME_HEADER_LEN]);
         assert_eq!(payload[FRAME_HEADER_LEN..], expected);
-        assert_eq!(recon, Some(pixels));
+        assert_eq!(recon, pixels);
     }
 }
 
@@ -2484,7 +2630,7 @@ fn sparse_dct_paths_match_the_full_kernels() {
     for quantizer in [0, 1, 16, 255] {
         let geometry = BlockQuantization::new(quantizer);
         assert_eq!(
-            geometry.forward_quantized(&residual, u8::MAX),
+            quantize_test_block(&geometry, &residual, u8::MAX),
             quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), quantizer)
         );
     }
@@ -2598,18 +2744,19 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
             write_reconstructed_block(&mut pixels, &spatial, &predictor, dims, i);
         }
         let mut payload = Vec::new();
-        let recon = BaselineEncoder::encode_frame_payload(
+        let mut recon = reference.unwrap_or_default().to_vec();
+        BaselineEncoder::encode_frame_payload(
             &mut payload,
             &frame,
             kind,
-            reference.map(<[u8]>::to_vec),
+            &mut recon,
             dims,
             16,
             true,
             &mut NoopBundledHooks,
             None,
         );
-        assert_eq!((payload, recon), (expected, Some(pixels)));
+        assert_eq!((payload, recon), (expected, pixels));
     }
 }
 
@@ -2624,11 +2771,12 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
     ] {
         let encode = |retain| {
             let mut payload = Vec::new();
-            let recon = BaselineEncoder::encode_frame_payload(
+            let mut recon = reference.unwrap_or_default().to_vec();
+            BaselineEncoder::encode_frame_payload(
                 &mut payload,
                 &plane,
                 kind,
-                reference.map(<[u8]>::to_vec),
+                &mut recon,
                 dims,
                 16,
                 retain,
@@ -2640,8 +2788,8 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
         let (with_reference, pixels) = encode(true);
         let (terminal, discarded) = encode(false);
         assert_eq!(terminal, with_reference);
-        assert_eq!(pixels.unwrap().len(), dims.pixel_count());
-        assert!(discarded.is_none());
+        assert_eq!(pixels.len(), dims.pixel_count());
+        assert_eq!(discarded, reference.unwrap_or_default());
     }
 }
 
@@ -3007,7 +3155,7 @@ fn dct_tables_satisfy_centered_projection_bound() {
 fn folded_projection_kernels_match_wide_scalar_sums() {
     let mut state = 0xbadecafe_u32;
     for iteration in 0..64 {
-        let block = std::array::from_fn(|i| {
+        let block: [i16; BLOCK_PIXELS] = std::array::from_fn(|i| {
             state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             match iteration {
                 0 => i16::MIN,
@@ -3016,9 +3164,9 @@ fn folded_projection_kernels_match_wide_scalar_sums() {
                 _ => (state >> 16) as i16,
             }
         });
-        let folded = fold_scalar(&block);
+        let folded = fold_scalar(|y| block.as_chunks::<BLOCK_SIZE>().0[y]);
         #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
-        assert_eq!(fold_neon(&block), folded);
+        assert_eq!(fold_rows(|y| block.as_chunks::<BLOCK_SIZE>().0[y]), folded);
         for (samples, projections) in folded.iter().zip(&AC_PROJECTIONS) {
             let center = samples.as_flattened().iter().sum::<i32>() / 16;
             for center in [0, center] {
@@ -3050,7 +3198,10 @@ fn q32_midpoint_uses_reference_order_for_ac() {
     block[51] = -58;
     let slot = 4 * BLOCK_SIZE;
     let projection = AC_PROJECTIONS[0].iter().find(|p| p.slot == slot).unwrap();
-    let value = folded_dot(&fold_scalar(&block)[0], &projection.factors);
+    let value = folded_dot(
+        &fold_scalar(|y| block.as_chunks::<BLOCK_SIZE>().0[y])[0],
+        &projection.factors,
+    );
     assert_eq!(value, (8_i64 << 32) + (1 << 31));
     for sign in [1, -1] {
         let signed = block.map(|v| v * sign);
@@ -3060,6 +3211,15 @@ fn q32_midpoint_uses_reference_order_for_ac() {
         );
         assert_eq!(forward_dct(&signed, u8::MAX, 0)[slot], 8 * i32::from(sign));
     }
+}
+
+fn quantize_test_block(
+    geometry: &BlockQuantization,
+    block: &[i16; BLOCK_PIXELS],
+    limit: u8,
+) -> [i16; BLOCK_PIXELS] {
+    let folded = fold_rows(|y| block.as_chunks::<BLOCK_SIZE>().0[y]);
+    geometry.quantize_folded(&folded, folded_sum(&folded), limit, || *block)
 }
 
 #[test]
@@ -3077,7 +3237,7 @@ fn fused_forward_levels_match_full_transform_at_every_quantizer() {
             let limit = geometry.ac_limit(sum, squares).unwrap_or(0);
             let expected = quantize_coeffs(&forward_dct(&block, u8::MAX, 0), quantizer);
             assert_eq!(
-                geometry.forward_quantized(&block, limit),
+                quantize_test_block(&geometry, &block, limit),
                 expected,
                 "Q{quantizer} amplitude {amplitude}"
             );
