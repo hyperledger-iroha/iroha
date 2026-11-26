@@ -442,6 +442,9 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   Four signed two-wallet runs (baseline, candidate, candidate, baseline) all completed the seven operations.
   The primary circuit wiring for Load and both Sends averaged 21.08 s of CPU on the baseline and 11.03 s on
   the candidate. The full round trip averaged 408.56 s and 436.26 s of process CPU respectively on the loaded Mac.
+  A final pair ran after the other local tests finished. The baseline and candidate used 19.92 s and 10.11 s for
+  the same wiring, 394.44 s and 387.99 s for the whole process, and 172.80 s and 219.03 s of elapsed time.
+  The wiring improvement held across all three comparisons. Overall wallet latency remains unconfirmed.
 
 ### 7.4 Generator claims
 
