@@ -736,13 +736,23 @@ before proving its Receive. The timer includes signing with software fixture key
 final Receive. The test checks final balances of 100 and 0, both credit roots, zero Burn and the QR size of each
 Payment. Physical-device signing, transport and durable storage require separate measurements.
 
-The signed 968f bundle on an M4 Max with six Rayon workers produced two 10,231-byte Payments per run.
-Four pairs of fresh release processes compared the wallet changes against `f058094475` with the same
-two-owner fixture. The baseline ran first in pairs 1 and 4. With the stage profiler disabled, mean elapsed time
-fell from 54.875 to 52.858 s (3.7%) and median elapsed time from 53.925 to 51.308 s (4.9%). The candidate was
-faster in two of four pairs. Mean process CPU fell from 189.481 to 174.661 s (7.8%), with a reduction in every
-pair. The two Sends together averaged 12.856 s to prepare and finalize, down from 14.897 s. The final Receive
-averaged 9.171 s, down from 11.234 s.
+On an M4 Max with six Rayon workers, all 16 fresh release processes using the signed 968f bundle completed
+the seven operations and independently verified both 10,231-byte Payments. Both baselines ran the identical
+two-owner fixture. The baseline ran first in pairs 1 and 4 of the initial comparison and in pairs 2 and 3 of
+the shipping comparison. Stage profiling was disabled for all eight pairs.
+
+| Comparison | Pairs | Mean elapsed, baseline → optimized | Mean process CPU, baseline → optimized |
+|---|---:|---:|---:|
+| Initial parent `f058094475` | 4 | 54.875 → 52.858 s | 189.481 → 174.661 s |
+| Shipping parent `8f377e8f60` | 4 | 56.976 → 56.302 s | 202.440 → 193.732 s |
+| Both | 8 | 55.926 → 54.580 s | 195.960 → 184.196 s |
+
+Across the eight pairs, mean elapsed time fell 2.4% and mean CPU fell 6.0%. The optimized code finished sooner
+in four pairs and used less CPU in six. A breakdown of the recorded operation boundaries shows where the elapsed
+savings occurred. From the start of the first Send through completion of the final Receive, mean time fell from
+38.582 to 35.180 s against the shipping parent and from 38.425 to 34.359 s across both comparisons. This interval
+includes both recipient verifications and excludes setup, funding and construction of the first Request.
+The primary proof was the largest finalization stage in both separately instrumented profiles.
 
 The linked verifier returns the public inputs it checked on both curves so the engine can decide the inherited
 generator claims directly. A Send reuses that successful verification for its outgoing Payment only when its
