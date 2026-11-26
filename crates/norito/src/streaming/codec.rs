@@ -1874,64 +1874,83 @@ impl BaselineEncoder {
         let mut prev_dc = 0i16;
         let mut dc_levels = [0; BLOCK_PIXELS];
         let geometry = BlockQuantization::new(quantizer);
+        let stride = usize::from(dims.width);
+        let blocks_per_row = stride / BLOCK_SIZE;
+        let mut moments = vec![(0, 0); blocks_per_row];
         let mut next_block = 0;
-        for block_index in 0..dims.block_count() {
-            let prediction = reference
-                .as_deref()
-                .filter(|_| frame_type == FrameType::Predicted);
-            let decision = geometry.classify(frame, prediction, dims, block_index);
-            if matches!(decision, BlockSpectrum::DcLevel(0))
-                && frame_type == FrameType::Predicted
-                && rdo.is_none()
-            {
-                continue;
+        for band in 0..usize::from(dims.height) / BLOCK_SIZE {
+            let band_start = band * BLOCK_SIZE * stride;
+            if quantizer != 0 {
+                let range = band_start..band_start + BLOCK_SIZE * stride;
+                let prediction = reference
+                    .as_deref()
+                    .filter(|_| frame_type == FrameType::Predicted);
+                row_moments(
+                    &frame[range.clone()],
+                    prediction.map(|p| &p[range]),
+                    stride,
+                    &mut moments,
+                );
             }
-            if next_block < block_index {
-                emit_zero_run(next_block..block_index, &mut prev_dc, &mut payload, hooks);
-            }
-            next_block = block_index + 1;
-            let limit = match decision {
-                BlockSpectrum::WeightsThrough(limit) => limit,
-                BlockSpectrum::DcLevel(level) => {
-                    dc_levels[0] = level;
-                    emit_dc_block(
-                        &mut dc_levels,
-                        &mut prev_dc,
-                        &mut payload,
-                        hooks,
-                        block_index,
-                        frame_type,
-                        rdo.as_deref_mut(),
-                    );
-                    if retain_reference
-                        && (frame_type == FrameType::Intra || level != 0)
-                        && let Some(pixels) = reference.as_mut()
-                    {
-                        let offset = inverse_dc_sample(i32::from(level) * geometry.dc_step);
-                        reconstruct_dc(pixels, dims, block_index, frame_type, offset);
-                    }
+            for (column, &moments) in moments.iter().enumerate() {
+                let block_index = band * blocks_per_row + column;
+                let prediction = reference
+                    .as_deref()
+                    .filter(|_| frame_type == FrameType::Predicted);
+                let decision = geometry.classify(frame, prediction, dims, block_index, moments);
+                if matches!(decision, BlockSpectrum::DcLevel(0))
+                    && frame_type == FrameType::Predicted
+                    && rdo.is_none()
+                {
                     continue;
                 }
-            };
-            let (residual, predictor) =
-                build_residual_block(frame, prediction, dims, block_index, frame_type);
-            let coeffs = forward_dct(&residual, limit, quantizer);
-            let mut quantized = quantize_coeffs(&coeffs, quantizer);
-            if let Some(optimizer) = rdo.as_deref_mut() {
-                optimizer.select_levels(&coeffs, &mut quantized, frame_type, block_index);
-            }
-            encode_block_rle(
-                &quantized,
-                &mut prev_dc,
-                &mut payload,
-                hooks,
-                block_index,
-                frame_type,
-            );
-            if retain_reference && let Some(pixels) = reference.as_mut() {
-                let dequantized = dequantize_coeffs(&quantized, quantizer);
-                let spatial = inverse_dct(&dequantized);
-                write_reconstructed_block(pixels, &spatial, &predictor, dims, block_index);
+                if next_block < block_index {
+                    emit_zero_run(next_block..block_index, &mut prev_dc, &mut payload, hooks);
+                }
+                next_block = block_index + 1;
+                let limit = match decision {
+                    BlockSpectrum::WeightsThrough(limit) => limit,
+                    BlockSpectrum::DcLevel(level) => {
+                        dc_levels[0] = level;
+                        emit_dc_block(
+                            &mut dc_levels,
+                            &mut prev_dc,
+                            &mut payload,
+                            hooks,
+                            block_index,
+                            frame_type,
+                            rdo.as_deref_mut(),
+                        );
+                        if retain_reference
+                            && (frame_type == FrameType::Intra || level != 0)
+                            && let Some(pixels) = reference.as_mut()
+                        {
+                            let offset = inverse_dc_sample(i32::from(level) * geometry.dc_step);
+                            reconstruct_dc(pixels, dims, block_index, frame_type, offset);
+                        }
+                        continue;
+                    }
+                };
+                let (residual, predictor) =
+                    build_residual_block(frame, prediction, dims, block_index, frame_type);
+                let coeffs = forward_dct(&residual, limit, quantizer);
+                let mut quantized = quantize_coeffs(&coeffs, quantizer);
+                if let Some(optimizer) = rdo.as_deref_mut() {
+                    optimizer.select_levels(&coeffs, &mut quantized, frame_type, block_index);
+                }
+                encode_block_rle(
+                    &quantized,
+                    &mut prev_dc,
+                    &mut payload,
+                    hooks,
+                    block_index,
+                    frame_type,
+                );
+                if retain_reference && let Some(pixels) = reference.as_mut() {
+                    let dequantized = dequantize_coeffs(&quantized, quantizer);
+                    let spatial = inverse_dct(&dequantized);
+                    write_reconstructed_block(pixels, &spatial, &predictor, dims, block_index);
+                }
             }
         }
         if next_block < dims.block_count() {
@@ -2237,18 +2256,17 @@ pub(crate) fn forward_dct(
 
 /// All 64 residuals lie in [-255, 255], so their squared sum fits in i32.
 fn block_moments(
-    frame: &[u8],
+    samples: &[u8],
     prediction: Option<&[u8]>,
-    dims: FrameDimensions,
-    index: usize,
-) -> (i64, i64) {
-    let (x, y) = block_origin(dims, index);
-    let stride = usize::from(dims.width);
+    stride: usize,
+    column: usize,
+) -> (i32, i32) {
+    let x = column * BLOCK_SIZE;
     let mut sums = [0_i32; BLOCK_SIZE];
     let mut squares = [0_i32; BLOCK_SIZE];
     for dy in 0..BLOCK_SIZE {
-        let start = (y + dy) * stride + x;
-        let samples = frame[start..]
+        let start = dy * stride + x;
+        let samples = samples[start..]
             .first_chunk::<BLOCK_SIZE>()
             .expect("complete block row");
         let predictors = prediction.map_or(&[0; BLOCK_SIZE], |prev| {
@@ -2262,10 +2280,73 @@ fn block_moments(
             squares[dx] += delta * delta;
         }
     }
-    (
-        i64::from(sums.iter().sum::<i32>()),
-        i64::from(squares.iter().sum::<i32>()),
-    )
+    (sums.iter().sum(), squares.iter().sum())
+}
+
+/// Compute the moments before any collocated predictor in this band is overwritten.
+fn row_moments(
+    samples: &[u8],
+    prediction: Option<&[u8]>,
+    stride: usize,
+    output: &mut [(i32, i32)],
+) {
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    if std::arch::is_aarch64_feature_detected!("dotprod") {
+        // SAFETY: the selected CPU supports the integer dot-product instructions.
+        unsafe { dot_row_moments(samples, prediction, stride, output) };
+        return;
+    }
+    for (column, moments) in output.iter_mut().enumerate() {
+        *moments = block_moments(samples, prediction, stride, column);
+    }
+}
+
+/// Two adjacent 8×8 blocks occupy the two halves of each vector load. Dot the
+/// absolute differences with themselves, then add neighboring four-byte lanes.
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[target_feature(enable = "dotprod")]
+unsafe fn dot_row_moments(
+    samples: &[u8],
+    reference: Option<&[u8]>,
+    stride: usize,
+    row: &mut [(i32, i32)],
+) {
+    use std::arch::aarch64::*;
+    assert!(row.len() <= stride / BLOCK_SIZE);
+    let band_len = stride.checked_mul(BLOCK_SIZE).expect("valid band length");
+    let samples = &samples[..band_len];
+    let reference = reference.map(|p| &p[..band_len]);
+    let ones = vdupq_n_u8(1);
+    for (pair, dst) in row.chunks_exact_mut(2).enumerate() {
+        let mut sum = vdupq_n_u32(0);
+        let mut prev_sum = vdupq_n_u32(0);
+        let mut squares = vdupq_n_u32(0);
+        for y in 0..BLOCK_SIZE {
+            let offset = y * stride + pair * 2 * BLOCK_SIZE;
+            // SAFETY: the pair contains 16 bytes within a checked eight-row band.
+            let pixels = unsafe { vld1q_u8(samples.as_ptr().add(offset)) };
+            sum = vdotq_u32(sum, pixels, ones);
+            let magnitude = if let Some(previous) = reference {
+                // SAFETY: the reference band has the same checked length.
+                let predictors = unsafe { vld1q_u8(previous.as_ptr().add(offset)) };
+                prev_sum = vdotq_u32(prev_sum, predictors, ones);
+                vabdq_u8(pixels, predictors)
+            } else {
+                pixels
+            };
+            squares = vdotq_u32(squares, magnitude, magnitude);
+        }
+        let totals = vpaddq_s32(
+            vreinterpretq_s32_u32(vsubq_u32(sum, prev_sum)),
+            vreinterpretq_s32_u32(squares),
+        );
+        dst[0] = (vgetq_lane_s32::<0>(totals), vgetq_lane_s32::<2>(totals));
+        dst[1] = (vgetq_lane_s32::<1>(totals), vgetq_lane_s32::<3>(totals));
+    }
+    if row.len() % 2 != 0 {
+        let column = row.len() - 1;
+        row[column] = block_moments(samples, reference, stride, column);
+    }
 }
 
 enum BlockSpectrum {
@@ -2276,6 +2357,8 @@ enum BlockSpectrum {
 struct BlockQuantization {
     quantizer: u8,
     dc_step: i32,
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    dc_reciprocal: u64,
     zero_dc_sum: u64,
     dc_only_energy: i64,
 }
@@ -2288,6 +2371,8 @@ impl BlockQuantization {
         Self {
             quantizer,
             dc_step,
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            dc_reciprocal: (1_u64 << 32).div_ceil(dc_step as u64),
             // DC is sum / 8 up to the table and signed rounding error.
             zero_dc_sum: 8 * (dc_step as u64 / 2).saturating_sub(2),
             dc_only_energy: BLOCK_PIXELS as i64 * radius * radius,
@@ -2300,6 +2385,7 @@ impl BlockQuantization {
         prediction: Option<&[u8]>,
         dims: FrameDimensions,
         index: usize,
+        moments: (i32, i32),
     ) -> BlockSpectrum {
         if self.quantizer == 0 {
             if let Some(prev) = prediction {
@@ -2314,11 +2400,11 @@ impl BlockQuantization {
             }
             return BlockSpectrum::WeightsThrough(u8::MAX);
         }
-        let (sum, squares) = block_moments(frame, prediction, dims, index);
+        let (sum, squares) = (i64::from(moments.0), i64::from(moments.1));
         match self.ac_limit(sum, squares) {
             Some(limit) => BlockSpectrum::WeightsThrough(limit),
             None if sum.unsigned_abs() <= self.zero_dc_sum => BlockSpectrum::DcLevel(0),
-            None => BlockSpectrum::DcLevel(quantized_dc(sum, self.dc_step, || {
+            None => BlockSpectrum::DcLevel(self.quantized_dc(sum, || {
                 let kind = if prediction.is_some() {
                     FrameType::Predicted
                 } else {
@@ -2342,29 +2428,34 @@ impl BlockQuantization {
         let bound = (65 * radius_upper).div_ceil(512) + 2;
         Some((2 * bound / u64::from(self.quantizer)).min(u64::from(u8::MAX)) as u8)
     }
-}
 
-fn quantized_dc(sum: i64, step: i32, _residual: impl FnOnce() -> [i16; BLOCK_PIXELS]) -> i16 {
-    #[cfg(feature = "streaming-fixed-point-dct")]
-    let dc = {
-        let basis = i64::from(DCT_FACTORS_Q15[0][0]);
-        round_q30(sum * basis * basis) as i32
-    };
-    #[cfg(not(feature = "streaming-fixed-point-dct"))]
-    let dc = {
-        // Binary64 evaluation can select either adjacent integer only at
-        // an exact half. Resolve it in reference order only across a level boundary.
-        let lower = sum.div_euclid(8) as i32;
-        match sum.rem_euclid(8) {
-            0..=3 => lower,
-            4 if quantize_level(lower, step) != quantize_level(lower + 1, step) => {
-                direct_dct_coefficient(&_residual(), &DCT_FACTORS[0], &DCT_FACTORS[0])
-            }
-            4 => lower,
-            _ => lower + 1,
+    fn quantized_dc(&self, sum: i64, _residual: impl FnOnce() -> [i16; BLOCK_PIXELS]) -> i16 {
+        #[cfg(feature = "streaming-fixed-point-dct")]
+        {
+            let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+            quantize_level(round_q30(sum * basis * basis) as i32, self.dc_step)
         }
-    };
-    quantize_level(dc, step)
+        #[cfg(not(feature = "streaming-fixed-point-dct"))]
+        {
+            let step = self.dc_step as u64;
+            let biased = (sum.unsigned_abs() + 4) / 8 + step / 2;
+            // For any i16 block, biased * step < 2^32. Rounding the reciprocal
+            // up therefore adds less than 1/step to the exact quotient.
+            let level = (biased * self.dc_reciprocal) >> 32;
+            // At a half-integer DC, the reference can round magnitude down by one.
+            // Only an exact quantizer boundary would then change the level.
+            if sum & 7 == 4 && biased == level * step {
+                let dc = direct_dct_coefficient(&_residual(), &DCT_FACTORS[0], &DCT_FACTORS[0]);
+                return quantize_level(dc, self.dc_step);
+            }
+            let signed = if sum < 0 {
+                -(level as i32)
+            } else {
+                level as i32
+            };
+            signed.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+        }
+    }
 }
 
 fn reconstruct_dc(

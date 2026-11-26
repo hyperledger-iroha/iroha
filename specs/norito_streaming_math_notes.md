@@ -79,12 +79,26 @@ the table error above. The tighter of the two bounds determines which
 weights to evaluate. Every retained AC coefficient keeps its reference
 value for RDO.
 
-The encoder accumulates sample sums and squared sums directly from the
-source and collocated reference rows. A DC-only block can use these moments
-without constructing either sample block. For the floating-point DC term,
-`sum/8` can round to either neighboring integer at a midpoint. If both
-integers map to the same quantized level the encoder uses that level
-directly. Otherwise it evaluates the reference sum. Predicted blocks with
+Each block needs two integer moments, the sum of the residuals and their
+squared sum. The encoder computes one band of eight scanlines before writing
+back its collocated predictors. On AArch64 with SIMD and dot-product support,
+a 16-byte load spans two adjacent blocks. The dot product of pixel bytes
+with ones gives their sum. Subtracting the predictor sum gives the signed
+residual sum. The dot product of the absolute differences with themselves
+gives the squared sum. Each four-byte lane belongs entirely to one block.
+The final pairwise addition produces both block results. An unpaired block
+uses the scalar calculation.
+[Arm, integer dot products with Rust SIMD intrinsics](https://learn.arm.com/learning-paths/cross-platform/simd-on-rust/simd-on-rust-part2/)
+
+For the binary64 DC coefficient, let `S` be the signed residual sum and
+`d` the DC quantization step. Compute the biased magnitude
+`n = floor((|S|+4)/8) + floor(d/2)`. The quotient `floor(n/d)` is exactly
+`floor(n * ceil(2^32/d) / 2^32)`. Even for full-range 16-bit samples,
+`n ≤ 262144 + 2040` and `d ≤ 4080`, so the reciprocal error is less than
+`1/d` in the quotient. At a half-integer DC, rounding the magnitude down
+can change the level only when `n` is divisible by `d`. The encoder uses
+the reference summation order at those boundaries and otherwise restores
+the sign to the integer quotient. Predicted blocks with
 all zero levels retain their pixels in place. With RDO disabled, successive
 such blocks share a bulk write of the standard DC-delta and end-marker
 records. At Q0 the early copy requires every predicted pixel to match.
