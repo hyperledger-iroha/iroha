@@ -114,8 +114,10 @@ repeat and the literal spans between runs. Each pattern includes at least
 one significance-RLE record, so
 the entropy stream in that segment is the masked symbol byte of each record.
 This projection distributes over concatenation. The encoder projects each
-literal once, then copies its records and symbol bytes in block order to
-produce the complete telemetry before returning the segment.
+literal once. A full 63-record span can retain its previous records and
+symbol bytes when its exact sparse-pattern key matches at the same aligned
+offset in this encoder's preceding report. Other spans are written in block
+order before returning the segment.
 
 For unmapped contexts, blocks supported in the upper-left 3×3 share one
 more sequence per tile and frame class. From zigzag order 26 onward, the
@@ -123,7 +125,22 @@ coefficient, preceding coefficient and every neighbor used in the context
 are zero. Orders 25 and 26 have the same context inputs except for their
 distinct final order bits, so a zero run ends at the boundary. Reusing
 the suffix preserves record order. Its histogram and the switch from the
-prefix add once per occurrence.
+prefix add once per occurrence. When only DC and the first horizontal and
+vertical frequencies are present, orders 11 and 12 are already neutral and
+differ only in order. In this case the common suffix starts at order 12.
+Eight successive predicted zero blocks in a raster row visit each tile
+column once, so their template and end-marker counts can be added by cycle.
+
+For the context hash, the encoder tabulates the FNV-1 prefix through frame
+class modulo 2¹⁶. Multiplication and exclusive-or commute with truncation
+to the low 16 bits. The remaining tile, significance and order fields
+therefore produce the same context ID. Neighbor counts use eight unsigned
+byte lanes per row. Adding the left, upper-left, upper and upper-right
+occupancies gives at most four in a lane, which prevents carries between
+pixels. A one-zero run of the configured width contributes one record, a
+known bit length and one count for symbol 1. Its multiplicity is sufficient
+to reconstruct those fields in each context histogram.
+[FNV-1 recurrence, RFC 9923 §2](https://www.rfc-editor.org/rfc/rfc9923.html#section-2)
 
 A zero residual transforms to 64 zeros. When only the DC coefficient survives
 quantization, its inverse transforms to the same sample at all 64 positions.

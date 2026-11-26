@@ -1389,7 +1389,7 @@ struct AudioEncoderState {
 pub struct BaselineEncoder {
     config: BaselineEncoderConfig,
     audio: Option<AudioEncoderState>,
-    bundled_telemetry: Option<BundledTelemetry>,
+    bundled_telemetry: Option<RecordedSegment>,
     context_slots: Vec<u32>,
     bundle_tables: Arc<BundleAnsTables>,
     neural_predictor: Option<NeuralPredictor>,
@@ -1475,7 +1475,7 @@ impl BaselineEncoder {
     /// Latest bundled entropy telemetry (stats + token stream) recorded by the encoder.
     #[must_use]
     pub fn bundled_telemetry(&self) -> Option<&BundledTelemetry> {
-        self.bundled_telemetry.as_ref()
+        self.bundled_telemetry.as_ref().map(|r| &r.telemetry)
     }
     fn ensure_audio_state(
         &mut self,
@@ -1787,9 +1787,9 @@ impl BaselineEncoder {
                 apply_neural_filter(pixels, aligned_dims);
             }
         }
-        let mut telemetry = bundler.finish(self.bundled_telemetry.take());
-        telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
-        self.bundled_telemetry = Some(telemetry);
+        let mut recorded = bundler.finish_segment(self.bundled_telemetry.take());
+        recorded.telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
+        self.bundled_telemetry = Some(recorded);
         let offsets_and_lengths = compute_offsets(&chunks);
         let chunk_ids: Vec<u16> = (0..frame_count).collect();
         let nonce_salt = derive_nonce_salt(segment_number, frames.len(), &chunks);
@@ -1908,48 +1908,71 @@ impl BaselineEncoder {
                     emit_zero_run(next_block..block_index, &mut prev_dc, &mut payload, hooks);
                 }
                 next_block = block_index + 1;
-                let limit = match decision {
-                    BlockSpectrum::WeightsThrough(limit) => limit,
+                match decision {
                     BlockSpectrum::DcLevel(level) => {
                         dc_levels[0] = level;
-                        emit_dc_block(
-                            &mut dc_levels,
-                            &mut prev_dc,
-                            &mut payload,
-                            hooks,
-                            block_index,
-                            frame_type,
-                            rdo.as_deref_mut(),
-                        );
-                        if retain_reference
-                            && (frame_type == FrameType::Intra || level != 0)
-                            && let Some(pixels) = reference.as_mut()
-                        {
-                            let offset = inverse_dc_sample(i32::from(level) * geometry.dc_step);
-                            reconstruct_dc(pixels, dims, block_index, frame_type, offset);
+                        // RDO observes certified blocks even when all AC levels are zero.
+                        if let Some(optimizer) = rdo.as_deref_mut() {
+                            optimizer.select_levels(
+                                &[0; BLOCK_PIXELS],
+                                &mut dc_levels,
+                                frame_type,
+                                block_index,
+                            );
                         }
-                        continue;
                     }
-                };
-                let (residual, predictor) =
-                    build_residual_block(frame, prediction, dims, block_index, frame_type);
-                let coeffs = forward_dct(&residual, limit, quantizer);
-                let mut quantized = quantize_coeffs(&coeffs, quantizer);
-                if let Some(optimizer) = rdo.as_deref_mut() {
-                    optimizer.select_levels(&coeffs, &mut quantized, frame_type, block_index);
+                    BlockSpectrum::WeightsThrough(limit) => {
+                        let (residual, predictor) =
+                            build_residual_block(frame, prediction, dims, block_index, frame_type);
+                        let coeffs = forward_dct(&residual, limit, quantizer);
+                        let mut quantized = quantize_coeffs(&coeffs, quantizer);
+                        if let Some(optimizer) = rdo.as_deref_mut() {
+                            optimizer.select_levels(
+                                &coeffs,
+                                &mut quantized,
+                                frame_type,
+                                block_index,
+                            );
+                        }
+                        if quantized[1..].iter().any(|&ac| ac != 0) {
+                            encode_block_rle(
+                                &quantized,
+                                &mut prev_dc,
+                                &mut payload,
+                                hooks,
+                                block_index,
+                                frame_type,
+                            );
+                            if retain_reference && let Some(pixels) = reference.as_mut() {
+                                let dequantized = dequantize_coeffs(&quantized, quantizer);
+                                let spatial = inverse_dct_full(&dequantized);
+                                write_reconstructed_block(
+                                    pixels,
+                                    &spatial,
+                                    &predictor,
+                                    dims,
+                                    block_index,
+                                );
+                            }
+                            continue;
+                        }
+                        dc_levels[0] = quantized[0];
+                    }
                 }
-                encode_block_rle(
-                    &quantized,
+                emit_dc_block(
+                    &dc_levels,
                     &mut prev_dc,
                     &mut payload,
                     hooks,
                     block_index,
                     frame_type,
                 );
-                if retain_reference && let Some(pixels) = reference.as_mut() {
-                    let dequantized = dequantize_coeffs(&quantized, quantizer);
-                    let spatial = inverse_dct(&dequantized);
-                    write_reconstructed_block(pixels, &spatial, &predictor, dims, block_index);
+                if retain_reference
+                    && (frame_type == FrameType::Intra || dc_levels[0] != 0)
+                    && let Some(pixels) = reference.as_mut()
+                {
+                    let offset = inverse_dc_sample(i32::from(dc_levels[0]) * geometry.dc_step);
+                    reconstruct_dc(pixels, dims, block_index, frame_type, offset);
                 }
             }
         }
@@ -3413,6 +3436,10 @@ struct SparseAcPattern {
 // identical context inputs except for their zigzag order. Without a remap
 // they always end separate RLE records. Every subsequent context is neutral.
 const ZERO_TAIL_ORDER: usize = 26;
+// DC and the first horizontal and vertical AC levels cannot influence orders
+// 11 or later. Orders 11 and 12 have identical neutral inputs except for order.
+const FIRST_AC_TAIL_ORDER: usize = 12;
+const TILE_CLASSES: usize = 64 * 2;
 
 #[derive(Clone, Copy, Default)]
 struct ZeroTail {
@@ -3421,6 +3448,12 @@ struct ZeroTail {
     prefix_slot: usize,
     last_slot: usize,
     repeats: u64,
+}
+
+/// Exact sparse-pattern keys for aligned spans in this encoder's completed report.
+struct RecordedSegment {
+    telemetry: BundledTelemetry,
+    repeat_keys: Vec<u16>,
 }
 
 /// Reuse a completed report's allocation when it fits this segment at its exact size.
@@ -3433,13 +3466,24 @@ fn telemetry_buffer<T>(mut previous: Vec<T>, len: usize) -> Vec<T> {
     }
 }
 
+/// Most AC records describe a single zero. Keep its multiplicity and the
+/// inter-record transitions together; allocate a full histogram only for exceptions.
+#[derive(Default)]
+struct ContextTally {
+    single_zeros: u64,
+    switches: u64,
+    ends: u64,
+    detail: Option<std::num::NonZeroU32>,
+}
+
 struct BundleStreamRecorder<'a> {
     stats: BundledStats,
     tokens: Vec<BundledToken>,
     bundles: Vec<BundleRecord>,
     // One-based slots indexed by the 16-bit wire context. Only active contexts own counters.
     context_slots: &'a mut [u32],
-    contexts: Vec<(BundleContextStats, ContextFrequency)>,
+    contexts: Vec<ContextTally>,
+    details: Vec<(BundleContextStats, ContextFrequency)>,
     // Tile, frame class, DC significance and two ternary AC levels identify the records.
     sparse_patterns: Vec<SparseAcPattern>,
     zero_tails: Vec<ZeroTail>,
@@ -3478,8 +3522,9 @@ impl<'a> BundleStreamRecorder<'a> {
             bundles: Vec::new(),
             context_slots,
             contexts: Vec::new(),
+            details: Vec::new(),
             sparse_patterns: vec![SparseAcPattern::default(); 64 * 2 * 2],
-            zero_tails: vec![ZeroTail::default(); 64 * 2],
+            zero_tails: vec![ZeroTail::default(); 2 * TILE_CLASSES],
             repeats: Vec::new(),
             literal_spans: Vec::new(),
             width: bundle_width.clamp(1, 4),
@@ -3495,13 +3540,7 @@ impl<'a> BundleStreamRecorder<'a> {
     fn context_slot(&mut self, context: BundleContextId) -> usize {
         let slot = &mut self.context_slots[usize::from(context.0)];
         if *slot == 0 {
-            self.contexts.push((
-                BundleContextStats::new(context),
-                ContextFrequency {
-                    context,
-                    ..ContextFrequency::default()
-                },
-            ));
+            self.contexts.push(ContextTally::default());
             *slot = self.contexts.len() as u32;
         }
         (*slot - 1) as usize
@@ -3513,19 +3552,16 @@ impl<'a> BundleStreamRecorder<'a> {
             context
         }
     }
-    fn finish(mut self, previous: Option<BundledTelemetry>) -> BundledTelemetry {
-        for i in 0..self.zero_tails.len() {
-            let tail = self.zero_tails[i];
-            if tail.repeats != 0 {
-                let zeros = ((BLOCK_PIXELS - ZERO_TAIL_ORDER) as u64).saturating_mul(tail.repeats);
-                self.stats.significance_zero = self.stats.significance_zero.saturating_add(zeros);
-                self.stats.sign_positive = self.stats.sign_positive.saturating_add(zeros);
-                self.last_context_slot = Some(tail.prefix_slot);
-                for j in tail.start..tail.end {
-                    self.count_bundle(self.bundles[j], tail.repeats);
-                }
-            }
-        }
+    #[cfg(test)]
+    fn finish(self, previous: Option<BundledTelemetry>) -> BundledTelemetry {
+        self.finish_segment(previous.map(|telemetry| RecordedSegment {
+            telemetry,
+            repeat_keys: Vec::new(),
+        }))
+        .telemetry
+    }
+
+    fn count_repeated_patterns(&mut self) {
         for index in 0..self.sparse_patterns.len() {
             let pattern = self.sparse_patterns[index];
             if pattern.repeats == 0 {
@@ -3538,10 +3574,21 @@ impl<'a> BundleStreamRecorder<'a> {
                 .stats
                 .significance_one
                 .saturating_add(nonzero.saturating_mul(count));
+            // Repeated sparse blocks share their neutral suffix across all AC classes.
+            let (prefix_end, ac_slots) = if self.context_remap.is_none() {
+                let tail = &mut self.zero_tails[index & (TILE_CLASSES - 1)];
+                tail.repeats = tail.repeats.saturating_add(count);
+                (
+                    pattern.end - (tail.end - tail.start),
+                    (FIRST_AC_TAIL_ORDER - 1) as u64,
+                )
+            } else {
+                (pattern.end, (BLOCK_PIXELS - 1) as u64)
+            };
             self.stats.significance_zero = self
                 .stats
                 .significance_zero
-                .saturating_add((63 - nonzero).saturating_mul(count));
+                .saturating_add((ac_slots - nonzero).saturating_mul(count));
             self.stats.sign_negative = self
                 .stats
                 .sign_negative
@@ -3549,7 +3596,7 @@ impl<'a> BundleStreamRecorder<'a> {
             self.stats.sign_positive = self
                 .stats
                 .sign_positive
-                .saturating_add((63 - negative).saturating_mul(count));
+                .saturating_add((ac_slots - negative).saturating_mul(count));
             if self.width >= 3 {
                 self.stats.parity_one = self
                     .stats
@@ -3559,72 +3606,184 @@ impl<'a> BundleStreamRecorder<'a> {
             // A block starts after EOB. Its internal context switches and histogram
             // are additive; record_eob has already counted its terminal context.
             self.last_context_slot = None;
-            for i in pattern.start..pattern.end {
+            for i in pattern.start..prefix_end {
                 self.count_bundle(self.bundles[i], pattern.repeats);
             }
         }
-        let (bundles, ans_stream, used_acceleration) = if self.repeats.is_empty() {
+        for i in 0..self.zero_tails.len() {
+            let tail = self.zero_tails[i];
+            if tail.repeats != 0 {
+                let start_order = if i < TILE_CLASSES {
+                    FIRST_AC_TAIL_ORDER
+                } else {
+                    ZERO_TAIL_ORDER
+                };
+                let zeros = ((BLOCK_PIXELS - start_order) as u64).saturating_mul(tail.repeats);
+                self.stats.significance_zero = self.stats.significance_zero.saturating_add(zeros);
+                self.stats.sign_positive = self.stats.sign_positive.saturating_add(zeros);
+                self.last_context_slot = Some(tail.prefix_slot);
+                for j in tail.start..tail.end {
+                    self.count_bundle(self.bundles[j], tail.repeats);
+                }
+            }
+        }
+    }
+
+    fn context_reports(
+        &mut self,
+        previous: Option<&mut BundledTelemetry>,
+    ) -> (Vec<BundleContextStats>, Vec<ContextFrequency>) {
+        let (mut context_stats, mut context_frequencies) = previous
+            .map(|p| {
+                (
+                    std::mem::take(&mut p.context_stats),
+                    std::mem::take(&mut p.context_frequencies),
+                )
+            })
+            .unwrap_or_default();
+        context_stats.clear();
+        context_frequencies.clear();
+        context_stats.reserve_exact(self.contexts.len());
+        context_frequencies.reserve_exact(self.contexts.len());
+        // The direct-address map visits each active wire context in report order.
+        for (id, &slot) in self.context_slots.iter().enumerate() {
+            if slot == 0 {
+                continue;
+            }
+            let context = BundleContextId(id as u16);
+            let tally = &self.contexts[slot as usize - 1];
+            let (mut stats, mut freq) = tally.detail.map_or_else(
+                || {
+                    (
+                        BundleContextStats::new(context),
+                        ContextFrequency {
+                            context,
+                            ..ContextFrequency::default()
+                        },
+                    )
+                },
+                |entry| self.details[entry.get() as usize - 1],
+            );
+            let zeros = tally.single_zeros;
+            stats.bundles_total = stats.bundles_total.saturating_add(zeros);
+            stats.type_significance_rle = stats.type_significance_rle.saturating_add(zeros);
+            stats.flush_type_complete = stats.flush_type_complete.saturating_add(zeros);
+            self.stats.bundles_total = self.stats.bundles_total.saturating_add(stats.bundles_total);
+            self.stats.significance_rle = self
+                .stats
+                .significance_rle
+                .saturating_add(stats.type_significance_rle);
+            self.stats
+                .record_flush(BundleFlushReason::TypeComplete, stats.flush_type_complete);
+            // The global EOB count already includes the explicit block terminators.
+            self.stats
+                .record_flush(BundleFlushReason::EndOfBlock, stats.flush_end_of_block);
+            stats.flush_context_switch = stats.flush_context_switch.saturating_add(tally.switches);
+            self.stats
+                .record_flush(BundleFlushReason::ContextSwitch, stats.flush_context_switch);
+            stats.flush_end_of_block = stats.flush_end_of_block.saturating_add(tally.ends);
+            freq.bundles = stats.bundles_total;
+            freq.total_bits = freq
+                .total_bits
+                .saturating_add(zeros.saturating_mul(u64::from(self.width.max(2))));
+            freq.symbol_counts[1] = freq.symbol_counts[1].saturating_add(zeros);
+            context_stats.push(stats);
+            context_frequencies.push(freq);
+        }
+        (context_stats, context_frequencies)
+    }
+
+    fn expand_repeats(
+        &self,
+        previous: Option<RecordedSegment>,
+    ) -> (Vec<BundleRecord>, Vec<u8>, Vec<u16>) {
+        // Each repeat contains SignificanceRle. Its entropy stream is the
+        // masked symbol projection, which distributes over concatenation.
+        let symbols: Vec<_> = self.bundles.iter().map(bundle_symbol).collect();
+        let total = self
+            .sparse_patterns
+            .iter()
+            .fold(self.bundles.len(), |len, p| {
+                len.saturating_add((p.end - p.start).saturating_mul(p.repeats as usize))
+            });
+        let (old_records, old_stream, old_keys) = previous
+            .map(|r| (r.telemetry.bundles, r.telemetry.ans_stream, r.repeat_keys))
+            .unwrap_or_default();
+        let overwrite = old_records.len() == total
+            && old_stream.len() == total
+            && old_records.capacity() == total
+            && old_stream.capacity() == total;
+        let (mut records, mut stream) = if overwrite {
+            (old_records, old_stream)
+        } else {
+            (
+                telemetry_buffer(old_records, total),
+                telemetry_buffer(old_stream, total),
+            )
+        };
+        const SLOTS: usize = BLOCK_PIXELS - 1;
+        let mut repeat_keys = vec![u16::MAX; total / SLOTS];
+        let mut written = 0;
+        let mut append = |start: usize, end: usize, key: Option<u16>| {
+            let dest = written;
+            written += end - start;
+            if let Some(key) = key
+                && end - start == SLOTS
+                && dest.is_multiple_of(SLOTS)
+            {
+                let slot = dest / SLOTS;
+                repeat_keys[slot] = key;
+                if overwrite && old_keys.get(slot) == Some(&key) {
+                    return;
+                }
+            }
+            if overwrite {
+                records[dest..written].copy_from_slice(&self.bundles[start..end]);
+                stream[dest..written].copy_from_slice(&symbols[start..end]);
+            } else {
+                records.extend_from_slice(&self.bundles[start..end]);
+                stream.extend_from_slice(&symbols[start..end]);
+            }
+        };
+        let (mut repeat_start, mut literal_start) = (0, 0);
+        for (repeat_end, literal_end) in self
+            .literal_spans
+            .iter()
+            .copied()
+            .chain(std::iter::once((self.repeats.len(), self.bundles.len())))
+        {
+            for &key in &self.repeats[repeat_start..repeat_end] {
+                let p = self.sparse_patterns[usize::from(key)];
+                append(p.start, p.end, Some(key));
+            }
+            append(literal_start, literal_end, None);
+            (repeat_start, literal_start) = (repeat_end, literal_end);
+        }
+        (records, stream, repeat_keys)
+    }
+
+    fn finish_segment(mut self, mut previous: Option<RecordedSegment>) -> RecordedSegment {
+        self.count_repeated_patterns();
+        let (context_stats, context_frequencies) =
+            self.context_reports(previous.as_mut().map(|p| &mut p.telemetry));
+        let (bundles, ans_stream, repeat_keys, used_acceleration) = if self.repeats.is_empty() {
             let (stream, acceleration) = encode_bundle_stream_with_opts(
                 &self.tables,
                 &self.bundles,
                 self.acceleration,
                 self.prefetch_distance,
             );
-            (self.bundles, stream, acceleration)
+            (self.bundles, stream, Vec::new(), acceleration)
         } else {
-            // Each repeat contains SignificanceRle. Its entropy stream is the
-            // masked symbol projection, which distributes over concatenation.
-            let symbols: Vec<_> = self.bundles.iter().map(bundle_symbol).collect();
-            let total = self
-                .sparse_patterns
-                .iter()
-                .fold(self.bundles.len(), |len, p| {
-                    len.saturating_add((p.end - p.start).saturating_mul(p.repeats as usize))
-                });
-            let (old_records, old_stream) = previous
-                .map(|report| (report.bundles, report.ans_stream))
-                .unwrap_or_default();
-            let mut records = telemetry_buffer(old_records, total);
-            let mut stream = telemetry_buffer(old_stream, total);
-            let mut append = |start, end| {
-                records.extend_from_slice(&self.bundles[start..end]);
-                stream.extend_from_slice(&symbols[start..end]);
-            };
-            let (mut repeat_start, mut literal_start) = (0, 0);
-            for (repeat_end, literal_end) in self
-                .literal_spans
-                .into_iter()
-                .chain(std::iter::once((self.repeats.len(), self.bundles.len())))
-            {
-                for &key in &self.repeats[repeat_start..repeat_end] {
-                    let p = self.sparse_patterns[usize::from(key)];
-                    append(p.start, p.end);
-                }
-                append(literal_start, literal_end);
-                (repeat_start, literal_start) = (repeat_end, literal_end);
-            }
-            (records, stream, BundleAcceleration::None)
+            let (bundles, stream, keys) = self.expand_repeats(previous);
+            (bundles, stream, keys, BundleAcceleration::None)
         };
         let remap = self.context_remap.as_ref().map(|map| ContextRemapSummary {
             escape_context: map.escape_context(),
             remapped: map.remapped_count(),
             dropped: map.dropped_count(),
         });
-        // Reports are ordered by wire context, independent of insertion order.
-        let mut ids: Vec<_> = self
-            .contexts
-            .iter()
-            .map(|(stats, _)| stats.context)
-            .collect();
-        ids.sort_unstable();
-        let (context_stats, context_frequencies) = ids
-            .into_iter()
-            .map(|id| {
-                let slot = self.context_slots[usize::from(id.0)] as usize - 1;
-                self.contexts[slot]
-            })
-            .unzip();
-        BundledTelemetry {
+        let telemetry = BundledTelemetry {
             stats: self.stats,
             tokens: self.tokens,
             bundles,
@@ -3637,6 +3796,10 @@ impl<'a> BundleStreamRecorder<'a> {
             prefetch_distance: self.prefetch_distance,
             context_remap: remap,
             rdo: None,
+        };
+        RecordedSegment {
+            telemetry,
+            repeat_keys,
         }
     }
     fn record_bundle(
@@ -3662,21 +3825,31 @@ impl<'a> BundleStreamRecorder<'a> {
         if let Some(previous_slot) = self.last_context_slot
             && previous_slot != slot
         {
-            self.stats
-                .record_flush(BundleFlushReason::ContextSwitch, count);
-            self.contexts[previous_slot]
-                .0
-                .record_flush(BundleFlushReason::ContextSwitch, count);
+            let previous = &mut self.contexts[previous_slot];
+            previous.switches = previous.switches.saturating_add(count);
         }
         self.last_context_slot = Some(slot);
-        self.stats.bundles_total = self.stats.bundles_total.saturating_add(count);
-        self.stats.record_flush(record.flush, count);
-        if matches!(record.bundle_type, BundleType::SignificanceRle) {
-            self.stats.significance_rle = self.stats.significance_rle.saturating_add(count);
+        let tally = &mut self.contexts[slot];
+        if matches!(record.bundle_type, BundleType::SignificanceRle)
+            && record.bits == 1
+            && record.bit_len == self.width.max(2)
+            && matches!(record.flush, BundleFlushReason::TypeComplete)
+        {
+            tally.single_zeros = tally.single_zeros.saturating_add(count);
+            return;
         }
-        let (stats, freq) = &mut self.contexts[slot];
+        let entry = *tally.detail.get_or_insert_with(|| {
+            self.details.push((
+                BundleContextStats::new(record.context),
+                ContextFrequency {
+                    context: record.context,
+                    ..ContextFrequency::default()
+                },
+            ));
+            std::num::NonZeroU32::new(self.details.len() as u32).expect("at most 65536 contexts")
+        });
+        let (stats, freq) = &mut self.details[entry.get() as usize - 1];
         stats.record_bundle(record.bundle_type, record.flush, count);
-        freq.bundles = freq.bundles.saturating_add(count);
         freq.total_bits = freq
             .total_bits
             .saturating_add(u64::from(record.bit_len).saturating_mul(count));
@@ -3686,34 +3859,10 @@ impl<'a> BundleStreamRecorder<'a> {
     fn count_eob(&mut self) {
         self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(1);
         if let Some(slot) = self.last_context_slot.take() {
-            self.contexts[slot]
-                .0
-                .record_flush(BundleFlushReason::EndOfBlock, 1);
+            let tally = &mut self.contexts[slot];
+            tally.ends = tally.ends.saturating_add(1);
         }
         self.stats.record_flush(BundleFlushReason::EndOfBlock, 1);
-    }
-    fn accumulate_stats(&mut self, value: i16) {
-        let nonzero = value != 0;
-        if nonzero {
-            self.stats.significance_one = self.stats.significance_one.saturating_add(1);
-        } else {
-            self.stats.significance_zero = self.stats.significance_zero.saturating_add(1);
-        }
-        let negative = value < 0;
-        if negative {
-            self.stats.sign_negative = self.stats.sign_negative.saturating_add(1);
-        } else {
-            self.stats.sign_positive = self.stats.sign_positive.saturating_add(1);
-        }
-        if self.width >= 3 && value != 0 {
-            let parity = (value.wrapping_abs() as u32 & 1) as u8;
-            if parity == 1 {
-                self.stats.parity_one = self.stats.parity_one.saturating_add(1);
-            }
-        }
-        if self.width >= 4 && value.unsigned_abs() >= 2 {
-            self.stats.geq2_one = self.stats.geq2_one.saturating_add(1);
-        }
     }
     fn record_block(
         &mut self,
@@ -3746,6 +3895,49 @@ impl<'a> BundleStreamRecorder<'a> {
         );
         ((col & 7) | ((row & 7) << 3)) as u8
     }
+    fn mark_literals(&mut self) {
+        if self.literal_spans.last().map(|&(_, end)| end) != Some(self.bundles.len()) {
+            self.literal_spans
+                .push((self.repeats.len(), self.bundles.len()));
+        }
+    }
+
+    /// Within a raster row, the eight predicted zero-block keys repeat. Count
+    /// each complete cycle once per tile and append its keys in raster order.
+    fn record_zero_patterns(&mut self, blocks: std::ops::Range<usize>) {
+        let mut first = blocks.start;
+        while first < blocks.end {
+            let column = first % self.blocks_per_row;
+            let len = (self.blocks_per_row - column).min(blocks.end - first);
+            let base = (usize::from(FrameType::Predicted.as_byte()) << 6)
+                | (((first / self.blocks_per_row) & 7) << 3);
+            if len >= 16
+                && self.sparse_patterns[base..base + 8]
+                    .iter()
+                    .all(|p| p.end != 0)
+            {
+                self.mark_literals();
+                self.repeats
+                    .extend((column..column + len).map(|col| (base | (col & 7)) as u16));
+                for phase in 0..8 {
+                    let times = ((len + 7 - phase) / 8) as u64;
+                    let p = &mut self.sparse_patterns[base | ((column + phase) & 7)];
+                    p.repeats += times;
+                    let tally = &mut self.contexts[p.last_slot];
+                    tally.ends = tally.ends.saturating_add(times);
+                }
+            } else {
+                for i in first..first + len {
+                    self.record_pattern(i, &[0; BLOCK_PIXELS], FrameType::Predicted, 0);
+                    let slot = self.last_context_slot.take().expect("completed AC pattern");
+                    let tally = &mut self.contexts[slot];
+                    tally.ends = tally.ends.saturating_add(1);
+                }
+            }
+            first += len;
+        }
+    }
+
     fn record_pattern(
         &mut self,
         block_index: usize,
@@ -3765,12 +3957,10 @@ impl<'a> BundleStreamRecorder<'a> {
         let pattern = &mut self.sparse_patterns[key];
         if pattern.end != 0 {
             pattern.repeats += 1;
-            if self.literal_spans.last().map(|&(_, end)| end) != Some(self.bundles.len()) {
-                self.literal_spans
-                    .push((self.repeats.len(), self.bundles.len()));
-            }
+            let last_slot = pattern.last_slot;
+            self.mark_literals();
             self.repeats.push(key as u16);
-            self.last_context_slot = Some(pattern.last_slot);
+            self.last_context_slot = Some(last_slot);
         } else {
             let start = self.bundles.len();
             self.record_ac_slots(tile as u8, coeffs, frame_type);
@@ -3788,6 +3978,7 @@ impl<'a> BundleStreamRecorder<'a> {
         }
     }
     fn record_ac_slots(&mut self, tile: u8, coeffs: &[i16; BLOCK_PIXELS], frame_type: FrameType) {
+        let tile_key = usize::from(tile) | (usize::from(frame_type.as_byte()) << 6);
         let low_frequency = self.context_remap.is_none()
             && coeffs[3..8]
                 .iter()
@@ -3798,8 +3989,13 @@ impl<'a> BundleStreamRecorder<'a> {
             self.record_ac_range(tile, coeffs, frame_type, 1..BLOCK_PIXELS);
             return;
         }
-        self.record_ac_range(tile, coeffs, frame_type, 1..ZERO_TAIL_ORDER);
-        let key = usize::from(tile) | (usize::from(frame_type.as_byte()) << 6);
+        let first_ac_only = [2, 9, 10, 16, 17, 18].into_iter().all(|i| coeffs[i] == 0);
+        let (key, start_order) = if first_ac_only {
+            (tile_key, FIRST_AC_TAIL_ORDER)
+        } else {
+            (TILE_CLASSES + tile_key, ZERO_TAIL_ORDER)
+        };
+        self.record_ac_range(tile, coeffs, frame_type, 1..start_order);
         let tail = &mut self.zero_tails[key];
         if tail.end != 0 {
             tail.repeats += 1;
@@ -3808,7 +4004,7 @@ impl<'a> BundleStreamRecorder<'a> {
         } else {
             let start = self.bundles.len();
             let prefix_slot = self.last_context_slot.expect("nonempty AC prefix");
-            self.record_ac_range(tile, coeffs, frame_type, ZERO_TAIL_ORDER..BLOCK_PIXELS);
+            self.record_ac_range(tile, coeffs, frame_type, start_order..BLOCK_PIXELS);
             self.zero_tails[key] = ZeroTail {
                 start,
                 end: self.bundles.len(),
@@ -3825,23 +4021,24 @@ impl<'a> BundleStreamRecorder<'a> {
         frame_type: FrameType,
         orders: std::ops::Range<usize>,
     ) {
+        let neighbors = neighbor_counts(coeffs);
+        let slots = orders.len() as u64;
+        let (mut nonzero, mut negative, mut odd, mut geq2) = (0_u64, 0_u64, 0_u64, 0_u64);
         let mut prev_level_abs = 0u8;
         let mut zero_context = BundleContextId::default();
         let mut zero_run = 0;
         for order in orders {
             let slot = ZIG_ZAG[order];
             let coeff = coeffs[slot];
-            self.accumulate_stats(coeff);
             let (bundle_type, bits, bit_len) = bundle_bits(coeff, self.width);
             let context = self.map_context(self.compute_context(
                 bundle_type,
                 tile,
                 order,
-                slot,
+                neighbors[slot],
                 coeff,
                 prev_level_abs,
                 frame_type,
-                coeffs,
             ));
             if zero_run > 0 && (coeff != 0 || context != zero_context) {
                 self.emit_zero_run_bundle(zero_context, zero_run);
@@ -3851,6 +4048,10 @@ impl<'a> BundleStreamRecorder<'a> {
                 zero_run += 1;
                 zero_context = context;
             } else {
+                nonzero += 1;
+                negative += u64::from(coeff < 0);
+                odd += u64::from(coeff.unsigned_abs() & 1);
+                geq2 += u64::from(coeff.unsigned_abs() >= 2);
                 self.record_bundle(
                     bundle_type,
                     context,
@@ -3860,6 +4061,16 @@ impl<'a> BundleStreamRecorder<'a> {
                 );
             }
             prev_level_abs = coeff.unsigned_abs().min(255) as u8;
+        }
+        self.stats.significance_one = self.stats.significance_one.saturating_add(nonzero);
+        self.stats.significance_zero = self.stats.significance_zero.saturating_add(slots - nonzero);
+        self.stats.sign_negative = self.stats.sign_negative.saturating_add(negative);
+        self.stats.sign_positive = self.stats.sign_positive.saturating_add(slots - negative);
+        if self.width >= 3 {
+            self.stats.parity_one = self.stats.parity_one.saturating_add(odd);
+        }
+        if self.width >= 4 {
+            self.stats.geq2_one = self.stats.geq2_one.saturating_add(geq2);
         }
         self.emit_zero_run_bundle(zero_context, zero_run);
     }
@@ -3876,32 +4087,23 @@ impl<'a> BundleStreamRecorder<'a> {
             run = run.saturating_sub(consumed);
         }
     }
-    #[allow(clippy::too_many_arguments)]
     fn compute_context(
         &self,
         bundle_type: BundleType,
         block_tile: u8,
         zigzag_order: usize,
-        coeff_slot: usize,
+        neighbor_nz: u8,
         coeff: i16,
         prev_level_abs: u8,
         frame_type: FrameType,
-        coeffs: &[i16; BLOCK_PIXELS],
     ) -> BundleContextId {
-        let neighbor_nz = neighbor_nonzero_count(coeffs, coeff_slot);
-        let subband = subband_class(coeff_slot);
-        let pos_class = position_class(zigzag_order);
-        let prev_bucket = level_bucket(prev_level_abs);
-        let frame_class: u8 = if frame_type == FrameType::Intra { 0 } else { 1 };
-        let coeff_bucket = (coeff != 0) as u8;
-        let mut hash = 0x811C9DC5u32;
-        hash = hash_mix(hash, bundle_type.as_u8() as u32);
-        hash = hash_mix(hash, subband.into());
-        hash = hash_mix(hash, pos_class.into());
-        hash = hash_mix(hash, neighbor_nz.into());
-        hash = hash_mix(hash, prev_bucket.into());
-        hash = hash_mix(hash, self.quantizer_bucket.into());
-        hash = hash_mix(hash, frame_class.into());
+        let class = CONTEXT_POSITION[zigzag_order];
+        let prev = level_bucket(prev_level_abs) as usize;
+        let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame_type.as_byte());
+        let prefix = CONTEXT_PREFIX[state][bundle_type.as_u8() as usize]
+            [class + usize::from(neighbor_nz.min(3)) * 4 + prev];
+        let coeff_bucket = u8::from(coeff != 0);
+        let mut hash = u32::from(prefix);
         hash = hash_mix(hash, block_tile.into());
         hash = hash_mix(hash, coeff_bucket.into());
         hash = hash_mix(hash, (zigzag_order as u32) & 0x3F);
@@ -3915,20 +4117,14 @@ impl BundledHooks for BundleStreamRecorder<'_> {
             .extend_from_slice(&[BundledToken::DcDiff(first_diff), BundledToken::EndOfBlock]);
         append_repeated(
             &mut self.tokens,
-            &[BundledToken::DcDiff(0), BundledToken::EndOfBlock],
+            &[[BundledToken::DcDiff(0), BundledToken::EndOfBlock]; 32],
             count - 1,
         );
         self.stats.dc_events = self.stats.dc_events.saturating_add(count as u64);
         self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(count as u64);
         self.stats
             .record_flush(BundleFlushReason::EndOfBlock, count as u64);
-        for i in blocks {
-            self.record_pattern(i, &[0; BLOCK_PIXELS], FrameType::Predicted, 0);
-            let slot = self.last_context_slot.take().expect("completed AC pattern");
-            self.contexts[slot]
-                .0
-                .record_flush(BundleFlushReason::EndOfBlock, 1);
-        }
+        self.record_zero_patterns(blocks);
     }
     fn record_dc_only(
         &mut self,
@@ -4524,7 +4720,7 @@ fn quantizer_to_bucket(qp: u8) -> u8 {
         _ => 3,
     }
 }
-fn position_class(order: usize) -> u8 {
+const fn position_class(order: usize) -> u8 {
     match order {
         0 => 0,
         1..=4 => 1,
@@ -4533,7 +4729,7 @@ fn position_class(order: usize) -> u8 {
         _ => 4,
     }
 }
-fn subband_class(slot: usize) -> u8 {
+const fn subband_class(slot: usize) -> u8 {
     let row = slot / BLOCK_SIZE;
     let col = slot % BLOCK_SIZE;
     let low_cut = 3;
@@ -4544,23 +4740,62 @@ fn subband_class(slot: usize) -> u8 {
         (false, false) => 3,
     }
 }
-fn neighbor_nonzero_count(coeffs: &[i16; BLOCK_PIXELS], slot: usize) -> u8 {
-    let row = slot / BLOCK_SIZE;
-    let col = slot % BLOCK_SIZE;
-    let mut count = 0u8;
-    if col > 0 && coeffs[row * BLOCK_SIZE + (col - 1)] != 0 {
-        count = count.saturating_add(1);
+// Only the low 16 bits of FNV reach the wire. Multiplication and XOR cannot
+// propagate discarded high bits downward, so each invariant prefix fits in u16.
+const CONTEXT_POSITION: [usize; BLOCK_PIXELS] = {
+    let mut offsets = [0; BLOCK_PIXELS];
+    let mut order = 0;
+    while order < BLOCK_PIXELS {
+        let pos = position_class(order) as usize;
+        let band = subband_class(ZIG_ZAG[order]) as usize;
+        offsets[order] = (pos * 4 + band) * 16;
+        order += 1;
     }
-    if row > 0 && coeffs[(row - 1) * BLOCK_SIZE + col] != 0 {
-        count = count.saturating_add(1);
+    offsets
+};
+static CONTEXT_PREFIX: [[[u16; 5 * 4 * 16]; 5]; 8] = {
+    let mut table = [[[0; 5 * 4 * 16]; 5]; 8];
+    let mut state = 0;
+    while state < table.len() {
+        let mut kind = 0;
+        while kind < table[state].len() {
+            let mut index = 0;
+            while index < table[state][kind].len() {
+                let band = (index / 16) % 4;
+                let pos = index / 64;
+                let neighbors = (index / 4) % 4;
+                let previous = index % 4;
+                let mut hash = hash_mix(0x811C9DC5, kind as u32);
+                hash = hash_mix(hash, band as u32);
+                hash = hash_mix(hash, pos as u32);
+                hash = hash_mix(hash, neighbors as u32);
+                hash = hash_mix(hash, previous as u32);
+                hash = hash_mix(hash, (state / 2) as u32);
+                table[state][kind][index] = hash_mix(hash, (state % 2) as u32) as u16;
+                index += 1;
+            }
+            kind += 1;
+        }
+        state += 1;
     }
-    if row > 0 && col > 0 && coeffs[(row - 1) * BLOCK_SIZE + (col - 1)] != 0 {
-        count = count.saturating_add(1);
+    table
+};
+/// Eight independent byte lanes sum the left neighbor and three neighbors
+/// from the row above. A lane holds at most four, so addition cannot carry.
+fn neighbor_counts(coeffs: &[i16; BLOCK_PIXELS]) -> [u8; BLOCK_PIXELS] {
+    let mut counts = [0; BLOCK_PIXELS];
+    let mut above = 0;
+    for (coeff_row, out) in coeffs
+        .as_chunks::<BLOCK_SIZE>()
+        .0
+        .iter()
+        .zip(counts.as_chunks_mut::<BLOCK_SIZE>().0)
+    {
+        let row = u64::from_le_bytes(coeff_row.map(|v| u8::from(v != 0)));
+        *out = ((row << 8) + (above << 8) + above + (above >> 8)).to_le_bytes();
+        above = row;
     }
-    if row > 0 && col + 1 < BLOCK_SIZE && coeffs[(row - 1) * BLOCK_SIZE + (col + 1)] != 0 {
-        count = count.saturating_add(1);
-    }
-    count.min(3)
+    counts
 }
 fn level_bucket(value: u8) -> u8 {
     match value {
@@ -4570,19 +4805,21 @@ fn level_bucket(value: u8) -> u8 {
         _ => 3,
     }
 }
-fn hash_mix(acc: u32, value: u32) -> u32 {
+const fn hash_mix(acc: u32, value: u32) -> u32 {
     acc.wrapping_mul(16777619) ^ value
 }
-/// Grow a periodic suffix by copying whole periods already in the output.
-fn append_repeated<T: Copy>(out: &mut Vec<T>, period: &[T], count: usize) {
-    if count == 0 || period.is_empty() {
-        return;
-    }
+/// Seed short runs from a constant slab and double longer runs from the output.
+fn append_repeated<T: Copy, const N: usize>(
+    out: &mut Vec<T>,
+    periods: &[[T; N]; 32],
+    count: usize,
+) {
     let start = out.len();
-    let total = count * period.len();
+    let total = count * N;
     out.reserve(total);
-    out.extend_from_slice(period);
-    let mut written = period.len();
+    let seed = count.min(periods.len());
+    out.extend_from_slice(periods[..seed].as_flattened());
+    let mut written = seed * N;
     while written < total {
         let next = written.min(total - written);
         out.extend_from_within(start..start + next);
@@ -4602,23 +4839,18 @@ fn emit_zero_run(
     hooks.record_zero_run(blocks, first_diff);
     let [lo, hi] = first_diff.to_le_bytes();
     payload.extend_from_slice(&[lo, hi, RLE_EOB, 0, 0]);
-    append_repeated(payload, &[0, 0, RLE_EOB, 0, 0], count - 1);
+    append_repeated(payload, &[[0, 0, RLE_EOB, 0, 0]; 32], count - 1);
     *prev_dc = 0;
 }
 
 fn emit_dc_block(
-    levels: &mut [i16; BLOCK_PIXELS],
+    levels: &[i16; BLOCK_PIXELS],
     prev_dc: &mut i16,
     payload: &mut Vec<u8>,
     hooks: &mut impl BundledHooks,
     block_index: usize,
     frame_type: FrameType,
-    rdo: Option<&mut BlockRdo<'_>>,
 ) {
-    // RDO observes every block but reads transform values only for nonzero AC levels.
-    if let Some(optimizer) = rdo {
-        optimizer.select_levels(&[0; BLOCK_PIXELS], levels, frame_type, block_index);
-    }
     let diff = levels[0].wrapping_sub(*prev_dc);
     hooks.record_dc_only(levels, diff, block_index, frame_type);
     let [lo, hi] = diff.to_le_bytes();

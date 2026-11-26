@@ -934,6 +934,301 @@ fn repeated_sparse_blocks_match_individual_bundle_accounting() {
 }
 
 #[test]
+fn packed_neighbor_counts_match_every_block_edge() {
+    for active in 0..=BLOCK_PIXELS {
+        let levels = std::array::from_fn(|i| {
+            if i == active || active == BLOCK_PIXELS {
+                i16::MIN
+            } else {
+                0
+            }
+        });
+        let counts = neighbor_counts(&levels);
+        for (i, &count) in counts.iter().enumerate() {
+            let (x, y) = ((i % BLOCK_SIZE) as isize, (i / BLOCK_SIZE) as isize);
+            let mut expected = 0;
+            for (dx, dy) in [(-1, 0), (-1, -1), (0, -1), (1, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if (0..8).contains(&nx)
+                    && (0..8).contains(&ny)
+                    && levels[(ny * 8 + nx) as usize] != 0
+                {
+                    expected += 1;
+                }
+            }
+            assert_eq!(count, expected, "slot {i}, active {active}");
+        }
+    }
+}
+
+#[test]
+fn context_prefixes_match_full_width_hash() {
+    let mut slots = Vec::new();
+    let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
+        3,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    for quantizer_bucket in 0..4 {
+        recorder.quantizer_bucket = quantizer_bucket;
+        for frame in [FrameType::Intra, FrameType::Predicted] {
+            for kind in [
+                BundleType::SignificanceOnly,
+                BundleType::SignAndMagnitude,
+                BundleType::SignParity,
+                BundleType::SignParityLevel,
+                BundleType::SignificanceRle,
+            ] {
+                for (order, &slot) in ZIG_ZAG.iter().enumerate().skip(1) {
+                    for neighbors in 0..=4 {
+                        for previous in [0, 1, 2, 255] {
+                            for (tile, coeff) in [(0, 0), (15, -7), (63, 2)] {
+                                let fields = [
+                                    kind.as_u8(),
+                                    subband_class(slot),
+                                    position_class(order),
+                                    neighbors.min(3),
+                                    level_bucket(previous),
+                                    quantizer_bucket,
+                                    frame.as_byte(),
+                                    tile,
+                                    u8::from(coeff != 0),
+                                    order as u8,
+                                ];
+                                let hash = fields.into_iter().fold(0x811c9dc5u32, |h, v| {
+                                    h.wrapping_mul(16777619) ^ u32::from(v)
+                                });
+                                assert_eq!(
+                                    recorder
+                                        .compute_context(
+                                            kind, tile, order, neighbors, coeff, previous, frame
+                                        )
+                                        .0,
+                                    hash as u16
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn repeated_report_reuses_only_equal_aligned_patterns() {
+    let mut previous: Option<RecordedSegment> = None;
+    for (phase, blocks) in [(0, 96), (1, 96), (2, 37), (2, 37), (0, 96)] {
+        let mut slots = Vec::new();
+        let mut direct_slots = Vec::new();
+        let make = |slots| {
+            BundleStreamRecorder::new(
+                slots,
+                3,
+                FrameDimensions::new(8, 8),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        };
+        let mut cached = make(&mut slots);
+        let mut direct = make(&mut direct_slots);
+        for i in 0..blocks {
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = (i % 2) as i16;
+            levels[1] = if i % 5 == 0 && phase == 1 { -1 } else { 1 };
+            if i % 13 == 0 {
+                levels[10] = 2;
+            }
+            if i % 17 == phase {
+                levels[63] = -3;
+            }
+            cached.record_block(i, &levels, FrameType::Intra);
+            direct.record_ac_range(cached.tile(i), &levels, FrameType::Intra, 1..BLOCK_PIXELS);
+            for recorder in [&mut cached, &mut direct] {
+                recorder.record_eob();
+            }
+        }
+        let keys = previous
+            .as_ref()
+            .map(|p| p.repeat_keys.clone())
+            .unwrap_or_default();
+        let actual = cached.finish_segment(previous);
+        if phase == 1 {
+            assert!(
+                keys.iter()
+                    .zip(&actual.repeat_keys)
+                    .any(|(a, b)| a == b && *a != u16::MAX)
+            );
+            assert!(keys.iter().zip(&actual.repeat_keys).any(|(a, b)| a != b));
+        }
+        assert_eq!(
+            crate::core::to_bytes(&actual.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        previous = Some(actual);
+    }
+}
+
+#[test]
+fn zero_pattern_cycles_preserve_partial_rows_and_terminal_contexts() {
+    for width in [8, 136, 160] {
+        let mut slots = Vec::new();
+        let mut reference_slots = Vec::new();
+        let make = |slots| {
+            BundleStreamRecorder::new(
+                slots,
+                4,
+                FrameDimensions::new(width, 8),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        };
+        let mut cached = make(&mut slots);
+        let mut direct = make(&mut reference_slots);
+        // Warm all tile classes, then start and stop inside a non-aligned row.
+        for range in [0..(usize::from(width) * 2), 5..(usize::from(width) + 11)] {
+            cached.record_zero_run(range.clone(), -9);
+            for (n, i) in range.enumerate() {
+                direct.record_dc_only(
+                    &[0; BLOCK_PIXELS],
+                    if n == 0 { -9 } else { 0 },
+                    i,
+                    FrameType::Predicted,
+                );
+            }
+        }
+        assert_eq!(
+            crate::core::to_bytes(&cached.finish(None)).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+    }
+}
+
+#[test]
+fn compact_context_tally_combines_single_zeros_and_exceptional_symbols() {
+    let mut slots = Vec::new();
+    let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
+        3,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    let id = BundleContextId(91);
+    for (kind, bits, width) in [
+        (BundleType::SignificanceRle, 1, 3),
+        (BundleType::SignParity, 5, 3),
+        (BundleType::SignificanceRle, 3, 3),
+        (BundleType::SignificanceRle, 1, 3),
+    ] {
+        recorder.record_bundle(kind, id, bits, width, BundleFlushReason::TypeComplete);
+    }
+    recorder.record_eob();
+    let result = recorder.finish(None);
+    let stats = &result.context_stats[0];
+    let freq = &result.context_frequencies[0];
+    assert_eq!(
+        (
+            stats.bundles_total,
+            stats.type_significance_rle,
+            stats.type_sign_parity
+        ),
+        (4, 3, 1)
+    );
+    assert_eq!(
+        (
+            stats.flush_type_complete,
+            stats.flush_context_switch,
+            stats.flush_end_of_block
+        ),
+        (4, 0, 1)
+    );
+    assert_eq!((freq.bundles, freq.total_bits), (4, 12));
+    assert_eq!(
+        (
+            freq.symbol_counts[1],
+            freq.symbol_counts[3],
+            freq.symbol_counts[5]
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(
+        (
+            result.stats.bundles_total,
+            result.stats.significance_rle,
+            result.stats.flush_end_of_block
+        ),
+        (4, 3, 1)
+    );
+}
+
+#[test]
+fn dc_only_after_quantization_matches_full_block_coding() {
+    let dims = FrameDimensions::new(8, 8);
+    let mut frame = vec![100; BLOCK_PIXELS];
+    frame[0] = 200;
+    let prior = vec![100; BLOCK_PIXELS];
+    for (kind, reference) in [
+        (FrameType::Intra, None),
+        (FrameType::Predicted, Some(prior.clone())),
+    ] {
+        let moments = reference_moments(&frame, reference.as_deref(), dims, 0);
+        assert!(matches!(
+            BlockQuantization::new(16).classify(&frame, reference.as_deref(), dims, 0, moments),
+            BlockSpectrum::WeightsThrough(_)
+        ));
+        let (residual, predictor) =
+            build_residual_block(&frame, reference.as_deref(), dims, 0, kind);
+        let levels = quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), 16);
+        assert!(levels[1..].iter().all(|&v| v == 0));
+        let mut expected = Vec::new();
+        encode_block_rle(
+            &levels,
+            &mut 0,
+            &mut expected,
+            &mut NoopBundledHooks,
+            0,
+            kind,
+        );
+        let mut pixels = vec![0; BLOCK_PIXELS];
+        write_reconstructed_block(
+            &mut pixels,
+            &inverse_dct_full(&dequantize_coeffs(&levels, 16)),
+            &predictor,
+            dims,
+            0,
+        );
+        assert_eq!(
+            BaselineEncoder::encode_frame_payload(
+                &frame,
+                kind,
+                reference,
+                dims,
+                16,
+                true,
+                &mut NoopBundledHooks,
+                None
+            ),
+            (expected, Some(pixels))
+        );
+    }
+}
+
+#[test]
 fn recorder_orders_contexts_and_attributes_flushes_to_the_previous_context() {
     let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(

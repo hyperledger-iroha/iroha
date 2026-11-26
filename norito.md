@@ -1873,6 +1873,8 @@ for one row of blocks at a time. The forward transform folds the block into four
 reflection groups. The encoder uses a magnitude bound for each group to skip
 additional frequencies whose quantization steps guarantee zero. Prediction
 reuses the reference pixels when all residual levels quantize to zero.
+The bundled entropy recorder counts common zero runs by multiplicity and
+retains aligned record spans when their quantized patterns match exactly.
 Reconstruction sums the contributions of the nonzero coefficients in raster
 order. The native audio encoder scores step
 sizes against the receiver's reconstructed samples.
