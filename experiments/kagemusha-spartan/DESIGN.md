@@ -806,6 +806,12 @@ parent `39d6b21d92`. Average CPU fell from 309.736 to 277.983 s (10.25%). Averag
 the last two averaged 81.069 to 118.121 s. Each pair ran entirely within one host session, and each
 recipient independently verified its incoming Payment in all eight runs.
 
+For admitted P-256 keys, the host verifier computes the ECDSA point `[z/s]G + [r/s]Q` in projective
+coordinates and normalizes it once. The comb witness uses the two verified scalars and checks its own
+independently constructed point against both affine coordinates and the required x-coordinate residue.
+In eight alternating single-thread M4 Max batches of 80 public verifications, mean process CPU fell from
+2.268 s to 0.031 s. The two implementations agreed on all 13 accepted and seven rejected inputs.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
