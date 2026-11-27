@@ -545,6 +545,10 @@ fn generate(request: &Request<'_>) -> Result<Generated> {
         genesis_public_key: &genesis_public_key,
         operator_public_key: &operator.public_key,
         authorities: authorities.as_ref(),
+        storage_workers: authorities.as_ref().map(|_| {
+            let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+            config::storage_workers_per_peer(cpus)
+        }),
     };
     layout.prepare_nodes(&out_dir)?;
     let bootstrap = layout.parse_bootstrap(&out_dir)?;
