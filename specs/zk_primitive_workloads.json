@@ -5438,6 +5438,7 @@
    "crates/iroha_core_zk/src/ivm_proof_identity/tests.rs": ["digest384", "iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_spartan_native/debit_confirmation.rs": ["sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_spartan_native/settlement.rs": ["blake3"],
+   "crates/iroha_core_zk/src/kagemusha_spartan_native/transfer_maps.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1.rs": ["poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/advance_tests.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/archive_sent_delivery_tests.rs": ["poseidon"],
