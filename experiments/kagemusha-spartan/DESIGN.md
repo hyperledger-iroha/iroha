@@ -806,6 +806,26 @@ parent `39d6b21d92`. Average CPU fell from 309.736 to 277.983 s (10.25%). Averag
 the last two averaged 81.069 to 118.121 s. Each pair ran entirely within one host session, and each
 recipient independently verified its incoming Payment in all eight runs.
 
+For admitted P-256 keys, the host verifier computes the ECDSA point `[z/s]G + [r/s]Q` in projective
+coordinates and normalizes it once. The comb witness uses the two verified scalars and checks its own
+independently constructed point against both affine coordinates and the required x-coordinate residue.
+In eight alternating single-thread M4 Max batches of 80 public verifications, mean process CPU fell from
+2.268 s to 0.031 s. The two implementations agreed on all 13 accepted and seven rejected inputs.
+
+Four six-worker round-trip pairs compared the published wallet at `50b25af7b6` with the same source tree
+using the previous two ECDSA implementation files. The published wallet finished sooner in all four pairs.
+Mean full elapsed fell from 46.182 to 43.259 s (6.33%) and mean CPU from 160.162 to 154.306 s (3.66%).
+The first Send through final Receive fell from 29.929 to 27.997 s, including both independent Payment
+verifications. Primary proving remained the largest finalization stage in a separate profiled run.
+It used 47.36 CPU-seconds across the seven operations, including 24.40 CPU-seconds in the opening.
+
+To measure the cumulative change against `39d6b21d92` under shared host load, four more pairs launched
+both versions together with three workers each. Kernel process starts were within 4.5 ms for every pair.
+Mean full elapsed fell from 108.136 to 99.019 s (8.43%) and process CPU from 203.112 to 188.206 s (7.34%).
+The published version finished sooner and used less CPU in every pair. The first Send through final Receive
+fell from 75.843 to 68.144 s (10.15%). The two Receive finalizations together fell from 39.977 to 35.066 s
+(12.28%). This comparison includes all intervening branch changes and uses the signed unmasked 968f bundle.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
