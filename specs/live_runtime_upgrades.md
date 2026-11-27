@@ -817,9 +817,18 @@ not a date: it happens once everything its first selection needs is implemented 
 4. **Governance.** Qualify Parliament's committed governance-clock and anonymous-ballot
    integration. The dormant family implements a distinct original-signed runtime creator,
    frozen admission metadata, exact retry content and runtime-only G3 certificate/head-checked
-   effect preparation with atomic refusal handling. Native block outputs remain closed; G3
-   application refuses before effects until a new selected immutable result profile commits its
-   distinct receipt. Implement and qualify that result owner. Production qualification remains `None`;
+   effect preparation with atomic refusal handling. Native block outputs remain closed. The
+   distinct G3 result owner is implemented: a root selects it only through an exact services
+   profile naming `parliament_runtime_enactment_result_v1` with its reference closure, and it
+   admits each complete receipt into a bounded per-block custody (16 receipts) before it applies
+   the prepared effect. It publishes each receipt as committed World State: the receipt is
+   written to `world.parliament_anonymous_runtime_enactments` (a table of the family's addition)
+   in the effect's own transaction, so the certified World state root of `R` binds receipt,
+   effect and terminal status together, and the block start seals the admitted receipts against
+   those rows; the native output graph stays closed. Restore requires exactly one receipt per
+   executed attempt. No compiled services profile composes the service, so G3 application
+   still refuses before effects. Compose the service and qualify the owner. Production
+   qualification remains `None`;
    candidate certificates never enact, and other proposal effects remain open. Neither this
    corridor nor the runtime emergency panel gets a temporary substitute on Taira. The panel's containment is implemented
    (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound

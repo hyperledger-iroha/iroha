@@ -67,7 +67,12 @@ mod qualification;
 mod registration_input;
 mod runtime_enactment;
 mod runtime_upgrade;
-pub use runtime_enactment::{RuntimeEnactmentReceiptErrorV1, RuntimeEnactmentReceiptV1};
+pub use runtime_enactment::{
+    RUNTIME_ENACTMENT_RECEIPT_MAX_BYTES_V1, RUNTIME_ENACTMENT_RESULT_SERVICE_CLOSURE_V1,
+    RUNTIME_ENACTMENT_RESULT_SERVICE_V1, RUNTIME_ENACTMENT_RESULTS_PER_BLOCK_V1,
+    RuntimeEnactmentReceiptErrorV1, RuntimeEnactmentReceiptV1, RuntimeEnactmentResultsErrorV1,
+    RuntimeEnactmentResultsV1,
+};
 pub use runtime_upgrade::{
     AnonymousRuntimeUpgradeRequestV1, CreateAnonymousRuntimeUpgradeAttemptV1,
 };

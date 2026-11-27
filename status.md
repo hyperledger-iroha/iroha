@@ -607,10 +607,14 @@ passes.
   tables) run only on a root whose selection installs the family, and their
   outputs are committed as the leading rows of the block result within a
   partition reserved before the pass mutates. Runtime-only G3 effect preparation retains
-  production certificate, time and exact-head checks, but its distinct receipt has no selected
-  result-profile owner yet. Native output types remain closed and actual G3 application refuses
-  as unsupported before effects. The qualification constant remains `None`, so candidate
-  certificates still cannot enact. The new result owner and same-candidate tests remain required. The pass is tested on seeded
+  production certificate, time and exact-head checks. Its distinct receipt now has a selected
+  result owner that admits it into a bounded per-block custody and commits it to
+  `world.parliament_anonymous_runtime_enactments` in the effect's own transaction (bound by the
+  certified World state root) before applying the effect, but no compiled services profile
+  selects that owner.
+  Native output types remain closed and actual G3 application refuses as unsupported before
+  effects. The qualification constant remains `None`, so candidate certificates still cannot
+  enact. The composed service and same-candidate tests remain required. The pass is tested on seeded
   World rows: no real-peer run exists (see the design's slice 3 "Open"
   list). Listing reads a due index of at most `K` attempts. A keepalive that
   Parliament work alone makes due is fee-exempt, and the keeper wakes at

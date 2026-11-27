@@ -1142,10 +1142,15 @@ Core derives the operator, notice, provenance verdict and proposal time from the
 and committed policy; retries retain the exact predecessor content. Runtime-only G3 effect
 preparation checks the production certificate and compare-and-set head, and rolls back rejected
 effects before preparing failure. Its receipt is a distinct standalone type: native block outputs
-remain closed, and G3 application refuses as unsupported before effects until a new selected
-immutable result profile can authenticate and commit that receipt. Checked identity/policy
-adapters retain original local refusals. This source candidate still needs the result-profile
-implementation, same-candidate validation and the governance-clock/ballot qualification owned by
+remain closed. The selected result owner admits that receipt into a bounded per-block custody
+before it applies the prepared effect; a root selects it only through an exact services profile
+naming `parliament_runtime_enactment_result_v1` with its reference closure. No compiled profile
+composes the service, so G3 application still refuses as unsupported before effects. The owner
+publishes each receipt as committed World State (`world.parliament_anonymous_runtime_enactments`,
+written in the effect's transaction and bound by the certified World state root); restore
+requires one receipt per executed attempt. Checked identity/policy adapters retain original local
+refusals. This source candidate still needs the composed service, same-candidate validation and
+the governance-clock/ballot qualification owned by
 [`parliament_ballot_implementation_goals.md`](parliament_ballot_implementation_goals.md) E2.
 `PARLIAMENT_BALLOT_QUALIFICATION_V1` remains `None`: candidate certificates never enact, other
 proposal effects remain open, and the frozen baseline handlers are unchanged.

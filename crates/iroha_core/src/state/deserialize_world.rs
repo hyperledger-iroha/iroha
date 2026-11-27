@@ -9218,6 +9218,10 @@ fn decode_world_fields(
         iroha_data_model::governance::types::GovernanceAttemptId,
         Vec<iroha_data_model::governance::anonymous_ballot::BallotScopeV1>,
     > = take_required(&mut map, "parliament_anonymous_due")?;
+    let parliament_anonymous_runtime_enactments: Storage<
+        iroha_data_model::governance::types::GovernanceAttemptId,
+        iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1,
+    > = take_required(&mut map, "parliament_anonymous_runtime_enactments")?;
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
 
@@ -9335,6 +9339,7 @@ fn decode_world_fields(
         parliament_anonymous_registrations,
         parliament_anonymous_boards,
         parliament_anonymous_due,
+        parliament_anonymous_runtime_enactments,
         nft_sale_offers,
         nft_custody_records,
         nft_custody_by_nft: Storage::default(),
@@ -10966,6 +10971,189 @@ mod parliament_anonymous_restore_tests {
         // A later block leaves both cuts clean.
         world.parliament_anonymous_registrations.block().commit();
         validate_parliament_anonymous_tables(&world, &network, 4, &budget).unwrap();
+    }
+
+    // ---- N14: committed G3 runtime enactment receipts -------------------------------------
+    //
+    // Fixture roots only: `activate_additions_for_testing` installs the family here, as no
+    // production World is founded on it. With no qualification record (P1) no attempt can
+    // record an execution, so these controls cover the receipt rules that need none.
+
+    fn family_world() -> World {
+        let world = World::default();
+        crate::runtime::activate_additions_for_testing(
+            &world,
+            crate::runtime::catalog::additions::PARLIAMENT_ANONYMOUS.module,
+        )
+        .unwrap();
+        world
+    }
+
+    fn runtime_receipt(
+        tag: u8,
+        height: u64,
+    ) -> iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1 {
+        iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1 {
+            anchor: iroha_data_model::governance::GovernanceAnchorV1 {
+                height,
+                position: 0,
+                timestamp_ms: 300_000,
+            },
+            governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId::new(
+                [tag; 32],
+            ),
+            status: iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted,
+            stage: iroha_data_model::governance::types::GovernanceStageV1::default(),
+            attempt_state_digest: [tag; 64].into(),
+        }
+    }
+
+    #[test]
+    fn the_certified_world_state_root_binds_each_committed_runtime_receipt() {
+        use crate::state::world_projection::WorldStateAccumulator;
+        use iroha_data_model::governance::types::{GovernanceAttemptStatusV1, GovernanceStageV1};
+
+        let world = family_world();
+        let empty = WorldStateAccumulator::capture(&world.block()).unwrap();
+        let original = runtime_receipt(4, 5);
+        let mut enactments = world.parliament_anonymous_runtime_enactments.block();
+        enactments.insert(original.governance_attempt_id, original);
+        enactments.commit();
+        let present = WorldStateAccumulator::capture(&world.block()).unwrap();
+        assert_ne!(
+            empty.baseline_root().unwrap(),
+            present.baseline_root().unwrap()
+        );
+        assert_eq!(present.entries(), empty.entries() + 1);
+        let mut later = original;
+        later.anchor.position = 1;
+        for changed in [
+            iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1 {
+                status: GovernanceAttemptStatusV1::Superseded,
+                ..original
+            },
+            iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1 {
+                stage: GovernanceStageV1::Rules,
+                ..original
+            },
+            iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1 {
+                attempt_state_digest: [5; 64].into(),
+                ..original
+            },
+            later,
+        ] {
+            let mut block = world.block();
+            block
+                .parliament_anonymous_runtime_enactments
+                .insert(changed.governance_attempt_id, changed);
+            let projected = WorldStateAccumulator::capture(&block).unwrap();
+            assert_ne!(
+                projected.baseline_root().unwrap(),
+                present.baseline_root().unwrap(),
+                "every receipt field is bound by the certified World state root"
+            );
+            assert_eq!(projected.entries(), present.entries());
+        }
+        assert_eq!(
+            WorldStateAccumulator::capture(&world.block())
+                .unwrap()
+                .baseline_root()
+                .unwrap(),
+            present.baseline_root().unwrap()
+        );
+        // A root that does not install the family keeps the table outside its commitment.
+        let bare = World::default();
+        let uninstalled = crate::runtime::uninstalled_world_members(
+            crate::state::WorldReadOnly::runtime_selection(&bare.view()),
+        )
+        .unwrap()
+        .members;
+        assert!(
+            uninstalled
+                .contains(&super::super::parliament_anonymous_tables::RUNTIME_ENACTMENTS_MEMBER)
+        );
+    }
+
+    #[test]
+    fn a_runtime_receipt_without_its_executed_attempt_refuses_the_restore() {
+        let world = family_world();
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x41; 32])),
+        );
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        validate_parliament_anonymous_tables(&world, &network, 1, &budget).unwrap();
+        let orphan = runtime_receipt(0x46, 1);
+        let mut enactments = world.parliament_anonymous_runtime_enactments.block();
+        enactments.insert(orphan.governance_attempt_id, orphan);
+        enactments.commit();
+        let error = validate_parliament_anonymous_tables(&world, &network, 2, &budget).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("names no stored anonymous Parliament attempt"),
+            "{error}"
+        );
+        let mut enactments = world.parliament_anonymous_runtime_enactments.block();
+        enactments.remove(orphan.governance_attempt_id);
+        enactments.commit();
+        validate_parliament_anonymous_tables(&world, &network, 3, &budget).unwrap_err();
+        world
+            .parliament_anonymous_runtime_enactments
+            .block()
+            .commit();
+        validate_parliament_anonymous_tables(&world, &network, 4, &budget).unwrap();
+    }
+
+    #[test]
+    fn restore_refuses_malformed_or_uninstalled_runtime_receipts() {
+        use super::super::parliament_anonymous_tables::{
+            AnonymousTablesRestoreError, validate_cut,
+        };
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x41; 32])),
+        );
+        let refused = |world: &World, height: u64, expected: &str| match validate_cut(
+            &world.view(),
+            &network,
+            height,
+        ) {
+            Err(AnonymousTablesRestoreError::Invalid(message)) => {
+                assert!(message.contains(expected), "{message}");
+            }
+            other => panic!("expected refusal containing {expected:?}, got {other:?}"),
+        };
+        let write = |world: &World,
+                     key: u8,
+                     receipt: iroha_data_model::governance::anonymous_ballot::RuntimeEnactmentReceiptV1| {
+            let mut enactments = world.parliament_anonymous_runtime_enactments.block();
+            enactments.insert(
+                iroha_data_model::governance::types::GovernanceAttemptId::new([key; 32]),
+                receipt,
+            );
+            enactments.commit();
+        };
+
+        let misfiled = family_world();
+        write(&misfiled, 0x47, runtime_receipt(0x48, 1));
+        refused(&misfiled, 5, "stored under another attempt");
+
+        let future = family_world();
+        write(&future, 0x49, runtime_receipt(0x49, 9));
+        refused(&future, 5, "above restored height");
+
+        let nonterminal = family_world();
+        let mut certified = runtime_receipt(0x4a, 1);
+        certified.status =
+            iroha_data_model::governance::types::GovernanceAttemptStatusV1::Certified;
+        write(&nonterminal, 0x4a, certified);
+        refused(&nonterminal, 5, "terminal execution outcome");
+
+        // A root whose selection does not install the family holds none of its rows.
+        let bare = World::default();
+        write(&bare, 0x4b, runtime_receipt(0x4b, 1));
+        refused(&bare, 5, "does not install");
+
+        assert!(validate_cut(&family_world().view(), &network, 5).is_ok());
     }
 }
 

@@ -372,6 +372,11 @@ capture_world_table_once!(
     "world.parliament_anonymous_due"
 );
 capture_world_table_once!(
+    capture_parliament_anonymous_runtime_enactments_once,
+    parliament_anonymous_runtime_enactments,
+    "world.parliament_anonymous_runtime_enactments"
+);
+capture_world_table_once!(
     capture_nft_sale_offers_once,
     nft_sale_offers,
     "world.nft_sale_offers"
@@ -1007,6 +1012,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_parliament_anonymous_registrations_once::MATERIALIZER,
     capture_parliament_anonymous_boards_once::MATERIALIZER,
     capture_parliament_anonymous_due_once::MATERIALIZER,
+    capture_parliament_anonymous_runtime_enactments_once::MATERIALIZER,
     capture_nft_sale_offers_once::MATERIALIZER,
     capture_nft_custody_records_once::MATERIALIZER,
     capture_vpn_leases_once::MATERIALIZER,
@@ -1484,6 +1490,7 @@ mod tests {
             "world.parliament_anonymous_registrations",
             "world.parliament_anonymous_boards",
             "world.parliament_anonymous_due",
+            "world.parliament_anonymous_runtime_enactments",
             "world.nft_sale_offers",
             "world.nft_custody_records",
             "world.vpn_leases",
