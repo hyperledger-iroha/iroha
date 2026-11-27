@@ -4935,10 +4935,11 @@
    "gates": "SoraFS, Musubi, SoraNet and runtime signers: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "Outside the ZK delivery plan; recorded for visibility only.",
    "attribution": "path_rule",
-   "note": "SoraFS, Musubi, SoraNet and runtime-signer services qualify providers, signers and releases of those services. They are not a ZK, privacy, FHE or proof-validity path of the ZK delivery plan; the names match a detector by word only.",
+   "note": "SoraFS, Musubi, SoraNet and runtime-signer services qualify providers, signers and releases of those services. They are not a ZK, privacy, FHE or proof-validity path of the ZK delivery plan; the names match a detector by word only. The SDK carries the typed HTTP 503 from a certified provider-discovery or stream-token custody read to its caller. Torii can return it while capturing or encoding the requested custody state.",
    "sites": [
+    ["crates/iroha/src/client/sumeragi_finality.rs", "unavailable", "unavailable", 3],
     ["crates/iroha_torii/src/soranet_privacy_ingress.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_torii/src/stream_token_custody_proof.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_torii/src/stream_token_custody_proof.rs", "unavailable", "unavailable", 5],
     ["crates/irohad/src/runtime_provider_broker/protocol/platform/operation_dispatch/privacy.rs", "unavailable", "unavailable", 6],
     ["crates/irohad/src/soracloud_runtime.rs", "unavailable", "unavailable", 30],
     ["crates/irohad/src/soracloud_runtime.rs", "unavailable", "unsupported", 6],
@@ -7480,7 +7481,7 @@
  },
  "summary": {
   "entries": 245,
-  "sites": 1579,
+  "sites": 1580,
   "by_status": {"done": 18, "local_resource": 25, "not_a_gate": 126, "open": 37, "out_of_plan": 21, "unsupported": 18},
   "by_owner": {"-": 147, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 29, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 8, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
