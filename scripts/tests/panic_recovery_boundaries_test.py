@@ -1839,7 +1839,7 @@ def _rust_fragment_span(module, source: str, fragment: str) -> tuple[int, int]:
     ("let worker_issuer = Arc::clone(&issuer);", "let worker_issuer = issuer;"),
     ("let policy = account", "let policy = other_account"),
     (".transpose()?;", ".transpose().unwrap_or(None);"),
-    ("let issuance_result = worker_issuer.issue_token(", "let issuance_result = detached_issuer.issue_token("),
+    ("None => worker_issuer.issue_token(", "None => detached_issuer.issue_token("),
     ("policy.as_ref(),", "None,"),
     ("if let Some(account) = &account &&", "if false && let Some(account) = &account &&"),
     ("&& Some(current_account_read_policy(", "&& Some(stale_account_read_policy("),
@@ -1847,7 +1847,14 @@ def _rust_fragment_span(module, source: str, fragment: str) -> tuple[int, int]:
     ("            )?) != policy", "            )?) == policy"),
     ('"account-read policy changed during token issuance"', '"ignore changed policy"'),
     ('StatusCode::FORBIDDEN, "account-read policy changed during token issuance"', 'StatusCode::OK, "account-read policy changed during token issuance"'),
-    ("Ok(issuance_result) })", "Ok(foreign_issued) })"),
+    ("WorkerDelivery::new(worker_issuer, delivery, issue)", "WorkerDelivery::new(detached_issuer, delivery, issue)"),
+    ("Some(previous) => worker_issuer.recover_undelivered(previous)", "Some(previous) => detached_issuer.recover_undelivered(previous)"),
+    ("worker_issuer.issue_paid(", "detached_issuer.issue_paid("),
+    ("worker_issuer.paid_release_time(", "detached_issuer.paid_release_time("),
+    ("status, acknowledge,", "other_status, acknowledge,"),
+    ("return paid_token_pending_response(body,&client_id,&nonce)", "return unrelated_response(body)"),
+    ("result = &mut worker => result,", "result = &mut other_worker => result,"),
+    ("Ok(token) => token.receive(),", "Ok(token) => other_token.receive(),"),
     ("Ok(issuance_result) => issuance_result, Err(response) => return response, };", "Ok(issuance_result) => issuance_result, Err(_response) => Ok(fallback_token()), };"),
 ])
 def test_token_issuance_finalized_policy_worker_refuses_owner_and_policy_mutations(old: str, new: str) -> None:
@@ -1867,9 +1874,9 @@ def test_token_issuance_policy_reads_cannot_be_reordered_or_move_outside_worker(
     module = load_guard_module()
     source = (root / "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs").read_text(encoding="utf-8")
     prefix, _ = _rust_fragment_span(module, source, "let policy = account")
-    issue, _ = _rust_fragment_span(module, source, "let issuance_result = worker_issuer.issue_token(")
+    issue, _ = _rust_fragment_span(module, source, "let issuance_result = if let (Some(operation),")
     recheck, _ = _rust_fragment_span(module, source, "if let Some(account) = &account &&")
-    result, _ = _rust_fragment_span(module, source, "Ok(issuance_result) })")
+    result, _ = _rust_fragment_span(module, source, "let issuance_result = issuance_result.and_then(")
     policy = source[prefix:issue]
     issuance = source[issue:recheck]
     check = source[recheck:result]

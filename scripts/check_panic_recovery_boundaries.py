@@ -115,7 +115,9 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs": (
         "let worker_issuer = Arc::clone(&issuer);",
         'sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move ||',
-        "let issuance_result = worker_issuer.issue_token(",
+        "None => worker_issuer.issue_token(",
+        "Some(previous) => worker_issuer.recover_undelivered(previous)",
+        "worker_issuer.issue_paid(",
         "account-read policy changed during token issuance",
     ),
     "crates/iroha_torii/src/sorafs/api/stream_token_enforcement.rs": (
@@ -1624,47 +1626,106 @@ def _token_issuance_worker_policy_failures(source: str) -> list[str]:
     if function is None:
         return [failure]
     values, _ = function
-    owner = """
+    # This review covers the owned work, including the fast acknowledgement. An
+    # acknowledgement can expose pending status only. Each successful issuance
+    # must complete the physical worker and pass its fresh policy check.
+    protocol = r'''
         let worker_issuer = Arc::clone(&issuer);
         let worker_state = state.state.clone();
-        let issuance_result = match sorafs_heavy_blocking_task(
-            &state, "SoraFS token issuance", move || {
-    """
-    workers = occurrences(owner, values)
-    if len(workers) != 1:
-        return [failure]
-    worker_opening = workers[0] + len(_rust_tokens(owner)) - 1
-    worker = body_after(worker_opening, values)
-    if worker is None:
-        return [failure]
-    body, closing = worker
-    expected_body = """
-        let policy = account.as_ref().map(|account| {
-            current_account_read_policy(&worker_state, account, ProviderId::new(provider_id),)
-        }).transpose()?;
-        let issuance_result = worker_issuer.issue_token(
-            quota_subject, manifest_cid, provider_id, profile_handle, overrides, policy.as_ref(),
-        );
-        if let Some(account) = &account
-            && Some(current_account_read_policy(
+        let (acknowledge, mut accepted) = tokio::sync::oneshot::channel();
+        let pending = if let Some(op) = &req.paid_readback {
+            let Ok(encoded) = norito::json::to_vec(&req) else {
+                return json_error(StatusCode::BAD_REQUEST, "invalid paid account-token request",);
+            };
+            let status = super::token::paid::StatusKey::new(
+                quota_subject, &encoded, &manifest_cid, &profile_handle,
+            );
+            let body = format!(
+                r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{op}","provider":"{}","manifest":"{}"}}"#,
+                req.provider_id_hex, req.manifest_id_hex
+            );
+            if std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .is_ok_and(|now| issuer.paid_work_active(status, now.as_secs()))
+            {
+                return paid_token_pending_response(body, &client_id, &nonce);
+            }
+            Some((body, status))
+        } else { None };
+        let status = pending.as_ref().map(|(_, status)| *status);
+        let workspace = req.paid_readback.as_ref().map(|_| {
+            state.sorafs_node.config().data_dir().join("paid-account-tokens-v1")
+        });
+        let worker = sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move || {
+            let policy = account.as_ref().map(|account| {
+                current_account_read_policy(&worker_state, account, ProviderId::new(provider_id))
+            }).transpose()?;
+            let delivery = policy.as_ref()
+                .filter(|_| req.paid_readback.is_none() && !norito::core::decode_limits_active())
+                .map(|policy| {
+                    super::token::delivery::AccountDelivery::new(
+                        quota_subject, req.manifest_id_hex.clone(), manifest_cid.clone(),
+                        provider_id, profile_handle.clone(), overrides, policy.clone(),
+                    )
+                });
+            let recovered = delivery.as_ref()
+                .and_then(|request| worker_issuer.take_undelivered(request));
+            let issuance_result = if let (Some(operation), Some(path), Some(policy), Some(status)) = (
+                req.paid_readback.as_deref(), workspace.as_deref(), policy.as_ref(), status,
+            ) {
+                worker_issuer.issue_paid(path, super::token::paid::Request {
+                    subject: quota_subject, operation, manifest_id: &req.manifest_id_hex,
+                    manifest_cid: &manifest_cid, provider: provider_id, profile: &profile_handle,
+                    overrides, policy,
+                }, status, acknowledge,)
+            } else {
+                match recovered {
+                    Some(previous) => worker_issuer.recover_undelivered(previous),
+                    None => worker_issuer.issue_token(
+                        quota_subject, manifest_cid, provider_id, profile_handle, overrides,
+                        policy.as_ref(),
+                    ),
+                }
+            };
+            if let Some(account) = &account && Some(current_account_read_policy(
                 &worker_state, account, ProviderId::new(provider_id),
-            )?) != policy
-        {
-            return Err(json_error(
-                StatusCode::FORBIDDEN,
-                "account-read policy changed during token issuance",
-            ));
-        }
-        Ok(issuance_result)
-    """
-    expected = [token.text for token in _rust_tokens(expected_body)]
-    joined = [token.text for token in _rust_tokens("""
-        }).await {
+            )?) != policy {
+                return Err(json_error(StatusCode::FORBIDDEN, "account-read policy changed during token issuance",));
+            }
+            let issuance_result = issuance_result.and_then(|mut issue| {
+                if req.paid_readback.is_some() {
+                    if let Err(error) = worker_issuer.paid_release_time(&issue.token.body) {
+                        iroha_crypto::zeroize_value_for_confidential_discard(&mut issue.token.signature,);
+                        return Err(error);
+                    }
+                }
+                Ok(issue)
+            });
+            Ok(issuance_result.map(|issue| {
+                super::token::delivery::WorkerDelivery::new(worker_issuer, delivery, issue)
+            }))
+        });
+        tokio::pin!(worker);
+        let completed = if let Some((body, _)) = pending {
+            tokio::select! {
+                biased;
+                Ok(()) = &mut accepted => { return paid_token_pending_response(body, &client_id, &nonce) },
+                result = &mut worker => result,
+            }
+        } else { worker.await };
+        let issuance_result = match completed {
             Ok(issuance_result) => issuance_result,
             Err(response) => return response,
         };
-    """)]
-    if body != expected or values[closing:closing + len(joined)] != joined:
+        let token_issue = match issuance_result {
+            Ok(token) => token.receive(),
+    '''
+    starts = occurrences("let worker_issuer =", values)
+    if len(starts) != 1:
+        return [failure]
+    start = starts[0]
+    prior = values[:start]
+    expected = [token.text for token in _rust_tokens(protocol)]
+    if prior.count("{") != prior.count("}") or values[start:start + len(expected)] != expected:
         return [failure]
     return []
 
