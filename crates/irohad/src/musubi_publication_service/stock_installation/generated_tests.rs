@@ -472,6 +472,46 @@ fn generated_stock_callback_and_tls_seed_ingress_use_original_native_owners() {
         assert_eq!(current.token_key_revision(), 1);
         assert_eq!(budget.limit_bytes(), 1024 * 1024 * 1024);
     }
+    // The advert check sees the original transport used for the first provider request.
+    // A refusal must perform no provider I/O or second native discovery.
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let original_discovery = Arc::clone(&discovery);
+    let mut source = iroha_storage_client::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_signer(
+        *state.network_id_ref(),
+        state.chain_id_ref().as_str(),
+        fixture.manager_account.clone(),
+        fixture.manager_key.clone(),
+        Arc::new(move |provider| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            original_discovery(provider)
+        }),
+        originals.clone(),
+        Duration::from_secs(30),
+    )
+    .unwrap()
+    .build_client()
+    .unwrap();
+    let (_, commitment, _, _) = iroha_musubi_service::seed_test_support::fixture();
+    let manifest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x35; 32]);
+    let provider = plans[0].provider_id();
+    let origin = reqwest::Url::parse(plans[0].https_origin()).unwrap();
+    fixture.refresh_adverts(&cache);
+    let before = format!("{source:?}");
+    let result = source.storage_plan_with_origin_check(
+        &manifest,
+        provider,
+        &commitment,
+        |selected| {
+            assert_eq!(selected, origin.as_str());
+            Err("local advert refused")
+        },
+        |_| "native discovery unavailable",
+    );
+    assert_eq!(result.unwrap_err(), "local advert refused");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(format!("{source:?}"), before);
+    drop(source);
     // A fresh native revocation must invalidate the old candidate and cached finality cursor.
     for listener in &provider_listeners {
         assert_eq!(

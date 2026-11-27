@@ -24,6 +24,7 @@ pub(super) enum Phase {
     CustodyMaterial,
     StreamTokenRevision,
     CarrierPeers,
+    GatewayValidation,
 }
 impl Phase {
     fn description(self) -> &'static str {
@@ -49,6 +50,7 @@ impl Phase {
             Self::PromotedCatalog => "checking the exact promoted catalog after restart",
             Self::ProviderAdvertisement => "publishing the original provider advertisement",
             Self::Discovery => "authenticating current native provider and signer discovery",
+            Self::GatewayValidation => "checking the owned gateways and their launch configuration",
             Self::CustodyRenewal => "recovering and advancing the exact bounded custody renewal",
         }
     }
@@ -62,6 +64,15 @@ pub(super) struct Progress {
 impl Progress {
     pub(super) fn enter(&self, phase: Phase) {
         self.phase.store(phase as u8, Ordering::Release);
+    }
+    /// A separate diagnostic for overlapped work, starting at this exact activation phase.
+    /// Later phases entered on either side never reach the other.
+    pub(super) fn fork(&self) -> Self {
+        let forked = Self::default();
+        forked
+            .phase
+            .store(self.phase.load(Ordering::Acquire), Ordering::Release);
+        forked
     }
     fn phase(&self) -> Phase {
         match self.phase.load(Ordering::Acquire) {
@@ -82,6 +93,7 @@ impl Progress {
             15 => Phase::CustodyMaterial,
             16 => Phase::StreamTokenRevision,
             17 => Phase::CarrierPeers,
+            18 => Phase::GatewayValidation,
             _ => Phase::Selection,
         }
     }

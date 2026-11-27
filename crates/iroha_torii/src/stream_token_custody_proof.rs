@@ -70,6 +70,9 @@ pub async fn handler(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let (provider, height) = selectors(&provider, &height)?;
+    let snapshot_deadline = std::time::Instant::now()
+        .checked_add(query_admission_remaining(&app))
+        .ok_or_else(capacity)?;
     let principal = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     global(app.state.view().world())?;
     let format = match negotiate_heavy_query_response_format(&headers) {
@@ -104,30 +107,50 @@ pub async fn handler(
             let _source_charge = budget
                 .try_reserve_bytes(limits.journal_bytes + limits.allocated_bytes)
                 .map_err(|_| capacity())?;
-            let view = state.view();
+            let retained = if norito::core::decode_limits_active() {
+                None
+            } else {
+                Some(
+                    crate::resource_names_state::snapshot_after_busy(
+                        &budget,
+                        snapshot_deadline,
+                        || state.capture_native_provider_snapshot_v1(height, provider, &budget),
+                    )
+                    .map_err(|_| unavailable())?,
+                )
+            };
+            let live = retained.is_none().then(|| state.view());
+            let view = retained
+                .as_ref()
+                .map(|cut| cut.view())
+                .or(live.as_ref())
+                .expect("captured or live view");
             let tip = norito::core::with_decode_limits_scope(decode_limits, || {
                 crate::native_projection_response::current_global_tip(
-                    &view,
+                    view,
                     height,
                     limits,
                     unavailable,
                 )
             })?;
-            drop(view);
-            let mut body = state
-                .with_native_stream_token_custody_snapshot_v1(
-                    &tip,
-                    provider,
+            drop(live);
+            let encode = |world: &iroha_data_model::sumeragi_finality::WorldStateSnapshotV1,
+                          owner: &iroha_data_model::account::AccountId,
+                          current: Option<(&Vec<u8>, &Vec<u8>)>| {
+                let payload = StreamTokenCustodyProofRefV1::new(world, owner, current);
+                crate::native_projection_response::encode(&payload, format, maximum, &budget)
+                    .map_err(|_| "custody proof encoding refused".to_owned())
+            };
+            let mut body = match &retained {
+                Some(retained) => crate::resource_names_state::snapshot_after_busy(
                     &budget,
-                    |world, owner, current| {
-                        let payload = StreamTokenCustodyProofRefV1::new(world, owner, current);
-                        crate::native_projection_response::encode(
-                            &payload, format, maximum, &budget,
-                        )
-                        .map_err(|_| "custody proof encoding refused".to_owned())
-                    },
-                )
-                .map_err(|_| unavailable())?;
+                    snapshot_deadline,
+                    || retained.with_custody(&tip, &encode),
+                ),
+                None => state
+                    .with_native_stream_token_custody_snapshot_v1(&tip, provider, &budget, encode),
+            }
+            .map_err(|_| unavailable())?;
             body.memory = Some(memory);
             let mut response = AxResponse::new(Body::from(Bytes::from_owner(body)));
             response.headers_mut().insert(

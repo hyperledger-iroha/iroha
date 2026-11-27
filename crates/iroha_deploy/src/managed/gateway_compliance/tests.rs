@@ -1158,3 +1158,82 @@ fn joined_catalog_partial_publication_recovers_each_exact_original() {
         server.finish();
     }
 }
+
+#[test]
+fn joined_catalog_material_keeps_custody_source_and_metered_admission() {
+    use crate::managed::service_authority::profile_validation_test_support as counters;
+    let _resources = crate::managed::native_test_guard();
+    let (_temporary, prepared) = fixture("joined-catalog-material");
+    let publisher = ManagedGatewayCompliance::open(&prepared, provider(&prepared)).unwrap();
+    assert!(publisher.authority.shares_original_for_read());
+
+    let measure = |joined| {
+        counters::operation_paths(|| {
+            counters::count(|| {
+                if joined {
+                    publisher.validate_catalog_read_material(deadline())
+                } else {
+                    publisher.validate_material(deadline())
+                }
+            })
+        })
+    };
+    let ((old, old_images), old_paths) = measure(false);
+    let ((new, new_images), new_paths) = measure(true);
+    old.unwrap();
+    new.unwrap();
+    assert_eq!((old_images, new_images), (2, 1));
+    assert_eq!(old_paths, new_paths);
+    assert_eq!(old_paths.len(), 4);
+    let result = |joined| measure(joined).0.0.map_err(|e| e.to_string());
+    for allocated in [64usize << 20, 0] {
+        let limits = norito::DecodeLimits::new(64 << 20, 64 << 20, 64 << 20, allocated, 64);
+        let (ordinary, old) = norito::core::with_decode_limits_measured(limits, || measure(false));
+        let (joined, new) = norito::core::with_decode_limits_measured(limits, || measure(true));
+        assert_eq!(ordinary.0.0.is_ok(), allocated > 0);
+        assert_eq!(
+            ordinary.0.0.map_err(|e| e.to_string()),
+            joined.0.0.map_err(|e| e.to_string())
+        );
+        assert_eq!(ordinary.0.1, joined.0.1);
+        assert_eq!(ordinary.1, joined.1);
+        assert_eq!(old.total_allocated_bytes(), new.total_allocated_bytes());
+        assert_eq!(old.total_elements(), new.total_elements());
+    }
+    let generation =
+        PrivateDirectory::open_exact(prepared.context.client_config.parent().unwrap()).unwrap();
+    let original = generation.read("peer3.toml", 1 << 20).unwrap();
+    let mut changed = original.to_vec();
+    changed.extend_from_slice(b"\n# changed original source\n");
+    generation
+        .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(result(false).is_err());
+    assert_eq!(result(false), result(true));
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    result(true).unwrap();
+
+    #[cfg(unix)]
+    {
+        let path = publisher.authority.directory.path().join("operation.lock");
+        let held = path.with_file_name("saved-operation.lock");
+        std::fs::rename(&path, &held).unwrap();
+        publisher
+            .authority
+            .directory
+            .write_atomic("operation.lock", b"", PublishMode::CreateNew)
+            .unwrap();
+        assert!(result(false).is_err());
+        assert_eq!(result(false), result(true));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&held, &path).unwrap();
+        result(true).unwrap();
+    }
+    assert!(
+        publisher
+            .validate_catalog_read_material(Instant::now())
+            .is_err()
+    );
+}

@@ -639,7 +639,16 @@ impl Setup {
             &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         )?;
         history.require_fees(fees)?;
-        self.advance(deadline, mode).map(Some)
+        if !self.authority.shares_original_for_read() {
+            return self.advance(deadline, mode).map(Some);
+        }
+        require_deadline(deadline)?;
+        self.authority.validate_profile()?;
+        directory.revalidate()?;
+        // Consume the selection whose intent and fees we just checked. The wallet verifier
+        // rereads the original, metadata and all attempt records against these retained handles.
+        let selected = Selected::from_history(original, history)?;
+        self.advance_selection(&selected, deadline, mode).map(Some)
     }
     fn validate_intent(&self, intent: &Intent) -> Result<()> {
         intent.validate()?;
@@ -724,6 +733,14 @@ impl Setup {
         let operation = self.authority.directory.open_child("setup")?;
         let original = journal::required_original(&operation, self.purpose()?)?;
         self.validate_original(&original)?;
+        self.advance_selection(&original, deadline, mode)
+    }
+    fn advance_selection(
+        &mut self,
+        original: &Selected<Original>,
+        deadline: Instant,
+        mode: Mode<'_>,
+    ) -> Result<ManagedInitialServiceSetupProgress> {
         let directory = original.directory();
         let path = directory.path().join("transaction");
         let account = mode.bind_account(self.wallet()?)?;
@@ -756,7 +773,7 @@ impl Setup {
         if let Some(transaction) = &retained
             && let Some(finalized) = self.authority.retained_finality(directory, transaction)?
         {
-            self.validate_carrier(&original, &finalized)?;
+            self.validate_carrier(original, &finalized)?;
             // Historical successful execution is sufficient for this report. Do not turn a
             // current outage into loss of the original result or imply current policy/serving.
             verify_custody()?;
@@ -809,7 +826,7 @@ impl Setup {
         verify_custody()?;
         let transaction = match retained {
             Some(transaction) => transaction,
-            None => self.verify_wallet(directory, &original, deadline)?,
+            None => self.verify_wallet(directory, original, deadline)?,
         };
         let request = original.request(deadline);
         let mut report = request.resume(&account, &path)?;
@@ -843,7 +860,7 @@ impl Setup {
             None
         };
         if let Some(finalized) = &finalized {
-            self.validate_carrier(&original, finalized)?;
+            self.validate_carrier(original, finalized)?;
         }
         verify_custody()?;
         Ok(progress(report.status, finalized))

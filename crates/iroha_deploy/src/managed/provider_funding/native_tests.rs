@@ -141,11 +141,11 @@ fn automatic_original_amounts_drive_exact_paid_children_and_recover_each_crash_b
     owner.validate_original(&plan, &original).unwrap();
     assert_eq!(
         original.economics.top_up,
-        "24".parse::<XorQuantity>().unwrap()
+        "48".parse::<XorQuantity>().unwrap()
     );
     assert_eq!(
         original.economics.price_bond,
-        "0.75".parse::<Quantity>().unwrap()
+        "1.5".parse::<Quantity>().unwrap()
     );
     let utc = Terms::new(now_ms().unwrap() + 1_200_000, &opts)
         .unwrap()
@@ -263,11 +263,11 @@ fn automatic_original_amounts_drive_exact_paid_children_and_recover_each_crash_b
         issuer_before
             .checked_sub(&balance(native.chain.state(), &operator_asset))
             .unwrap(),
-        Quantity::from(24u64)
+        Quantity::from(48u64)
     );
     assert_eq!(
         balance(native.chain.state(), &custody_asset),
-        Quantity::from(24u64)
+        Quantity::from(48u64)
     );
     let fee = manager_before
         .checked_sub(&balance(native.chain.state(), &manager_asset))
@@ -301,14 +301,14 @@ fn automatic_original_amounts_drive_exact_paid_children_and_recover_each_crash_b
     assert_eq!(zero_credit.partition, *at6.current().unwrap());
     assert_eq!(
         zero_credit.credit(&already_funded).unwrap().record.bonded,
-        Quantity::from(24u64)
+        Quantity::from(48u64)
     );
     assert!(SelectedStage::select(Stage::Approval, &already_funded, &at6, &h6, 6).is_err());
     let credit_stage = SelectedStage::select(Stage::Credit, &original, &at6, &h6, 6).unwrap();
     stage::publish(&directory, Stage::Credit, &original, &credit_stage).unwrap();
     let credit_bytes = std::fs::read(directory.path().join("credit-selection.nrt")).unwrap();
     let credit_intent = credit_stage.credit(&original).unwrap();
-    assert_eq!(credit_intent.record.bonded, Quantity::from(24u64));
+    assert_eq!(credit_intent.record.bonded, Quantity::from(48u64));
     assert_eq!(
         credit_intent.record.onboarding_epoch,
         original.economics.onboarding_epoch
@@ -345,7 +345,7 @@ fn automatic_original_amounts_drive_exact_paid_children_and_recover_each_crash_b
     );
     assert_eq!(
         balance(native.chain.state(), &custody_asset),
-        Quantity::from(24u64)
+        Quantity::from(48u64)
     );
     credit.funding_retain(&h7, opts.deadline).unwrap();
     drop(credit);
@@ -436,7 +436,7 @@ fn automatic_original_amounts_drive_exact_paid_children_and_recover_each_crash_b
     );
     assert_eq!(
         balance(native.chain.state(), &custody_asset),
-        Quantity::from(24u64)
+        Quantity::from(48u64)
     );
     capacity.funding_retain(&h8, opts.deadline).unwrap();
     let at8 = current(&native, &owner, &policy, &h8);

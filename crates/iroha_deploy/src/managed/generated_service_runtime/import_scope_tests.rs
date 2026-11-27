@@ -351,3 +351,105 @@ fn genuine_selection_scope_keeps_changed_sources_and_ordinary_error_exit_precede
     ));
     drop(temporary);
 }
+
+fn check_catalog_launch_scope(
+    owner: &GeneratedServiceRuntime,
+    prepared: &PreparedLocalnet,
+    revision: &GeneratedServiceRuntimeRevision,
+) {
+    let mut round = owner.catalog_launch_reads();
+    let alive = round.imports.as_ref().unwrap().test_alive();
+    let compare = |round: &mut CatalogLaunchReads<'_>| {
+        let expected = owner
+            .validate_for(prepared, revision)
+            .map_err(|error| error.to_string());
+        let actual = owner
+            .validate_catalog_launch(prepared, revision, Some(round))
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, expected);
+        actual
+    };
+    for _ in 0..4 {
+        compare(&mut round).unwrap();
+    }
+    assert!(alive());
+    drop(round);
+    assert!(!alive());
+
+    let mut round = owner.catalog_launch_reads();
+    let alive = round.imports.as_ref().unwrap().test_alive();
+    compare(&mut round).unwrap();
+    let path = revision
+        .cwd()
+        .join("runtime/service-operations/providers/1/stream-token-custody/enroll/bodies/0001");
+    let bodies = PrivateDirectory::open_exact(&path).unwrap();
+    let reservation = bodies
+        .read(
+            "reserved.nrt",
+            crate::managed::native_operation::MAX_CHECKPOINT_BYTES * 2,
+        )
+        .unwrap();
+    bodies
+        .write_atomic(
+            "reserved.nrt",
+            b"invalid retained reservation",
+            PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(compare(&mut round).is_err());
+    bodies
+        .write_atomic("reserved.nrt", &reservation, PublishMode::Replace)
+        .unwrap();
+    compare(&mut round).unwrap();
+    for cap in [0, 131_072, 33_554_432] {
+        let budget = || {
+            norito::core::DecodeBudgetContext::new(norito::core::DecodeLimits::new(
+                1 << 24,
+                1 << 24,
+                1 << 24,
+                cap,
+                64,
+            ))
+        };
+        let physical = budget();
+        let expected = physical
+            .with(|| owner.validate_for(prepared, revision))
+            .map_err(|error| error.to_string());
+        let shared = budget();
+        let actual = shared
+            .with(|| owner.validate_catalog_launch(prepared, revision, Some(&mut round)))
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, expected);
+        assert_eq!(
+            shared.consumed_allocated_bytes(),
+            physical.consumed_allocated_bytes()
+        );
+        assert!(!alive());
+    }
+}
+
+#[test]
+fn catalog_launch_scope_refreshes_all_four_material_checks_and_releases_on_metering() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Genuine::new("four-catalog-launch-checks", false, false);
+    check_catalog_launch_scope(&fixture.owner, &fixture.prepared, &fixture.catalog);
+    no_http(&fixture.peers());
+}
+
+#[test]
+fn peer_start_reuses_checkpoint_imports_across_six_material_reads() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Genuine::new("six-peer-start-checks", false, false);
+    let mut reads = fixture.owner.catalog_launch_reads();
+    let mut counts = Vec::new();
+    for _ in 0..6 {
+        fixture
+            .owner
+            .validate_catalog_launch(&fixture.prepared, &fixture.catalog, Some(&mut reads))
+            .unwrap();
+        counts.push(reads.imports.as_ref().unwrap().test_import_attempts());
+    }
+    assert!(counts[0] > 0);
+    assert_eq!(counts, [counts[0]; 6]);
+    no_http(&fixture.peers());
+}

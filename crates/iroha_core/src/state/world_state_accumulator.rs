@@ -927,8 +927,8 @@ mod inventory_tests;
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
 pub use world_state_snapshot::{
-    NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
-    WorldStateSnapshotError,
+    NativeProviderSnapshotV1, NativeResourceNamesSnapshotV1, NativeZkX509StateV1,
+    ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError,
 };
 
 #[path = "world_state_cut.rs"]

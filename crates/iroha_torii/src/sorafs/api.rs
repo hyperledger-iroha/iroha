@@ -1689,6 +1689,8 @@ impl ByteRange {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/storage/token`.
 pub struct StreamTokenRequestDto {
+    /// Optional canonical paid operation and CAR chunk cursor for authenticated account issuance.
+    pub paid_readback: Option<String>,
     /// Hex-encoded manifest identifier.
     pub manifest_id_hex: String,
     /// Hex-encoded provider identifier (32 bytes).

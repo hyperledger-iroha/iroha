@@ -284,9 +284,9 @@ fn funded(prepared: &PreparedLocalnet) -> Funded {
     let economics = provider_economics::derive(&plan, &before).unwrap();
     assert_eq!(
         economics.target_reserve.as_quantity(),
-        &Quantity::from(24_u32)
+        &Quantity::from(48_u32)
     );
-    assert_eq!(economics.top_up.as_quantity(), &Quantity::from(23_u32));
+    assert_eq!(economics.top_up.as_quantity(), &Quantity::from(47_u32));
     let operator = coordinator.authority.issuer_operator_config().unwrap();
     let manager = coordinator.authority.config.clone();
     assert_ne!(operator.account, manager.account);

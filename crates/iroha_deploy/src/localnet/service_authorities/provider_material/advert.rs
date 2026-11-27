@@ -26,59 +26,86 @@ impl PreparedLocalnet {
     ) -> crate::managed::Result<ProviderAdvertV1> {
         let invalid = || Error::Invalid("invalid original generated provider advert".into());
         let manifest = self.stream_token_authorities()?.ok_or_else(invalid)?;
-        let plan = decode(&manifest.provider(provider)?.provider_plan).map_err(|_| invalid())?;
-        let original = &plan.material;
-        if now_seconds < original.issued_at || now_seconds >= original.retention_epoch {
-            return Err(invalid());
-        }
-        let slot = (now_seconds - original.issued_at) / REFRESH_SECONDS;
-        let issued_at = original.issued_at + slot * REFRESH_SECONDS;
-        let expires_at = issued_at
-            .checked_add(MAX_ADVERT_TTL_SECS)
-            .ok_or_else(invalid)?
-            .min(original.retention_epoch);
-        let root = self.context.client_config.parent().ok_or_else(invalid)?;
-        let generation = iroha_fs::PrivateDirectory::open_exact(root)?;
-        let directory = generation
-            .open_child(RUNTIME_DIRECTORY)?
-            .open_child(DIRECTORY)?;
-        let directory = open_provider_directory(&directory, manifest.provider(provider)?.slot)?;
-        let key = read_service_private_key(&directory, ADVERT_KEY)?;
-        if public32(key.public_key()).map_err(|_| invalid())? != original.proposal.advert_key {
-            return Err(invalid());
-        }
-        let mut advert = ProviderAdvertV1 {
-            version: PROVIDER_ADVERT_VERSION_V1,
-            network_id: *manifest.network_id.as_bytes(),
-            issued_at,
-            expires_at,
-            body: original.advert_body.clone(),
-            signature: AdvertSignature {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: original.proposal.advert_key.to_vec(),
-                signature: vec![0; 64],
-            },
-            signature_strict: true,
-            allow_unknown_capabilities: false,
-        };
-        advert.signature.signature = iroha_crypto::Signature::try_new(
-            key.private_key(),
-            &advert.signature_payload_bytes().map_err(|_| invalid())?,
-        )
-        .map_err(|_| invalid())?
-        .payload()
-        .to_vec();
-        advert
-            .validate_with_body(now_seconds)
-            .map_err(|_| invalid())?;
-        advert.verify_signature().map_err(|_| invalid())?;
-        encode(&advert).map_err(|_| invalid())?;
-        directory.revalidate()?;
+        let advert = sign_original_advert(self, &manifest, provider, now_seconds)?;
         if self.stream_token_authorities()?.as_ref() != Some(&manifest) {
             return Err(invalid());
         }
         Ok(advert)
     }
+}
+
+impl RetainedServiceProfile {
+    /// Sign the same bounded refresh with the original material admitted by this profile.
+    /// The managed publisher brackets the call with full profile and operation-lock checks.
+    pub(crate) fn sign_provider_advert(
+        &self,
+        provider: ProviderId,
+        now_seconds: u64,
+    ) -> crate::managed::Result<ProviderAdvertV1> {
+        sign_original_advert(&self.prepared, &self.manifest, provider, now_seconds)
+    }
+}
+
+fn sign_original_advert(
+    prepared: &PreparedLocalnet,
+    manifest: &StreamTokenAuthorityManifest,
+    provider: ProviderId,
+    now_seconds: u64,
+) -> crate::managed::Result<ProviderAdvertV1> {
+    let invalid = || Error::Invalid("invalid original generated provider advert".into());
+    let plan = decode(&manifest.provider(provider)?.provider_plan).map_err(|_| invalid())?;
+    let original = &plan.material;
+    if now_seconds < original.issued_at || now_seconds >= original.retention_epoch {
+        return Err(invalid());
+    }
+    let slot = (now_seconds - original.issued_at) / REFRESH_SECONDS;
+    let issued_at = original.issued_at + slot * REFRESH_SECONDS;
+    let expires_at = issued_at
+        .checked_add(MAX_ADVERT_TTL_SECS)
+        .ok_or_else(invalid)?
+        .min(original.retention_epoch);
+    let root = prepared
+        .context
+        .client_config
+        .parent()
+        .ok_or_else(invalid)?;
+    let generation = iroha_fs::PrivateDirectory::open_exact(root)?;
+    let directory = generation
+        .open_child(RUNTIME_DIRECTORY)?
+        .open_child(DIRECTORY)?;
+    let directory = open_provider_directory(&directory, manifest.provider(provider)?.slot)?;
+    let key = read_service_private_key(&directory, ADVERT_KEY)?;
+    if public32(key.public_key()).map_err(|_| invalid())? != original.proposal.advert_key {
+        return Err(invalid());
+    }
+    let mut advert = ProviderAdvertV1 {
+        version: PROVIDER_ADVERT_VERSION_V1,
+        network_id: *manifest.network_id.as_bytes(),
+        issued_at,
+        expires_at,
+        body: original.advert_body.clone(),
+        signature: AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: original.proposal.advert_key.to_vec(),
+            signature: vec![0; 64],
+        },
+        signature_strict: true,
+        allow_unknown_capabilities: false,
+    };
+    advert.signature.signature = iroha_crypto::Signature::try_new(
+        key.private_key(),
+        &advert.signature_payload_bytes().map_err(|_| invalid())?,
+    )
+    .map_err(|_| invalid())?
+    .payload()
+    .to_vec();
+    advert
+        .validate_with_body(now_seconds)
+        .map_err(|_| invalid())?;
+    advert.verify_signature().map_err(|_| invalid())?;
+    encode(&advert).map_err(|_| invalid())?;
+    directory.revalidate()?;
+    Ok(advert)
 }
 
 #[cfg(test)]

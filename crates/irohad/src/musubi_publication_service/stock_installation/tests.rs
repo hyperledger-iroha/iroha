@@ -408,3 +408,74 @@ fn cold_native_callback_rejects_unknown_scope_before_source_and_h1_before_curren
     assert_eq!(fixture.chain.height(), 1);
     assert!(!fixture.config.custody_root.exists());
 }
+
+#[tokio::test]
+async fn managed_stock_selection_waits_for_its_single_append_and_reopens_the_original_inputs() {
+    use iroha_core::sumeragi::test_chain::Signers;
+    use iroha_futures::supervisor::ShutdownSignal;
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
+    for change_credential in [false, true] {
+        let mut fixture = Fixture::new();
+        let proposal = fixture.chain.proposal(None, Vec::new());
+        let mut pending = fixture
+            .chain
+            .begin_proposal(proposal, Default::default())
+            .unwrap();
+        pending.prepare(Signers::Quorum).unwrap();
+        pending.append_prepared().unwrap();
+        let deadline = iroha_primitives::time::native_continuous_clock_nanos().unwrap()
+            + Duration::from_secs(30).as_nanos();
+        {
+            let mut active = Box::pin(select_factory_at_startup(
+                &fixture.config,
+                Some(&fixture.context),
+                Some(fixture.cache.clone()),
+                None,
+                false,
+                Some(deadline),
+                ShutdownSignal::new(),
+            ));
+            let mut cx = Context::from_waker(Waker::noop());
+            let result = norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(1 << 24, 1 << 24, 1 << 24, 1 << 25, 64),
+                || active.as_mut().poll(&mut cx),
+            );
+            assert!(matches!(
+                result,
+                std::task::Poll::Ready(Err(Error::Unqualified))
+            ));
+        }
+        let original = select_factory_at_startup(
+            &fixture.config,
+            Some(&fixture.context),
+            Some(fixture.cache.clone()),
+            None,
+            false,
+            Some(deadline),
+            ShutdownSignal::new(),
+        );
+        tokio::pin!(original);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(original.as_mut().poll(&mut cx).is_pending());
+        if change_credential {
+            let certificate = &fixture
+                .config
+                .installation
+                .as_ref()
+                .unwrap()
+                .tls_certificate_file;
+            std::fs::write(certificate, b"changed retained certificate").unwrap();
+        }
+        pending.publish(Signers::Quorum).unwrap();
+        let result = original.await;
+        if change_credential {
+            assert!(matches!(result, Err(Error::Unqualified)));
+        } else {
+            assert!(result.unwrap().is_some());
+        }
+        assert!(!fixture.config.custody_root.exists());
+    }
+}

@@ -554,10 +554,18 @@ fn startup_custody_accepts_only_certified_unchanged_descendants() {
             Err(StreamTokenIssuerError::SignerFinalityUnavailable)
         ));
         for observation in &live {
-            assert!(matches!(
-                fixture.validate(&guard, floor, fixture.current.anchor, observation),
-                Err(StreamTokenIssuerError::SignerFinalityUnavailable)
-            ));
+            let refusal = fixture.validate(&guard, floor, fixture.current.anchor, observation);
+            if observation.phase == SignerStreamTokenObservationPhaseV1::BeforeProvider {
+                assert!(matches!(
+                    refusal,
+                    Err(StreamTokenIssuerError::BeforeProviderTipAdvanced)
+                ));
+            } else {
+                assert!(matches!(
+                    refusal,
+                    Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+                ));
+            }
         }
     }
     // The added tip is an independent finality target, even when all observed custody is unchanged.
@@ -697,4 +705,25 @@ fn startup_custody_descendant_still_requires_current_provider_registration() {
         fixture.validate(&guard, floor, fixture.current.anchor, &startup),
         Err(StreamTokenIssuerError::SignerFinalityUnavailable)
     ));
+}
+
+#[test]
+fn native_acceptance_proves_requested_and_serialized_floors_on_one_cut() {
+    let fixture = NativeCustodyFixture::new();
+    let guard = fixture.guard();
+    let tip = fixture.current.anchor;
+    let signed = fixture.verified_observation_at(tip);
+    let floor = guard.capture(fixture.approval).unwrap();
+    let historical = [HistoricalFinalityV1::Custody(fixture.approval)];
+    let check = |minima| guard.validate_floors(minima, tip, floor, &historical, &signed, None);
+    check([fixture.approval, tip]).unwrap();
+    check([tip, tip]).unwrap();
+    let mut forged = tip;
+    forged.state_digest[0] ^= 1;
+    assert!(check([fixture.approval, forged]).is_err());
+    assert!(check([forged, tip]).is_err());
+    fixture
+        .chain
+        .corrupt_local_quorum_for_test(tip.height, Signers::BelowQuorum);
+    assert!(check([fixture.approval, tip]).is_err());
 }

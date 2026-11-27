@@ -2785,3 +2785,102 @@ fn retained_verifier_scope_survives_checkpoint_import_and_successor_admission() 
     .unwrap();
     assert_eq!(restored.root_scope().unwrap(), chain.root_scope());
 }
+
+#[test]
+fn fetched_intervals_preserve_native_prefix_bytes_and_original_budgets() {
+    struct Batch<'a> {
+        single: Source<'a>,
+        intervals: RefCell<Vec<(u64, u64)>>,
+        change: fn(&mut Vec<SumeragiFinalityProof>),
+        available: bool,
+    }
+    impl FinalitySource for Batch<'_> {
+        type Error = std::io::Error;
+        fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error> {
+            self.single.finality_proof(height)
+        }
+        fn finality_interval(
+            &self,
+            from: NonZeroU64,
+            to: NonZeroU64,
+        ) -> Option<Vec<SumeragiFinalityProof>> {
+            self.intervals.borrow_mut().push((from.get(), to.get()));
+            if !self.available {
+                return None;
+            }
+            let mut proofs: Vec<_> = (from.get()..=to.get())
+                .map(|h| self.single.chain.proof(h).clone())
+                .collect();
+            (self.change)(&mut proofs);
+            Some(proofs)
+        }
+        fn latest_attestation(
+            &self,
+            peer: &PeerId,
+            challenge: &[u8; 32],
+        ) -> Result<FinalityAttestation, Self::Error> {
+            self.single.latest_attestation(peer, challenge)
+        }
+    }
+    let chain = Chain::constant(4, 12);
+    let source = |change: fn(&mut Vec<SumeragiFinalityProof>), available| Batch {
+        single: Source::new(&chain),
+        intervals: RefCell::new(Vec::new()),
+        change,
+        available,
+    };
+    let honest = source(|_| {}, true);
+    let mut batched = chain.verifier();
+    let mut scalar = chain.verifier();
+    let scalar_source = Source::new(&chain);
+    assert_eq!(batched.catch_up(&honest, nz(12)).unwrap(), 12);
+    assert_eq!(scalar.catch_up(&scalar_source, nz(12)).unwrap(), 12);
+    assert_eq!(batched.checkpoint(), scalar.checkpoint());
+    assert_eq!(honest.intervals.into_inner(), [(2, 9), (10, 12)]);
+    assert!(honest.single.proof_calls.into_inner().is_empty());
+
+    let changes: [fn(&mut Vec<SumeragiFinalityProof>); 3] = [
+        |p| {
+            p.pop();
+        },
+        |p| p.swap(0, 1),
+        |p| {
+            p[1].committee.clear();
+        },
+    ];
+    for change in changes {
+        let mut verified = chain.verifier();
+        let initial = verified.checkpoint().clone();
+        assert!(verified.catch_up(&source(change, true), nz(6)).is_err());
+        assert_eq!(verified.checkpoint(), &initial);
+    }
+
+    let unavailable = source(|_| {}, false);
+    assert_eq!(chain.verifier().catch_up(&unavailable, nz(5)).unwrap(), 5);
+    assert_eq!(unavailable.intervals.into_inner(), [(2, 5)]);
+    assert_eq!(unavailable.single.proof_calls.into_inner(), [2, 3, 4, 5]);
+    let limited = source(|_| {}, true);
+    let mut batched = chain.verifier();
+    let mut scalar = chain.verifier();
+    let bytes = chain.proof(2).block_wire.len() + chain.proof(3).block_wire.len();
+    let mut batch_budget = Budget { proofs: 4, bytes };
+    let mut scalar_budget = Budget { proofs: 4, bytes };
+    assert_eq!(
+        batched
+            .catch_up_with_budget(&limited, nz(8), &mut batch_budget)
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        scalar
+            .catch_up_with_budget(&scalar_source, nz(8), &mut scalar_budget)
+            .unwrap(),
+        3
+    );
+    assert_eq!(batched.checkpoint(), scalar.checkpoint());
+    assert_eq!(
+        (batch_budget.proofs, batch_budget.bytes),
+        (scalar_budget.proofs, scalar_budget.bytes)
+    );
+    assert_eq!(limited.intervals.into_inner(), [(2, 5)]);
+}
