@@ -182,6 +182,8 @@ workflow likewise does not claim reference-host latency qualification. See
   implementations into this owner; it must not depend on either frontend.
 - `iroha_managed_ipc` owns the owner-authenticated local transport and the handoff of bound
   listeners. A validator adopts its sockets through it and links no deployment or wallet crate.
+  The worker starts the four validators under the original deadline. As each child requests
+  adoption, the worker matches its native process ID to its seat and transfers that seat’s sockets.
 - Musubi exposes the canonical typed compiler/deployment adapter. It accepts an
   immutable SDK configuration and alias scope, and calls `iroha_contract_deploy`.
   It does not depend on the environment engine.

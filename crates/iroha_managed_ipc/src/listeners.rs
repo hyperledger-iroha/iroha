@@ -63,19 +63,41 @@ impl Sender {
         })
     }
 
-    fn send(&self, child: &mut Child, listeners: &[TcpListener], deadline: Instant) -> Result<()> {
-        validate_listener_addresses(listeners, None)?;
-        loop {
+    fn send<const N: usize>(
+        &self,
+        mut children: [&mut Child; N],
+        listeners: [&[TcpListener]; N],
+        deadline: Instant,
+    ) -> Result<()> {
+        for sockets in listeners {
+            validate_listener_addresses(sockets, None)?;
+        }
+        let pids = children.each_ref().map(|child| child.id());
+        if pids.iter().collect::<BTreeSet<_>>().len() != N {
+            return Err(invalid(
+                "listener adoption requires distinct owned children",
+            ));
+        }
+        let mut pending = [true; N];
+        while pending.contains(&true) {
             check_deadline(deadline)?;
-            require_live_child(child)?;
+            for child in &mut children {
+                require_live_child(child)?;
+            }
             self.directory.revalidate()?;
             if let Some(mut connection) = self.listener.accept()? {
                 connection.set_deadline(deadline)?;
-                if connection.peer_process_id()? != child.id() {
+                let pid = connection.peer_process_id()?;
+                let Some(seat) = pids.iter().position(|&original| original == pid) else {
                     return Err(invalid(
                         "listener adoption requester is not the owned child",
                     ));
+                };
+                if !pending[seat] {
+                    return Err(invalid("owned child already adopted its listeners"));
                 }
+                let child = &mut children[seat];
+                let sockets = listeners[seat];
                 let request = connection.receive()?;
                 if request.action != ControlAction::ListenerAdoption
                     || !same_token(&request.token, &self.record.token)
@@ -85,20 +107,24 @@ impl Sender {
                 require_live_child(child)?;
                 require_record(&self.directory, &self.record)?;
                 check_deadline(deadline)?;
-                connection.send_tcp_listeners(listeners)?;
+                connection.send_tcp_listeners(sockets)?;
                 let acknowledged: Adopted = connection.receive_reply()?;
-                if acknowledged.count != listeners.len() {
+                if acknowledged.count != sockets.len() {
                     return Err(invalid(
                         "listener adoption acknowledgement has the wrong count",
                     ));
                 }
                 require_record(&self.directory, &self.record)?;
-                require_live_child(child)?;
+                for child in &mut children {
+                    require_live_child(child)?;
+                }
                 check_deadline(deadline)?;
-                return Ok(());
+                pending[seat] = false;
+                continue;
             }
             wait_poll(deadline)?;
         }
+        Ok(())
     }
 }
 
@@ -130,14 +156,14 @@ impl FrontendListeners {
                 "managed startup requires exactly eight reserved listeners",
             ));
         }
-        self.0.send(child, listeners, deadline)
+        self.0.send([child], [listeners], deadline)
     }
 }
 
 /// The worker retains all original listeners throughout its owned validator lifetime.
 pub struct WorkerListeners {
     sender: Sender,
-    listeners: Vec<TcpListener>,
+    listeners: [[TcpListener; 2]; PEER_COUNT],
 }
 
 impl WorkerListeners {
@@ -159,7 +185,16 @@ impl WorkerListeners {
             ));
         }
         let source = directory.open_child(STARTUP)?;
-        let listeners = receive_listeners(&source, expected, deadline_ns)?;
+        let mut torii = receive_listeners(&source, expected, deadline_ns)?;
+        // Reservation order is all Torii, then all P2P. Each daemon adopts P2P first.
+        let p2p = torii.split_off(PEER_COUNT);
+        let listeners = p2p
+            .into_iter()
+            .zip(torii)
+            .map(|(p2p, torii)| [p2p, torii])
+            .collect::<Vec<_>>()
+            .try_into()
+            .map_err(|_| invalid("managed startup requires exactly eight reserved listeners"))?;
         let sender = Sender::bind(directory, PEERS)?;
         continuous_deadline(deadline_ns)?;
         Ok(Self { sender, listeners })
@@ -177,15 +212,26 @@ impl WorkerListeners {
     /// An index outside the committee, a foreign or exited requester, an elapsed deadline or a
     /// native transfer failure. This worker keeps its own listeners bound through every outcome.
     pub fn send_to_child(&self, index: usize, child: &mut Child, deadline: Instant) -> Result<()> {
-        if index >= PEER_COUNT {
-            return Err(invalid("managed listener peer index must be 0..3"));
-        }
-        // The original reservation uses Torii first; daemon adoption explicitly names P2P first.
-        let listeners = [
-            self.listeners[PEER_COUNT + index].try_clone()?,
-            self.listeners[index].try_clone()?,
-        ];
-        self.sender.send(child, &listeners, deadline)
+        let listeners = self
+            .listeners
+            .get(index)
+            .ok_or_else(|| invalid("managed listener peer index must be 0..3"))?;
+        self.sender.send([child], [listeners.as_slice()], deadline)
+    }
+
+    /// Transfer each validator's original P2P and Torii sockets in requester arrival order.
+    /// The children are supplied in reservation order. Each must remain live through the handoff.
+    ///
+    /// # Errors
+    /// A foreign or repeated requester, a missing live child, changed custody, an expired
+    /// original deadline, or a native transfer failure.
+    pub fn send_to_children(
+        &self,
+        children: [&mut Child; PEER_COUNT],
+        deadline: Instant,
+    ) -> Result<()> {
+        let sockets = self.listeners.each_ref().map(|pair| pair.as_slice());
+        self.sender.send(children, sockets, deadline)
     }
 }
 
@@ -485,6 +531,20 @@ mod tests {
 
     #[test]
     fn native_listener_handoff_retains_original_ports_through_worker_and_daemon() {
+        run_native_worker(None);
+    }
+
+    #[test]
+    fn native_committee_handoff_serves_other_seats_before_delayed_seat_zero() {
+        run_native_worker(Some("delayed"));
+    }
+
+    #[test]
+    fn native_committee_handoff_refuses_repeat_request_from_an_adopted_child() {
+        run_native_worker(Some("repeat"));
+    }
+
+    fn run_native_worker(committee: Option<&str>) {
         let temporary = tempfile::tempdir().unwrap();
         let directory = PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
         let (expected, listeners) = fixture();
@@ -496,6 +556,11 @@ mod tests {
                 PublishMode::CreateNew,
             )
             .unwrap();
+        if let Some(mode) = committee {
+            directory
+                .write_atomic("committee", mode.as_bytes(), PublishMode::CreateNew)
+                .unwrap();
+        }
         let sender = FrontendListeners::bind(&directory).unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
@@ -525,21 +590,55 @@ mod tests {
         }
     }
 
+    fn fixture_addresses(directory: &PrivateDirectory) -> Vec<SocketAddr> {
+        let expected: Vec<String> =
+            decode(&directory.read("fixture.json", MAX_METADATA).unwrap()).unwrap();
+        expected
+            .iter()
+            .map(|address| address.parse().unwrap())
+            .collect()
+    }
+
+    fn committee_mode(directory: &PrivateDirectory) -> Option<String> {
+        directory
+            .read_optional("committee", 16)
+            .unwrap()
+            .map(|bytes| std::str::from_utf8(&bytes).unwrap().to_owned())
+    }
+
     #[test]
-    #[ignore = "internal subprocess owned by native_listener_handoff_retains_original_ports_through_worker_and_daemon"]
+    #[ignore = "internal subprocess owned by native listener handoff tests"]
     fn worker_receiver_child() {
         let path = std::env::var_os("IROHA_LISTENER_TEST_DIRECTORY").unwrap();
         let directory = PrivateDirectory::open(Path::new(&path)).unwrap();
-        let expected: Vec<String> =
-            decode(&directory.read("fixture.json", MAX_METADATA).unwrap()).unwrap();
-        let expected = expected
-            .iter()
-            .map(|address| address.parse().unwrap())
-            .collect::<Vec<SocketAddr>>();
+        let expected = fixture_addresses(&directory);
         let deadline_ns = iroha_primitives::time::native_continuous_clock_nanos().unwrap()
             + Duration::from_secs(8).as_nanos();
         let held = WorkerListeners::receive(&directory, &expected, deadline_ns).unwrap();
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        if let Some(mode) = committee_mode(&directory) {
+            check_committee_handoff(&held, &expected, &mode);
+        } else {
+            let mut child = spawn_runtime(&held, &expected, 0);
+            let sent = held.send_to_child(0, &mut child, Instant::now() + Duration::from_secs(5));
+            drop(child.stdin.take());
+            let status = child.wait().unwrap();
+            sent.unwrap();
+            assert!(status.success());
+            assert!(
+                held.send_to_child(
+                    PEER_COUNT,
+                    &mut child,
+                    Instant::now() + Duration::from_secs(1)
+                )
+                .is_err()
+            );
+            assert!(require_live_child(&mut child).is_err());
+        }
+        std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+    }
+
+    fn spawn_runtime(held: &WorkerListeners, expected: &[SocketAddr], seat: usize) -> Child {
+        Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "listeners::tests::runtime_receiver_child",
@@ -547,26 +646,32 @@ mod tests {
                 "--nocapture",
             ])
             .env("IROHA_LISTENER_TEST_DIRECTORY", held.directory())
-            .env("IROHA_LISTENER_TEST_P2P", expected[PEER_COUNT].to_string())
-            .env("IROHA_LISTENER_TEST_TORII", expected[0].to_string())
+            .env(
+                "IROHA_LISTENER_TEST_P2P",
+                expected[PEER_COUNT + seat].to_string(),
+            )
+            .env("IROHA_LISTENER_TEST_TORII", expected[seat].to_string())
             .stdin(Stdio::piped())
             .spawn()
-            .unwrap();
-        let sent = held.send_to_child(0, &mut child, Instant::now() + Duration::from_secs(5));
-        drop(child.stdin.take());
-        let status = child.wait().unwrap();
-        sent.unwrap();
-        assert!(status.success());
-        assert!(
-            held.send_to_child(
-                PEER_COUNT,
-                &mut child,
-                Instant::now() + Duration::from_secs(1)
-            )
-            .is_err()
-        );
-        assert!(require_live_child(&mut child).is_err());
-        std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            .unwrap()
+    }
+
+    fn check_committee_handoff(held: &WorkerListeners, expected: &[SocketAddr], mode: &str) {
+        let mut children = std::array::from_fn(|seat| spawn_runtime(held, expected, seat));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let sent = held.send_to_children(children.each_mut(), deadline);
+        for child in &mut children {
+            drop(child.stdin.take());
+        }
+        for child in &mut children {
+            assert!(child.wait().unwrap().success());
+        }
+        match mode {
+            "delayed" => sent.unwrap(),
+            "repeat" => assert!(matches!(sent, Err(Error::Invalid(message))
+                if message == "owned child already adopted its listeners")),
+            _ => panic!("unexpected committee fixture"),
+        }
     }
 
     #[test]
@@ -581,12 +686,38 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-        let deadline_ns = iroha_primitives::time::native_continuous_clock_nanos().unwrap()
-            + Duration::from_secs(4).as_nanos();
-        let adopted =
-            adopt_runtime_listeners(Path::new(&directory), p2p, torii, deadline_ns).unwrap();
+        let directory = Path::new(&directory);
+        let original = PrivateDirectory::open(directory.parent().unwrap()).unwrap();
+        let mode = committee_mode(&original);
+        let expected = fixture_addresses(&original);
+        let seat = (0..PEER_COUNT)
+            .find(|&index| (expected[PEER_COUNT + index], expected[index]) == (p2p, torii))
+            .unwrap();
+        let budget = Duration::from_secs(if mode.is_some() { 15 } else { 4 });
+        let deadline_ns =
+            iroha_primitives::time::native_continuous_clock_nanos().unwrap() + budget.as_nanos();
+        if mode.as_deref() == Some("repeat") && seat != 0 {
+            std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            return;
+        }
+        if mode.as_deref() == Some("delayed") && seat == 0 {
+            // Only the three siblings can create these markers, after checking their actual sockets.
+            let deadline = continuous_deadline(deadline_ns).unwrap();
+            for sibling in 1..PEER_COUNT {
+                while !directory.join(format!("adopted-{sibling}")).exists() {
+                    wait_poll(deadline).unwrap();
+                }
+            }
+        }
+        let adopted = adopt_runtime_listeners(directory, p2p, torii, deadline_ns).unwrap();
         assert_eq!(adopted.p2p.local_addr().unwrap(), p2p);
         assert_eq!(adopted.torii.local_addr().unwrap(), torii);
+        if mode.as_deref() == Some("delayed") {
+            std::fs::write(directory.join(format!("adopted-{seat}")), []).unwrap();
+        }
+        if mode.as_deref() == Some("repeat") {
+            assert!(adopt_runtime_listeners(directory, p2p, torii, deadline_ns).is_err());
+        }
         // Only the sender closes this inherited pipe, after it has checked the acknowledgement.
         std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
     }

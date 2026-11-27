@@ -288,18 +288,26 @@ impl PeerProcesses {
                     daemon,
                     budget,
                 )?)));
-            if let Some(listeners) = listeners {
-                let mut child = self.children[index]
-                    .lock()
-                    .map_err(|_| invalid("owned child lock failed"))?;
-                listeners.send_to_child(
-                    index,
-                    &mut child,
-                    budget
-                        .deadline()
-                        .map_err(|failure| Error::Invalid(failure.message()))?,
-                )?;
-            }
+        }
+        if let Some(listeners) = listeners {
+            // Own every spawned process before waiting for any one daemon to finish preparing.
+            // On error the worker still has all child handles for normal shutdown.
+            let mut children = self
+                .children
+                .iter()
+                .map(|child| child.lock().map_err(|_| invalid("owned child lock failed")))
+                .collect::<Result<Vec<_>>>()?;
+            let [first, second, third, fourth] = children.as_mut_slice() else {
+                return Err(invalid(
+                    "managed listener handoff requires four owned children",
+                ));
+            };
+            listeners.send_to_children(
+                [first, second, third, fourth],
+                budget
+                    .deadline()
+                    .map_err(|failure| Error::Invalid(failure.message()))?,
+            )?;
         }
         if let Some(launch) = &self.launch {
             launch.validate()?;
