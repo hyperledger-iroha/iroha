@@ -1021,6 +1021,61 @@ fn context_prefixes_match_full_width_hash() {
 }
 
 #[test]
+fn width_two_tile_hash_matches_every_context_prefix() {
+    for (frame, tiles) in Q16_TILE_HASH.iter().enumerate() {
+        for (tile, forms) in tiles.iter().enumerate() {
+            for (occupied, offsets) in forms.iter().enumerate() {
+                for (idx, &hash) in offsets.iter().enumerate() {
+                    let prefix = CONTEXT_PREFIX[2 + frame][occupied][idx];
+                    for z in [1, 17, 63] {
+                        assert_eq!(
+                            BundleContextId(hash ^ z as u16),
+                            finish_context(prefix, tile as u8, occupied != 0, z)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn neutral_suffix_cutoffs_preserve_literal_contexts() {
+    let mut slots = [Vec::new(), Vec::new()];
+    let [mut compact, mut direct] = slots.each_mut().map(|s| {
+        BundleStreamRecorder::new(
+            s,
+            2,
+            FrameDimensions::new(200, 32),
+            16,
+            default_bundle_tables(),
+            BundleAcceleration::None,
+            0,
+            None,
+        )
+    });
+    for frame in [FrameType::Intra, FrameType::Predicted] {
+        for z in 1..64 {
+            for next in [z, (z + 3).min(63)] {
+                let mut levels = [0; 64];
+                levels[0] = 7;
+                levels[ZIG_ZAG[z]] = -3;
+                levels[ZIG_ZAG[next]] = 2;
+                let tile = compact.tile(z);
+                compact.record_block(z, &levels, frame);
+                direct.record_ac_range_impl::<false>(tile, &levels, frame, 1..64);
+                compact.record_eob();
+                direct.record_eob();
+            }
+        }
+    }
+    assert_eq!(
+        crate::core::to_bytes(&compact.finish(None)).unwrap(),
+        crate::core::to_bytes(&direct.finish(None)).unwrap()
+    );
+}
+
+#[test]
 fn repeated_report_reuses_only_equal_aligned_patterns() {
     let mut previous: Option<RecordedSegment> = None;
     for (phase, blocks) in [(0, 96), (1, 96), (2, 37), (2, 37), (0, 96)] {
@@ -3135,6 +3190,62 @@ fn predicted_pair_moments_only_replace_proven_zero_blocks() {
 }
 
 #[test]
+fn predicted_selection_mask_matches_block_certificates_at_every_offset() {
+    let dims = FrameDimensions::new(64 * 8, 8);
+    let stride = usize::from(dims.width);
+    let previous = vec![123; dims.pixel_count()];
+    let frame: Vec<_> = (0..dims.pixel_count())
+        .map(|i| {
+            let block = (i % stride) / 8;
+            match block % 4 {
+                0 => 123,
+                1 => 124,
+                2 => 200,
+                _ => ((i * 19 + i / stride * 11) % 256) as u8,
+            }
+        })
+        .collect();
+    let exact: Vec<_> = (0..64)
+        .map(|col| block_moments(&frame, Some(&previous), stride, col))
+        .collect();
+    for qp in [1, 16, 63, 255] {
+        let geometry = BlockQuantization::new(qp);
+        for len in 0..=64 {
+            let mask = geometry.possible_residuals(&exact[..len]);
+            for (i, &(sum, squares)) in exact[..len].iter().enumerate() {
+                let expected = geometry
+                    .ac_limit(i64::from(sum), i64::from(squares))
+                    .is_some()
+                    || u64::from(sum.unsigned_abs()) > geometry.zero_dc_sum;
+                assert_eq!(mask >> i & 1, u64::from(expected));
+                if !expected {
+                    assert!(matches!(
+                        geometry.classify(&frame, Some(&previous), dims, i, (sum, squares)),
+                        BlockSpectrum::DcLevel(0)
+                    ));
+                }
+            }
+            assert!(len == 64 || mask >> len == 0);
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+#[test]
+fn cosine_basis_preserves_centered_energy_within_the_byte_block_allowance() {
+    // Gershgorin bounds the spectral norm of BᵀB-I by its largest absolute
+    // row sum. The 2-D transform uses the tensor product of the two 1-D bases.
+    for x in 0..8 {
+        let error: f64 = (0..8)
+            .map(|y| {
+                let dot: f64 = DCT_FACTORS.iter().map(|row| row[x] * row[y]).sum();
+                (dot - f64::from(u8::from(x == y))).abs()
+            })
+            .sum();
+        assert!(error < 1e-13);
+    }
+}
+#[test]
 fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
     let dims = FrameDimensions::new(16, 16);
     let previous: Vec<u8> = (0..dims.pixel_count())
@@ -3454,6 +3565,77 @@ fn quantize_test_block(
     let (levels, mask) = geometry.quantize_folded(&folded, folded_sum(&folded), limit, || *block);
     assert_eq!(mask, ac_support(&levels));
     levels
+}
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+#[test]
+fn narrow_q16_agrees_at_signed_bin_edges_and_large_prediction_offsets() {
+    if !std::arch::is_aarch64_feature_detected!("dotprod") {
+        return;
+    }
+    let geometry = BlockQuantization::new(16);
+    let mut seen = [0; 2];
+    let mut levels_seen = [false; 3];
+    for k in &NARROW_KERNELS {
+        for delta in -7..=7 {
+            let amplitude = f64::from(k.weight) * 8.0 + f64::from(delta);
+            for dc in [-164, 0, 167] {
+                for sign in [-1.0, 1.0] {
+                    let mut frame = [0; 13 * 8];
+                    let mut prior = [0; 13 * 8];
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let r = (sign
+                                * amplitude
+                                * DCT_FACTORS[k.slot / 8][y]
+                                * DCT_FACTORS[k.slot % 8][x])
+                                .round() as i32
+                                + dc;
+                            let p = if dc < 0 {
+                                207
+                            } else if dc > 0 {
+                                39
+                            } else {
+                                127
+                            };
+                            frame[y * 13 + x] = (p + r).clamp(0, 255) as u8;
+                            prior[y * 13 + x] = p as u8;
+                        }
+                    }
+                    for prediction in [None, Some(&prior[..])] {
+                        let rows = ResidualRows::new(&frame, prediction, 13, 0);
+                        let block = rows.block();
+                        let sum = block.iter().map(|&x| i32::from(x)).sum::<i32>();
+                        let sq = block.iter().map(|&x| i64::from(x).pow(2)).sum();
+                        let Some(limit) = geometry.ac_limit(i64::from(sum), sq) else {
+                            continue;
+                        };
+                        if limit > NARROW_LIMIT {
+                            continue;
+                        }
+                        let reference = quantize_coeffs(&forward_dct(&block, u8::MAX, 0), 16);
+                        // SAFETY: the host supports dotprod and the cutoff is the actual block bound.
+                        let (levels, mask) =
+                            unsafe { rows.narrow_q16((sum, sq as i32), limit, &geometry) };
+                        assert_eq!(
+                            levels, reference,
+                            "offset {dc}, frequency {}, cutoff {limit}",
+                            k.slot
+                        );
+                        assert_eq!(mask, ac_support(&reference));
+                        seen[usize::from(prediction.is_some() && limit > 15)] += 1;
+                        levels_seen[(levels[k.slot] + 1) as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(seen.iter().all(|&n| n > 0));
+    assert_eq!(levels_seen, [true; 3]);
 }
 
 #[test]

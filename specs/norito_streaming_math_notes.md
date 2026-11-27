@@ -105,6 +105,32 @@ inside the zero or signed unit quantization bin determines a level. Other
 projections use the Q32 accumulator and its reference-order midpoint check.
 A zigzag bitmask records each nonzero AC level as it is produced.
 
+For the default Q16, let `L` be the energy-based matrix weight cutoff and
+`N = sqrt(E/64)` the centered spatial norm. Before the cutoff saturates,
+`N < 8(L+1)`. At `L ≤ 29` even the smallest step (160) cannot produce
+an AC level of magnitude two. Only kernels of weight at most `L` need
+evaluation. Their signed Q9 weights have exactly zero sum, checked when the
+table is built. Intra samples can therefore be biased by 128. Predicted
+samples use the integer block mean. For `L ≤ 15`, the original energy bound
+`ceil(65 × (isqrt(E)+1) / 512) + 2 < 128` keeps every centered sample in
+a signed byte. For larger cutoffs through 29, halving the residual before
+centering preserves that range.
+
+The Q9 weight error is at most `½ × 8N < 32(L+1)` units by Cauchy–Schwarz.
+Halving a signed residual discards either zero or one before rescaling.
+Since the weight sum is zero, this costs at most half the sum of the absolute
+integer weights. A further Q9 unit covers the tabulated basis and binary64
+evaluation errors. A projection interval crossing the first quantizer
+boundary uses the reference calculation.
+
+The orthonormal DCT bounds the sum of squared AC projections by the centered
+spatial energy. The encoder starts with `ceil(E/64) + 1` squared units.
+The one-unit allowance covers basis and evaluation errors for byte samples.
+Subtracting the square of an integer lower bound on each measured magnitude
+keeps this an upper bound for all unvisited projections. When it falls below
+or equals the square of the next half-step, the remaining sorted kernels
+all quantize to zero.
+
 Each block needs two integer moments, the sum of the residuals and their
 squared sum. The encoder computes one band of eight scanlines before writing
 back its collocated predictors. On AArch64 with SIMD and dot-product support,

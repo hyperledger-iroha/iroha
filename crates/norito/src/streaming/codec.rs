@@ -1954,89 +1954,93 @@ impl BaselineEncoder {
                     row_moments(source, reference, stride, &mut moments);
                 }
             }
-            for (column, &moments) in moments.iter().enumerate() {
-                let block_index = band * blocks_per_row + column;
-                let prediction =
-                    (frame_type == FrameType::Predicted).then_some(reference.as_slice());
-                if quantizer != 0
-                    && frame_type == FrameType::Predicted
-                    && moments == (0, 0)
-                    && rdo.is_none()
-                {
-                    continue;
-                }
-                let decision = geometry.classify(frame, prediction, dims, block_index, moments);
-                if matches!(decision, BlockSpectrum::DcLevel(0))
-                    && frame_type == FrameType::Predicted
-                    && rdo.is_none()
-                {
-                    continue;
-                }
-                if next_block < block_index {
-                    emit_zero_run(next_block..block_index, &mut prev_dc, payload, hooks);
-                }
-                next_block = block_index + 1;
-                match decision {
-                    BlockSpectrum::DcLevel(level) => {
-                        dc_levels[0] = level;
-                        // RDO observes certified blocks even when all AC levels are zero.
-                        if let Some(optimizer) = rdo.as_deref_mut() {
-                            optimizer.select_levels(
-                                &[0; BLOCK_PIXELS],
-                                &mut dc_levels,
-                                frame_type,
-                                block_index,
-                            );
-                        }
+            let skip_zero = frame_type == FrameType::Predicted && quantizer != 0 && rdo.is_none();
+            for (chunk, positions) in moments.chunks(64).enumerate() {
+                let mut selected = if skip_zero {
+                    geometry.possible_residuals(positions)
+                } else {
+                    u64::MAX >> (64 - positions.len())
+                };
+                while selected != 0 {
+                    let position = selected.trailing_zeros() as usize;
+                    selected &= selected - 1;
+                    let column = chunk * 64 + position;
+                    let moments = positions[position];
+                    let block_index = band * blocks_per_row + column;
+                    let prediction =
+                        (frame_type == FrameType::Predicted).then_some(reference.as_slice());
+                    let decision = geometry.classify(frame, prediction, dims, block_index, moments);
+                    if matches!(decision, BlockSpectrum::DcLevel(0))
+                        && frame_type == FrameType::Predicted
+                        && rdo.is_none()
+                    {
+                        continue;
                     }
-                    BlockSpectrum::WeightsThrough(limit) => {
-                        let start = band_start + column * BLOCK_SIZE;
-                        let rows = ResidualRows::new(frame, prediction, stride, start);
-                        let (quantized, active) = if let Some(optimizer) = rdo.as_deref_mut() {
-                            let coeffs = forward_dct(&rows.block(), limit, quantizer);
-                            let mut levels = quantize_coeffs(&coeffs, quantizer);
-                            optimizer.select_levels(&coeffs, &mut levels, frame_type, block_index);
-                            (levels, ac_support(&levels))
-                        } else {
-                            let folded = rows.folded();
-                            let sum = if quantizer == 0 {
-                                folded_sum(&folded)
-                            } else {
-                                moments.0
-                            };
-                            geometry.quantize_folded(&folded, sum, limit, || rows.block())
-                        };
-                        if active != 0 {
-                            encode_active_block(
-                                &quantized,
-                                active,
-                                &mut prev_dc,
-                                payload,
-                                hooks,
-                                block_index,
-                                frame_type,
-                            );
-                            if retain_reference {
-                                let spatial =
-                                    inverse_dct_full(&dequantize_coeffs(&quantized, quantizer));
-                                reconstruct_ac(reference, stride, start, frame_type, &spatial);
+                    if next_block < block_index {
+                        emit_zero_run(next_block..block_index, &mut prev_dc, payload, hooks);
+                    }
+                    next_block = block_index + 1;
+                    match decision {
+                        BlockSpectrum::DcLevel(level) => {
+                            dc_levels[0] = level;
+                            // RDO observes certified blocks even when all AC levels are zero.
+                            if let Some(optimizer) = rdo.as_deref_mut() {
+                                optimizer.select_levels(
+                                    &[0; BLOCK_PIXELS],
+                                    &mut dc_levels,
+                                    frame_type,
+                                    block_index,
+                                );
                             }
-                            continue;
                         }
-                        dc_levels[0] = quantized[0];
+                        BlockSpectrum::WeightsThrough(limit) => {
+                            let start = band_start + column * BLOCK_SIZE;
+                            let rows = ResidualRows::new(frame, prediction, stride, start);
+                            let (quantized, active) = if let Some(optimizer) = rdo.as_deref_mut() {
+                                let coeffs = forward_dct(&rows.block(), limit, quantizer);
+                                let mut levels = quantize_coeffs(&coeffs, quantizer);
+                                optimizer.select_levels(
+                                    &coeffs,
+                                    &mut levels,
+                                    frame_type,
+                                    block_index,
+                                );
+                                (levels, ac_support(&levels))
+                            } else {
+                                geometry.quantize_rows(&rows, moments, limit)
+                            };
+                            if active != 0 {
+                                encode_active_block(
+                                    &quantized,
+                                    active,
+                                    &mut prev_dc,
+                                    payload,
+                                    hooks,
+                                    block_index,
+                                    frame_type,
+                                );
+                                if retain_reference {
+                                    let spatial =
+                                        inverse_dct_full(&dequantize_coeffs(&quantized, quantizer));
+                                    reconstruct_ac(reference, stride, start, frame_type, &spatial);
+                                }
+                                continue;
+                            }
+                            dc_levels[0] = quantized[0];
+                        }
                     }
-                }
-                emit_dc_block(
-                    &dc_levels,
-                    &mut prev_dc,
-                    payload,
-                    hooks,
-                    block_index,
-                    frame_type,
-                );
-                if retain_reference && (frame_type == FrameType::Intra || dc_levels[0] != 0) {
-                    let offset = inverse_dc_sample(i32::from(dc_levels[0]) * geometry.dc_step);
-                    reconstruct_dc(reference, dims, block_index, frame_type, offset);
+                    emit_dc_block(
+                        &dc_levels,
+                        &mut prev_dc,
+                        payload,
+                        hooks,
+                        block_index,
+                        frame_type,
+                    );
+                    if retain_reference && (frame_type == FrameType::Intra || dc_levels[0] != 0) {
+                        let offset = inverse_dc_sample(i32::from(dc_levels[0]) * geometry.dc_step);
+                        reconstruct_dc(reference, dims, block_index, frame_type, offset);
+                    }
                 }
             }
         }
@@ -2199,6 +2203,85 @@ impl<'a> ResidualRows<'a> {
             }
             None => src.map(i16::from),
         }
+    }
+
+    #[cfg(all(
+        feature = "simd-accel",
+        target_arch = "aarch64",
+        not(feature = "streaming-fixed-point-dct")
+    ))]
+    #[target_feature(enable = "dotprod")]
+    unsafe fn narrow_q16(
+        &self,
+        moments: (i32, i32),
+        limit: u8,
+        geometry: &BlockQuantization,
+    ) -> ([i16; 64], u64) {
+        use std::arch::aarch64::*;
+        let (sum, squares) = moments;
+        let mut remaining = (64 * squares - sum * sum + 63) / 64 + 1;
+        let half = self.reference.is_some() && limit > 15;
+        let center = (sum / 64) as u8;
+        // SAFETY: each plane contains all eight rows established by new().
+        let pair = |p: &[u8], y: usize| unsafe {
+            vcombine_u8(
+                vld1_u8(p.as_ptr().add(2 * y * self.stride)),
+                vld1_u8(p.as_ptr().add((2 * y + 1) * self.stride)),
+            )
+        };
+        let samples: [_; 4] = std::array::from_fn(|i| {
+            let s = pair(self.source, i);
+            let v = if let Some(p) = self.reference {
+                let prev = pair(p, i);
+                if half {
+                    vsubq_u8(vhsubq_u8(s, prev), vdupq_n_u8(((sum / 64) >> 1) as u8))
+                } else {
+                    vsubq_u8(vsubq_u8(s, prev), vdupq_n_u8(center))
+                }
+            } else {
+                veorq_u8(s, vdupq_n_u8(128))
+            };
+            vreinterpretq_s8_u8(v)
+        });
+        let mut levels = [0; 64];
+        let mut active = 0;
+        for kernel in &NARROW_KERNELS {
+            if kernel.weight > limit || remaining <= (8 * i32::from(kernel.weight)).pow(2) {
+                break;
+            }
+            let mut d = vdupq_n_s32(0);
+            for (r, x) in kernel.rows.iter().zip(samples) {
+                // SAFETY: every pair contains sixteen signed byte weights.
+                d = vdotq_s32(d, x, unsafe { vld1q_s8(r.as_ptr()) });
+            }
+            let v = vaddvq_s32(d) << u32::from(half);
+            let mag = v.unsigned_abs();
+            let error =
+                32 * (u32::from(limit) + 1) + 1 + if half { kernel.l1.div_ceil(2) } else { 0 };
+            let lower = (mag.saturating_sub(error) >> 9) as i32;
+            remaining -= lower * lower;
+            let midpoint = u32::from(kernel.weight) * 4096 + 256;
+            if mag + error < midpoint {
+                continue;
+            }
+            let slot = kernel.slot;
+            let level = if mag > midpoint + error {
+                if v < 0 { -1 } else { 1 }
+            } else {
+                quantize_ac(
+                    direct_dct_coefficient(
+                        &self.block(),
+                        &DCT_FACTORS[slot / 8],
+                        &DCT_FACTORS[slot % 8],
+                    ),
+                    i32::from(kernel.weight) * 16,
+                )
+            };
+            levels[slot] = level;
+            active |= u64::from(level != 0) * ZIGZAG_BIT[slot];
+        }
+        levels[0] = geometry.quantized_dc(i64::from(sum), || self.block());
+        (levels, active)
     }
 
     fn folded(&self) -> FoldedBlock {
@@ -2621,6 +2704,25 @@ impl BlockQuantization {
         }
     }
 
+    /// Keep only collocated blocks whose exact moments can produce a level.
+    /// Pixel residuals fit in signed 32-bit lanes even after multiplying by 64.
+    fn possible_residuals(&self, moments: &[(i32, i32)]) -> u64 {
+        debug_assert!(moments.len() <= 64);
+        let mut result = 0;
+        for (i, chunk) in moments.chunks(8).enumerate() {
+            let mut lanes = [0u8; 8];
+            for (bit, (&(s, q), lane)) in chunk.iter().zip(&mut lanes).enumerate() {
+                let energy = 64 * q - s * s;
+                let keep = (energy as i64 > self.dc_only_energy)
+                    | (u64::from(s.unsigned_abs()) > self.zero_dc_sum);
+                *lane = u8::from(keep) << bit;
+            }
+            let packed = lanes.into_iter().fold(0, |a, b| a | b);
+            result |= u64::from(packed) << (8 * i);
+        }
+        result
+    }
+
     #[inline(always)]
     fn classify(
         &self,
@@ -2670,6 +2772,33 @@ impl BlockQuantization {
         let radius_upper = (energy as f64).sqrt() as u64 + 1;
         let bound = (65 * radius_upper).div_ceil(512) + 2;
         Some((2 * bound / u64::from(self.quantizer)).min(u64::from(u8::MAX)) as u8)
+    }
+
+    fn quantize_rows(
+        &self,
+        rows: &ResidualRows<'_>,
+        moments: (i32, i32),
+        limit: u8,
+    ) -> ([i16; BLOCK_PIXELS], u64) {
+        #[cfg(all(
+            feature = "simd-accel",
+            target_arch = "aarch64",
+            not(feature = "streaming-fixed-point-dct")
+        ))]
+        if self.quantizer == 16
+            && limit <= NARROW_LIMIT
+            && std::arch::is_aarch64_feature_detected!("dotprod")
+        {
+            // SAFETY: dotprod is detected. The centered energy cutoff is for these source rows.
+            return unsafe { rows.narrow_q16(moments, limit, self) };
+        }
+        let folded = rows.folded();
+        let sum = if self.quantizer == 0 {
+            folded_sum(&folded)
+        } else {
+            moments.0
+        };
+        self.quantize_folded(&folded, sum, limit, || rows.block())
     }
 
     /// Quantize visited projections directly. Reference-order evaluation only needs
@@ -2893,6 +3022,25 @@ static DOT_WEIGHTS: [[[[i8; 16]; 4]; 4]; 4] = {
     target_arch = "aarch64",
     not(feature = "streaming-fixed-point-dct")
 ))]
+const BATCH_WEIGHTS: [[[u32; 4]; 4]; 4] = {
+    let mut weights = [[[0; 4]; 4]; 4];
+    let mut g = 0;
+    while g < 4 {
+        let mut i = 0;
+        while i < 16 {
+            weights[g][i / 4][i % 4] = AC_PROJECTIONS[g][i].weight;
+            i += 1;
+        }
+        g += 1;
+    }
+    weights
+};
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
 #[target_feature(enable = "dotprod")]
 unsafe fn dot_ac_levels(
     folded: &FoldedBlock,
@@ -2952,35 +3100,60 @@ unsafe fn dot_ac_levels(
                 dots = vdotq_laneq_s32::<1>(dots, vld1q_s8(weights[1].as_ptr()), data);
                 dots = vdotq_laneq_s32::<2>(dots, vld1q_s8(weights[2].as_ptr()), data);
                 dots = vdotq_laneq_s32::<3>(dots, vld1q_s8(weights[3].as_ptr()), data);
-                let mut values = [0; 4];
-                vst1q_s32(values.as_mut_ptr(), dots);
-                for (i, value) in values.into_iter().enumerate() {
-                    let p = &projections[first + i];
-                    let step = p.weight * scale;
-                    if step > threshold {
-                        break;
-                    }
-                    let mag = value.unsigned_abs() << shift;
-                    let zero = (step / 2) * 512 + 256;
-                    if mag + error < zero {
+                // Compare four certified intervals to their quantizer cells
+                // before scattering only the lanes with a possible nonzero.
+                let weight = vld1q_u32(BATCH_WEIGHTS[g][batch].as_ptr());
+                let stepv = vmulq_n_u32(weight, scale);
+                let magnitude = vshlq_u32(
+                    vreinterpretq_u32_s32(vabsq_s32(dots)),
+                    vdupq_n_s32(shift as i32),
+                );
+                let high = vaddq_u32(magnitude, vdupq_n_u32(error));
+                let half = vshrq_n_u32::<1>(stepv);
+                let zero = vaddq_u32(vshlq_n_u32::<9>(half), vdupq_n_u32(256));
+                let possible = vandq_u32(
+                    vcleq_u32(stepv, vdupq_n_u32(threshold)),
+                    vcgeq_u32(high, zero),
+                );
+                if vmaxvq_u32(possible) == 0 {
+                    continue;
+                }
+                let unit_end = vsubq_u32(
+                    vshlq_n_u32::<9>(vsubq_u32(vaddq_u32(stepv, stepv), half)),
+                    vdupq_n_u32(256),
+                );
+                let unit = vandq_u32(
+                    vcgtq_u32(magnitude, vaddq_u32(zero, vdupq_n_u32(error))),
+                    vcltq_u32(high, unit_end),
+                );
+                let mut flags = [0; 4];
+                let mut signs = [0; 4];
+                vst1q_u32(
+                    flags.as_mut_ptr(),
+                    vandq_u32(possible, vorrq_u32(unit, vdupq_n_u32(1))),
+                );
+                vst1q_s32(signs.as_mut_ptr(), dots);
+                for (i, flag) in flags.into_iter().enumerate() {
+                    if flag == 0 {
                         continue;
                     }
-                    let level =
-                        if mag > zero + error && mag + error < (2 * step - step / 2) * 512 - 256 {
-                            if value < 0 { -1 } else { 1 }
+                    let p = &projections[first + i];
+                    let step = p.weight * scale;
+                    let level = if flag == u32::MAX {
+                        if signs[i] < 0 { -1 } else { 1 }
+                    } else {
+                        let wide = folded_dot(samples, &p.factors);
+                        let q = if (wide as u32).abs_diff(1 << 31) <= (1 << 20) + 128 {
+                            direct_dct_coefficient(
+                                &residual(),
+                                &FORWARD_BASIS[p.slot / 8],
+                                &FORWARD_BASIS[p.slot % 8],
+                            )
                         } else {
-                            let wide = folded_dot(samples, &p.factors);
-                            let q = if (wide as u32).abs_diff(1 << 31) <= (1 << 20) + 128 {
-                                direct_dct_coefficient(
-                                    &residual(),
-                                    &FORWARD_BASIS[p.slot / 8],
-                                    &FORWARD_BASIS[p.slot % 8],
-                                )
-                            } else {
-                                ((wide + (1 << 31)) >> 32) as i32
-                            };
-                            quantize_ac(q, step as i32)
+                            ((wide + (1 << 31)) >> 32) as i32
                         };
+                        quantize_ac(q, step as i32)
+                    };
                     levels[p.slot] = level;
                     active |= u64::from(level != 0) * ZIGZAG_BIT[p.slot];
                 }
@@ -2989,6 +3162,80 @@ unsafe fn dot_ac_levels(
     }
     (levels, active)
 }
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+const NARROW_LIMIT: u8 = 29;
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+#[derive(Clone, Copy)]
+struct NarrowKernel {
+    slot: usize,
+    weight: u8,
+    l1: u32,
+    rows: [[i8; 16]; 4],
+}
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+const NARROW_COUNT: usize = {
+    let mut n = 0;
+    let mut i = 1;
+    while i < 64 {
+        if BASELINE_QUANT_MATRIX[i] <= NARROW_LIMIT {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+};
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+static NARROW_KERNELS: [NarrowKernel; NARROW_COUNT] = {
+    let mut ks = [NarrowKernel {
+        slot: 0,
+        weight: 0,
+        l1: 0,
+        rows: [[0; 16]; 4],
+    }; NARROW_COUNT];
+    let mut k = 0;
+    let mut w = MIN_AC_WEIGHT;
+    while w <= NARROW_LIMIT {
+        let mut slot = 1;
+        while slot < 64 {
+            if BASELINE_QUANT_MATRIX[slot] == w {
+                let mut sum = 0;
+                let mut i = 0;
+                while i < 64 {
+                    let x = (512.0 * DCT_FACTORS[slot / 8][i / 8] * DCT_FACTORS[slot % 8][i % 8])
+                        .round() as i8;
+                    ks[k].rows[i / 16][i % 16] = x;
+                    ks[k].l1 += x.unsigned_abs() as u32;
+                    sum += x as i32;
+                    i += 1;
+                }
+                assert!(sum == 0);
+                ks[k].slot = slot;
+                ks[k].weight = w;
+                k += 1;
+            }
+            slot += 1;
+        }
+        w += 1;
+    }
+    ks
+};
 
 type FoldedBlock = [[[i32; 4]; 4]; 4];
 
@@ -4087,6 +4334,31 @@ const ZERO_TAIL_ORDER: usize = 26;
 // DC and the first horizontal and vertical AC levels cannot influence orders
 // 11 or later. Orders 11 and 12 have identical neutral inputs except for order.
 const FIRST_AC_TAIL_ORDER: usize = 12;
+const fn isolated_prefix(end: usize) -> u64 {
+    let mut mask = 0;
+    let mut z = 0;
+    while z < BLOCK_PIXELS {
+        let slot = ZIG_ZAG[z];
+        let x = slot % 8;
+        let y = slot / 8;
+        let mut clean = z + 1 < end - 1;
+        let mut w = end - 1;
+        while w < 64 && clean {
+            let s = ZIG_ZAG[w];
+            let (a, b) = (s % 8, s / 8);
+            if (a == x + 1 && b == y) || (b == y + 1 && a.abs_diff(x) <= 1) {
+                clean = false;
+            }
+            w += 1;
+        }
+        if clean {
+            mask |= 1 << z;
+        }
+        z += 1;
+    }
+    mask
+}
+
 const TILE_CLASSES: usize = 64 * 2;
 const FIRST_FIVE_CLASSES: usize = 3_usize.pow(5);
 // Suffix keys follow the 256 tile/frame/DC keys per class. u16::MAX marks an unkeyed span.
@@ -4107,10 +4379,8 @@ fn pattern_tail(key: u16) -> usize {
 
 #[derive(Clone, Copy, Default)]
 struct ZeroTail {
-    distinct_singletons: bool,
     start: usize,
     end: usize,
-    prefix_slot: usize,
     last_slot: usize,
     repeats: u64,
 }
@@ -4406,17 +4676,11 @@ impl<'a> BundleStreamRecorder<'a> {
                 let zeros = ((BLOCK_PIXELS - start_order) as u64).saturating_mul(tail.repeats);
                 self.stats.significance_zero = self.stats.significance_zero.saturating_add(zeros);
                 self.stats.sign_positive = self.stats.sign_positive.saturating_add(zeros);
-                if tail.distinct_singletons {
-                    // Each neutral record has a different context from its predecessor.
-                    for record in &self.bundles[tail.start..tail.end] {
-                        let zeros = &mut self.singleton_counts[usize::from(record.context.0)];
-                        *zeros = zeros.saturating_add(tail.repeats);
-                    }
-                } else {
-                    self.last_context_slot = Some(tail.prefix_slot);
-                    for j in tail.start..tail.end {
-                        self.count_bundle(self.bundles[j], tail.repeats);
-                    }
+                for record in &self.bundles[tail.start..tail.end] {
+                    let id = usize::from(record.context.0);
+                    self.active_contexts[id / 64] |= 1 << (id % 64);
+                    self.singleton_counts[id] =
+                        self.singleton_counts[id].saturating_add(tail.repeats);
                 }
             }
         }
@@ -4573,7 +4837,14 @@ impl<'a> BundleStreamRecorder<'a> {
                 }
             }
         }
-        let mut repeat_keys = vec![u16::MAX; total / SLOTS];
+        // These entries describe the old output until their block has been
+        // visited. Equal runs can retain both the records and their keys.
+        let reuse_keys = overwrite && old_keys.len() == total / SLOTS;
+        let mut repeat_keys = if reuse_keys {
+            old_keys
+        } else {
+            vec![u16::MAX; total / SLOTS]
+        };
         let mut written = 0_usize;
         enum Source {
             Span(usize, usize, Option<u16>),
@@ -4590,7 +4861,8 @@ impl<'a> BundleStreamRecorder<'a> {
                         std::array::from_fn(|i| (key & !7) | ((key + i as u16) & 7));
                     if overwrite {
                         if !aligned
-                            || !old_keys.get(slot..slot + len).is_some_and(|prior| {
+                            || !reuse_keys
+                            || !repeat_keys.get(slot..slot + len).is_some_and(|prior| {
                                 prior.chunks(8).all(|chunk| chunk == &period[..chunk.len()])
                             })
                         {
@@ -4605,7 +4877,7 @@ impl<'a> BundleStreamRecorder<'a> {
                             records.extend_from_within(written..written + len);
                         }
                     }
-                    if aligned {
+                    if aligned && !overwrite {
                         for chunk in repeat_keys[slot..slot + len].chunks_mut(8) {
                             chunk.copy_from_slice(&period[..chunk.len()]);
                         }
@@ -4623,8 +4895,8 @@ impl<'a> BundleStreamRecorder<'a> {
                 && (key >= TAIL_KEY || end - start == SLOTS)
             {
                 let slot = written / SLOTS - 1;
-                repeat_keys[slot] = key;
-                if overwrite && let Some(&old_key) = old_keys.get(slot) {
+                let old_key = std::mem::replace(&mut repeat_keys[slot], key);
+                if reuse_keys {
                     if key == old_key {
                         return true;
                     }
@@ -4636,6 +4908,8 @@ impl<'a> BundleStreamRecorder<'a> {
                         }
                     }
                 }
+            } else if reuse_keys {
+                repeat_keys[dest / SLOTS..written / SLOTS].fill(u16::MAX);
             }
             if overwrite {
                 let n = copy_end - dest;
@@ -4851,12 +5125,7 @@ impl<'a> BundleStreamRecorder<'a> {
         self.stats.record_flush(BundleFlushReason::EndOfBlock, 1);
     }
     #[cfg(test)]
-    fn record_block(
-        &mut self,
-        index: usize,
-        coeffs: &[i16; BLOCK_PIXELS],
-        kind: FrameType,
-    ) -> usize {
+    fn record_block(&mut self, index: usize, coeffs: &[i16; BLOCK_PIXELS], kind: FrameType) {
         self.record_masked_block(index, coeffs, kind, ac_support(coeffs))
     }
 
@@ -4866,7 +5135,7 @@ impl<'a> BundleStreamRecorder<'a> {
         coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
         active: u64,
-    ) -> usize {
+    ) {
         self.flush_dc();
         let (h, v, vv, hv, hh) = (coeffs[1], coeffs[8], coeffs[16], coeffs[9], coeffs[2]);
         if self.last_context_slot.is_some()
@@ -4875,13 +5144,13 @@ impl<'a> BundleStreamRecorder<'a> {
                 .any(|level| level.unsigned_abs() > 1)
             || active >= 1 << 6
         {
-            return self.record_ac_slots(self.tile(block_index), coeffs, frame_type);
+            self.record_ac_slots(self.tile(block_index), coeffs, frame_type, active);
+            return;
         }
         // The first five zigzag AC levels form a base-three key.
         let digit = |level: i16| usize::from(level != 0) + usize::from(level < 0);
         let class = digit(h) + 3 * digit(v) + 9 * digit(vv) + 27 * digit(hv) + 81 * digit(hh);
         self.record_pattern(block_index, coeffs, frame_type, class);
-        6
     }
     fn tile(&self, block_index: usize) -> u8 {
         let (row, col) = (
@@ -5042,7 +5311,7 @@ impl<'a> BundleStreamRecorder<'a> {
                     });
                 self.last_context_slot = Some(self.context_slot(context));
                 deferred_prefix = true;
-                self.record_neutral_tail(tile as u8, coeffs, frame_type, end, tail, true);
+                self.record_neutral_tail(tile as u8, frame_type, end, tail, true);
             }
             self.sparse_patterns[slot] = SparseAcPattern {
                 deferred_prefix,
@@ -5090,7 +5359,15 @@ impl<'a> BundleStreamRecorder<'a> {
                 positive
             };
             let prefix = table[usize::from(kind.as_u8())][usize::from(offset)];
-            let context = finish_context(prefix, tile, nonzero, i + 1);
+            let context = if self.width == 2 && self.quantizer_bucket == 1 {
+                BundleContextId(
+                    Q16_TILE_HASH[frame.as_byte() as usize][tile as usize][usize::from(nonzero)]
+                        [usize::from(offset)]
+                        ^ (i + 1) as u16,
+                )
+            } else {
+                finish_context(prefix, tile, nonzero, i + 1)
+            };
             if !nonzero && run != 0 && context == last && run < (1 << zero_width) - 1 {
                 run += 1;
                 self.bundles.last_mut().expect("started zero run").bits = run;
@@ -5117,32 +5394,28 @@ impl<'a> BundleStreamRecorder<'a> {
         tile: u8,
         coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
-    ) -> usize {
+        active: u64,
+    ) {
         let tile_key = usize::from(tile) | (usize::from(frame_type.as_byte()) << 6);
-        let low_frequency = self.context_remap.is_none()
-            && coeffs[3..8] == [0; 5]
-            && coeffs[11..16] == [0; 5]
-            && coeffs[19..] == [0; 45];
-        if !low_frequency {
+        const LOW: u64 = isolated_prefix(ZERO_TAIL_ORDER);
+        const FIRST: u64 = isolated_prefix(FIRST_AC_TAIL_ORDER);
+        if self.context_remap.is_some() || active & !LOW != 0 {
             self.record_ac_range(tile, coeffs, frame_type, 1..BLOCK_PIXELS);
-            return BLOCK_PIXELS;
+            return;
         }
-        let first_ac_only = [2, 9, 10, 16, 17, 18].into_iter().all(|i| coeffs[i] == 0);
+        let first_ac_only = active & !FIRST == 0;
         let (key, start_order) = if first_ac_only {
             (tile_key, FIRST_AC_TAIL_ORDER)
         } else {
             (TILE_CLASSES + tile_key, ZERO_TAIL_ORDER)
         };
         self.record_ac_range(tile, coeffs, frame_type, 1..start_order);
-        self.record_neutral_tail(tile, coeffs, frame_type, start_order, key, false);
-        // The upper-left 3×3 ends at zigzag order 12 (raster slot 18).
-        13
+        self.record_neutral_tail(tile, frame_type, start_order, key, false);
     }
 
     fn record_neutral_tail(
         &mut self,
         tile: u8,
-        coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
         start_order: usize,
         key: usize,
@@ -5161,19 +5434,27 @@ impl<'a> BundleStreamRecorder<'a> {
             }
         } else {
             let start = self.bundles.len();
-            let prefix_slot = self.last_context_slot.expect("nonempty AC prefix");
-            self.record_ac_range(tile, coeffs, frame_type, start_order..BLOCK_PIXELS);
-            // Each of the 64 - start_order zeros produced one record. The RLE
-            // encoder would have merged any adjacent pair with equal context.
-            let distinct_singletons = self.bundles.len() - start == BLOCK_PIXELS - start_order
-                && usize::from(self.bundles[start].context.0) != prefix_slot;
+            let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame_type.as_byte());
+            let contexts = &NEUTRAL_IDS[state][usize::from(tile)];
+            debug_assert_eq!(
+                self.last_context_slot,
+                Some(usize::from(contexts[start_order - 1].0))
+            );
+            self.bundles
+                .extend(contexts[start_order..].iter().map(|&context| BundleRecord {
+                    bundle_type: BundleType::SignificanceRle,
+                    context,
+                    bits: 1,
+                    bit_len: self.width.max(2),
+                    flush: BundleFlushReason::TypeComplete,
+                }));
+            let last = usize::from(contexts[BLOCK_PIXELS - 1].0);
+            self.last_context_slot = Some(last);
             self.zero_tails[key] = ZeroTail {
-                distinct_singletons,
                 start,
                 end: self.bundles.len(),
-                prefix_slot,
-                last_slot: self.last_context_slot.expect("nonempty AC suffix"),
-                repeats: 0,
+                last_slot: last,
+                repeats: 1,
             };
         }
     }
@@ -5184,6 +5465,20 @@ impl<'a> BundleStreamRecorder<'a> {
         frame_type: FrameType,
         orders: std::ops::Range<usize>,
     ) {
+        if self.width == 2 && self.quantizer_bucket == 1 && self.context_remap.is_none() {
+            self.record_ac_range_impl::<true>(tile, coeffs, frame_type, orders);
+        } else {
+            self.record_ac_range_impl::<false>(tile, coeffs, frame_type, orders);
+        }
+    }
+    fn record_ac_range_impl<const DEFAULT: bool>(
+        &mut self,
+        tile: u8,
+        coeffs: &[i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        orders: std::ops::Range<usize>,
+    ) {
+        let table = &Q16_TILE_HASH[frame_type.as_byte() as usize][tile as usize];
         let neighbors = neighbor_counts(coeffs);
         let slots = orders.len() as u64;
         let (mut nonzero, mut negative, mut odd, mut geq2) = (0_u64, 0_u64, 0_u64, 0_u64);
@@ -5194,15 +5489,22 @@ impl<'a> BundleStreamRecorder<'a> {
             let slot = ZIG_ZAG[order];
             let coeff = coeffs[slot];
             let (bundle_type, bits, bit_len) = bundle_bits(coeff, self.width);
-            let context = self.map_context(self.compute_context(
-                bundle_type,
-                tile,
-                order,
-                neighbors[slot],
-                coeff,
-                prev_level_abs,
-                frame_type,
-            ));
+            let context = if DEFAULT {
+                let offset = CONTEXT_POSITION[order]
+                    + 4 * usize::from(neighbors[slot].min(3))
+                    + usize::from(level_bucket(prev_level_abs));
+                BundleContextId(table[usize::from(coeff != 0)][offset] ^ order as u16)
+            } else {
+                self.map_context(self.compute_context(
+                    bundle_type,
+                    tile,
+                    order,
+                    neighbors[slot],
+                    coeff,
+                    prev_level_abs,
+                    frame_type,
+                ))
+            };
             if zero_run > 0 && (coeff != 0 || context != zero_context) {
                 self.emit_zero_run_bundle(zero_context, zero_run);
                 zero_run = 0;
@@ -5968,11 +6270,69 @@ const SPARSE_CONTEXT_OFFSETS: [[u16; ZERO_TAIL_ORDER - 1]; 64] = {
     offsets
 };
 
-fn finish_context(prefix: u16, tile: u8, nonzero: bool, order: usize) -> BundleContextId {
-    let hash = hash_mix(u32::from(prefix), u32::from(tile));
-    let hash = hash_mix(hash, u32::from(nonzero));
+const fn finish_context(prefix: u16, tile: u8, nonzero: bool, order: usize) -> BundleContextId {
+    let hash = hash_mix(prefix as u32, tile as u32);
+    let hash = hash_mix(hash, nonzero as u32);
     BundleContextId::new(hash_mix(hash, (order & 63) as u32) as u16)
 }
+// A neutral coefficient has no occupied neighbor or predecessor. Check
+// every tile and state when building the table: each zero in a neutral
+// suffix emits one singleton and its predecessor has a different context.
+static NEUTRAL_IDS: [[[BundleContextId; BLOCK_PIXELS]; 64]; 8] = {
+    let mut out = [[[BundleContextId(0); BLOCK_PIXELS]; 64]; 8];
+    let mut state = 0;
+    while state < 8 {
+        let mut tile = 0;
+        while tile < 64 {
+            let mut z = 1;
+            while z < BLOCK_PIXELS {
+                let ctx = finish_context(
+                    CONTEXT_PREFIX[state][0][CONTEXT_POSITION[z]],
+                    tile as u8,
+                    false,
+                    z,
+                );
+                if z >= FIRST_AC_TAIL_ORDER {
+                    assert!(out[state][tile][z - 1].0 != ctx.0);
+                }
+                out[state][tile][z] = ctx;
+                z += 1;
+            }
+            tile += 1;
+        }
+        state += 1;
+    }
+    out
+};
+
+// Within a Q16 tile the hash through significance depends only on the
+// context geometry and whether the coefficient is occupied at bundle width two.
+static Q16_TILE_HASH: [[[[u16; 320]; 2]; 64]; 2] = {
+    let mut table = [[[[0; 320]; 2]; 64]; 2];
+    let mut f = 0;
+    while f < 2 {
+        let mut t = 0;
+        while t < 64 {
+            let mut occupied = 0;
+            while occupied < 2 {
+                let mut k = 0;
+                while k < 320 {
+                    let prefix = CONTEXT_PREFIX[2 + f][occupied][k];
+                    table[f][t][occupied][k] = hash_mix(
+                        hash_mix(hash_mix(prefix as u32, t as u32), occupied as u32),
+                        0,
+                    ) as u16;
+                    k += 1;
+                }
+                occupied += 1;
+            }
+            t += 1;
+        }
+        f += 1;
+    }
+    table
+};
+
 static CONTEXT_PREFIX: [[[u16; 5 * 4 * 16]; 5]; 8] = {
     let mut table = [[[0; 5 * 4 * 16]; 5]; 8];
     let mut state = 0;
