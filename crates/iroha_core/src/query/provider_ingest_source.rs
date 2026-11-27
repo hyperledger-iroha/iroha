@@ -2,12 +2,12 @@
 use crate::{
     query::{
         provider_admission::{
-            read_finalized_provider_admission_v1, read_provider_admission_at_native_current_v1,
+            read_finalized_provider_admission_with_block_v1,
+            read_provider_admission_at_native_current_v1,
         },
         signer_check::{
             SignerCertifiedBlockV1, SignerCertifiedWalkV1, with_native_check_read_limits,
         },
-        signer_finality::verify_signer_finality_v1,
     },
     state::{StateReadOnly, StateView, WorldReadOnly},
 };
@@ -69,15 +69,17 @@ pub fn authorize_publisher_source_v1(
     }
     let finalized_epoch = view.authenticated_query_ledger_time_ms().ok_or(rejected)? / 1_000;
     let now = finalized_epoch.max(now_secs);
-    verify_signer_finality_v1(
-        view,
-        u64::try_from(view.height()).map_err(|_| rejected)?,
-        *view.latest_block_hash().ok_or(rejected)?.as_ref(),
-    )
-    .map_err(|_| rejected)?;
-    read_finalized_provider_admission_v1(view, binding.provider_id, now)
-        .map_err(|_| rejected)?
-        .ok_or(rejected)?;
+    // The admission reader authenticates both the current certificate and its governance
+    // history. Bind that very certificate to the signer head instead of decoding it twice.
+    let (_, current) =
+        read_finalized_provider_admission_with_block_v1(view, binding.provider_id, now)
+            .map_err(|_| rejected)?
+            .ok_or(rejected)?;
+    if current.height() != u64::try_from(view.height()).map_err(|_| rejected)?
+        || Some(current.block_hash()) != view.latest_block_hash()
+    {
+        return Err(rejected);
+    }
     let world = view.world();
     let pin = world
         .pin_manifests()
@@ -276,6 +278,10 @@ fn read_provider_source_cut_v1<'view, 'state>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::{
+        provider_admission::read_finalized_provider_admission_v1,
+        signer_finality::verify_signer_finality_v1,
+    };
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -449,6 +455,7 @@ mod tests {
             chain.commit_at((NOW + offset) * 1_000, Vec::new());
             let view = chain.state().view();
             let original = read_finalized_provider_admission_v1(&view, provider, NOW);
+            let with_block = read_finalized_provider_admission_with_block_v1(&view, provider, NOW);
             with_native_check_read_limits(|| {
                 let reader = SignerCertifiedWalkV1::new(&view).unwrap();
                 let current = read_provider_source_cut_v1(
@@ -462,6 +469,10 @@ mod tests {
                     read_provider_admission_at_native_current_v1(&view, &current, provider, NOW);
                 if valid {
                     let original = original.unwrap().unwrap();
+                    let (admitted, tip) = with_block.unwrap().unwrap();
+                    assert_eq!(admitted.envelope(), original.envelope());
+                    assert_eq!(tip.height(), view.height() as u64);
+                    assert_eq!(Some(tip.block_hash()), view.latest_block_hash());
                     let actual = actual.unwrap().unwrap();
                     assert_eq!(actual.envelope(), original.envelope());
                     assert_eq!(actual.is_genesis_material(), original.is_genesis_material());

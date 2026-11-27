@@ -2312,3 +2312,78 @@ fn authority_schema_family_verifies_original_certified_cuts_for_each_supported_p
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
+
+#[test]
+fn retained_provider_proofs_survive_unrelated_commits_and_refuse_live_revocation() {
+    use crate::smartcontracts::isi::sorafs_provider_admission::test_fixture::{
+        NOW, ProviderAdmissionTestFixtureV1,
+    };
+    let mut fixture = ProviderAdmissionTestFixtureV1::new();
+    fixture.admit();
+    let provider = fixture.provider();
+    let state = std::sync::Arc::clone(fixture.chain().state());
+    let tip = fixture.chain().committed(fixture.chain().height());
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    assert!(
+        state
+            .capture_native_provider_snapshot_v1(tip.height() + 1, provider, &budget)
+            .is_err()
+    );
+    let captured = state
+        .capture_native_provider_snapshot_v1(tip.height(), provider, &budget)
+        .unwrap();
+    fixture.commit(|_| {}, true);
+    assert!(
+        state
+            .capture_native_provider_snapshot_v1(tip.height(), provider, &budget)
+            .is_err()
+    );
+    assert!(
+        captured
+            .with_admission(
+                &fixture.chain().committed(fixture.chain().height()),
+                u64::MAX,
+                |_| Ok(())
+            )
+            .is_err()
+    );
+    captured
+        .with_admission(&tip, u64::MAX, |rows| {
+            assert_eq!(
+                tip.commitment().execution.world_state_root,
+                rows.world.root().unwrap()
+            );
+            fixture.commit(|_| {}, true);
+            Ok(())
+        })
+        .unwrap();
+    captured
+        .with_custody(&tip, |world, _, current| {
+            assert_eq!(
+                tip.commitment().execution.world_state_root,
+                world.root().unwrap()
+            );
+            assert!(current.is_none());
+            fixture.commit(|_| {}, true);
+            Ok(())
+        })
+        .unwrap();
+    assert!(captured.with_admission(&tip, NOW, |_| Ok(())).is_err());
+    assert!(
+        captured
+            .with_admission(&tip, u64::MAX, |_| {
+                fixture.revoke();
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(
+        captured
+            .with_admission::<()>(&tip, u64::MAX, |_| {
+                panic!("revocation must precede encoding")
+            })
+            .is_err()
+    );
+    drop(captured);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

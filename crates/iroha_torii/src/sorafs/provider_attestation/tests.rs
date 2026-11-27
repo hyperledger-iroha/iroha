@@ -43,6 +43,10 @@ fn router(app: SharedAppState) -> Router {
     );
     let (router, manifest) = builder.finish().unwrap();
     router
+        .layer(axum::middleware::from_fn(crate::capture_response_format))
+        .layer(axum::middleware::from_fn(
+            crate::enforce_typed_error_contract,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             manifest.route_index(),
             crate::attach_matched_route_metadata,
@@ -90,6 +94,7 @@ async fn native_inventory_route_requires_canonical_signature_and_refuses_unconfi
             .method(Method::POST)
             .uri(uri.clone())
             .header(header::CONTENT_TYPE, "application/x-norito")
+            .header(header::ACCEPT, "application/x-norito")
             .body(Body::from(bytes.clone()))
             .unwrap();
         if signed {
@@ -117,6 +122,10 @@ async fn native_inventory_route_requires_canonical_signature_and_refuses_unconfi
         assert_eq!(
             response.headers()[header::CACHE_CONTROL],
             "private, no-store"
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/x-norito"
         );
         let body = axum::body::to_bytes(response.into_body(), 4096)
             .await

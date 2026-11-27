@@ -82,6 +82,10 @@ Prepared archive clients retain their exclusive build-registry discovery journal
 lifetime. Startup and Ready maintenance use an independent service-observation journal and lock;
 both authenticate the original profile and fresh native finality. A build holding its archive
 client therefore does not block the worker's bounded freshness observations.
+Each provider starts discovery at its own original validator and can use the remaining three.
+If a row receives only explicit current-proof unavailability responses, the worker may
+authenticate one strictly newer height and repeat all three reads within the original deadline.
+It accepts the three providers together at the same certified height.
 Generation leaves token services disabled. The startup worker composes one reserve activation,
 three independent funded provider/custody/gateway histories and one reputation policy through
 their native owners. It promotes each signed compliance catalog and restarts all four owned peers
@@ -182,6 +186,8 @@ workflow likewise does not claim reference-host latency qualification. See
   implementations into this owner; it must not depend on either frontend.
 - `iroha_managed_ipc` owns the owner-authenticated local transport and the handoff of bound
   listeners. A validator adopts its sockets through it and links no deployment or wallet crate.
+  The worker starts the four validators under the original deadline. As each child requests
+  adoption, the worker matches its native process ID to its seat and transfers that seat’s sockets.
 - Musubi exposes the canonical typed compiler/deployment adapter. It accepts an
   immutable SDK configuration and alias scope, and calls `iroha_contract_deploy`.
   It does not depend on the environment engine.

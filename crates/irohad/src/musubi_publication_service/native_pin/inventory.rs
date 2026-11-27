@@ -26,7 +26,7 @@ const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 const ROOT_BYTES: u64 = 8192;
 const OPERATION_BYTES: u64 = 512 * 1024 + 1024;
 const SLOT_BYTES: u64 = 3 * 512 * 1024 + 1024;
-const MAX_OPERATION_FILES: usize = 3 + 3 + 16;
+const MAX_OPERATION_FILES: usize = 3 + 4 + 16;
 
 #[derive(Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -38,6 +38,13 @@ pub(super) struct Operation {
     /// Existing canonical finalized archive query frame; this record grants no finality.
     pub(super) source: String,
     pub(super) authorization: NativePinAuthorizationV1,
+    /// Retained only on a new storage coordination operation. Legacy pin inventory bytes
+    /// must hash identically, including operations with an existing chain high-water.
+    #[norito(default, skip_serializing_if = "is_false")]
+    pub(super) includes_archive_order: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 impl Operation {
     fn validate(&self, original: &NativeMusubiPinSessionV1) -> Result<()> {
@@ -56,6 +63,21 @@ impl Operation {
         );
         norito::json::to_json_bounded_boxed(self, 512 * 1024)?;
         Ok(())
+    }
+    fn reserve_payload(
+        &self,
+        previous: &ReservedFeesV1,
+        fee: &iroha_data_model::transaction::FeePaymentIntent,
+        check: bool,
+    ) -> Result<ReservedFeesV1> {
+        // The three pin/control slots and every Check retain their old bound. Only an
+        // originally selected storage operation has one additional fixed archive-order slot.
+        self.authorization.reserve_authorized_payload(
+            previous,
+            fee,
+            check,
+            self.includes_archive_order,
+        )
     }
     pub(super) fn source(&self) -> Result<MusubiPublicationFinalizedArchiveRegistrationQueryV1> {
         slot::decode_frame(&self.source)
@@ -400,14 +422,15 @@ impl Store {
             if kind == candidate.request().kind {
                 continue;
             }
-            let retained = Slot::open_retained(directory.open_child(&name)?.path())?;
+            let (retained, retained_payload) =
+                Slot::open_retained_with_payload(directory.open_child(&name)?.path())?;
             self.validate_slot(operation, retained.request())?;
             ensure!(
                 retained.request().kind == kind,
                 "native pin slot filename differs from its original purpose"
             );
-            if let Some(payload) = retained.payload()? {
-                fees = operation.authorization.reserve_payload(
+            if let Some(payload) = retained_payload {
+                fees = operation.reserve_payload(
                     &fees,
                     &payload.fee_payment,
                     matches!(kind, SlotKind::Check(_)),
@@ -420,7 +443,7 @@ impl Store {
                 "native pin quoted payload is immutable"
             );
         }
-        operation.authorization.reserve_payload(
+        operation.reserve_payload(
             &fees,
             &payload.fee_payment,
             matches!(candidate.request().kind, SlotKind::Check(_)),
@@ -447,6 +470,18 @@ impl Store {
             _ => eyre::bail!("native pin original storage class differs"),
         };
         request.validate_pin_policy(storage_class, self.original.retention_horizon_secs)?;
+        if request.kind == SlotKind::ArchiveOrder {
+            let instruction: iroha_data_model::isi::InstructionBox =
+                slot::decode_frame(&request.instruction)?;
+            let issue = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::sorafs::IssueReplicationOrder>()
+                .ok_or_else(|| eyre::eyre!("native archive order instruction differs"))?;
+            ensure!(
+                issue.musubi_archive == Some(operation.source()?.registration.archive_id),
+                "native order references a different operation archive"
+            );
+        }
         ensure!(
             request.network == self.original.network
                 && request.authority == self.original.authority
@@ -485,19 +520,18 @@ impl Store {
             let kind = parse_slot_name(&name)?;
             slots += 1;
             let selected = directory.open_child(&name)?;
-            for file in selected.entries(7)? {
-                account_file(&selected, &file, bytes)?;
-            }
+            account_slot_files(&selected, bytes)?;
             let opened;
-            let slot = if let Some(held) = held.filter(|slot| {
+            let (slot, payload) = if let Some(held) = held.filter(|slot| {
                 slot.request().operation == operation.id && slot.request().kind == kind
             }) {
                 held.require_path(selected.path())?;
                 found_held = true;
-                held
+                (held, held.payload()?)
             } else {
-                opened = Slot::open_retained(selected.path())?;
-                &opened
+                let payload;
+                (opened, payload) = Slot::open_retained_with_payload(selected.path())?;
+                (&opened, payload)
             };
             self.validate_slot(operation, slot.request())?;
             ensure!(
@@ -507,8 +541,8 @@ impl Store {
             if let SlotKind::Check(round) = kind {
                 rounds[usize::from(round - 1)] = true;
             }
-            if let Some(payload) = slot.payload()? {
-                fees = operation.authorization.reserve_payload(
+            if let Some(payload) = payload {
+                fees = operation.reserve_payload(
                     &fees,
                     &payload.fee_payment,
                     matches!(kind, SlotKind::Check(_)),
@@ -540,6 +574,7 @@ struct OperationAudit {
 
 fn slot_name(kind: SlotKind) -> String {
     match kind {
+        SlotKind::ArchiveOrder => "archive-order".to_owned(),
         SlotKind::Pin => "pin".to_owned(),
         SlotKind::Initialize => "initialize".to_owned(),
         SlotKind::Advance => "advance".to_owned(),
@@ -548,6 +583,7 @@ fn slot_name(kind: SlotKind) -> String {
 }
 fn parse_slot_name(name: &OsStr) -> Result<SlotKind> {
     match name.to_str() {
+        Some("archive-order") => Ok(SlotKind::ArchiveOrder),
         Some("pin") => Ok(SlotKind::Pin),
         Some("initialize") => Ok(SlotKind::Initialize),
         Some("advance") => Ok(SlotKind::Advance),
@@ -584,6 +620,21 @@ fn hash_record<T: JsonSerialize>(hash: &mut Sha256, value: &T) -> Result<()> {
     hash.update(u64::try_from(bytes.len())?.to_le_bytes());
     hash.update(bytes);
     Ok(())
+}
+// Only the read-only physical accounting of this one slot shares its parent ancestry.
+fn account_slot_files(directory: &PrivateDirectory, bytes: &mut u64) -> Result<()> {
+    iroha_fs::custody_transaction(|| {
+        iroha_fs::fence_custody_transaction()?;
+        directory.join_custody_transaction()?;
+        let result = (|| {
+            for name in directory.entries(7)? {
+                account_file(directory, &name, bytes)?;
+            }
+            Ok(())
+        })();
+        iroha_fs::fence_custody_transaction()?;
+        result
+    })
 }
 fn account_file(directory: &PrivateDirectory, name: &OsStr, bytes: &mut u64) -> Result<()> {
     let mut file = directory.open_read(name)?;

@@ -379,3 +379,126 @@ fn slot_frame_charges_one_raw_frame_and_its_distinct_hex_destination() {
                 if *attempted == (length * 4) as u64 && *limit == (length * 3) as u64));
     });
 }
+
+#[test]
+fn archive_order_exposes_one_deterministic_envelope_for_the_original_purpose_and_budget() {
+    use iroha_core::query::native_musubi_storage::native_musubi_replication_order_id_v1;
+    use iroha_data_model::{
+        isi::sorafs::IssueReplicationOrder, musubi::ArchiveId, sorafs::pin_registry::ManifestDigest,
+    };
+    use sorafs_manifest::capacity::{
+        ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
+    };
+    let (key, mut request, _) = fixture();
+    let archive = ArchiveId::new([0x19; 32]);
+    let manifest = ManifestDigest::new([0x38; 32]);
+    let id = native_musubi_replication_order_id_v1(archive, manifest);
+    let order = ReplicationOrderV1 {
+        version: 1,
+        order_id: *id.as_bytes(),
+        manifest_cid: sorafs_manifest::canonical_manifest_root_cid([0xa1; 32]),
+        manifest_digest: *manifest.as_bytes(),
+        chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+        target_replicas: 3,
+        assignments: (1..=3)
+            .map(|n| ReplicationAssignmentV1 {
+                provider_id: [n; 32],
+                slice_gib: 1,
+                lane: None,
+            })
+            .collect(),
+        issued_at: 42,
+        deadline_at: 342,
+        sla: ReplicationOrderSlaV1 {
+            ingest_deadline_secs: 300,
+            min_availability_percent_milli: 99_000,
+            min_por_success_percent_milli: 99_000,
+        },
+        metadata: vec![],
+    };
+    let issue = IssueReplicationOrder::new(
+        id,
+        norito::encode_canonical(&order).unwrap(),
+        order.issued_at,
+        order.deadline_at,
+    );
+    request.kind = SlotKind::ArchiveOrder;
+    for wrong in [
+        issue.clone(),
+        issue.clone().for_musubi_archive(ArchiveId::new([0xbb; 32])),
+    ] {
+        request.instruction = encode_frame(&InstructionBox::from(wrong)).unwrap();
+        assert!(request.validate().is_err());
+    }
+    let instruction: InstructionBox = issue.for_musubi_archive(archive).into();
+    request.instruction = encode_frame(&instruction).unwrap();
+    let start = request.order_creation_time_ms().unwrap();
+    let mut builder = TransactionBuilder::new_with_time_source(
+        request.network,
+        request.authority.clone(),
+        &TimeSource::new_fixed(Duration::from_millis(start)),
+        request.authorization.per_transaction.clone(),
+    )
+    .with_instructions([instruction]);
+    builder.set_ttl(
+        Duration::from_millis(request.authorization.deadline_unix_ms - start)
+            .min(iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE),
+    );
+    let payload = builder.into_payload().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("archive-order");
+    let original_request = norito::json::to_vec(&request).unwrap();
+    let mut slot = Slot::create(&path, request).unwrap();
+    let mut later = payload.clone();
+    later.creation_time_ms += 1;
+    let mut cheaper = payload.clone();
+    cheaper.fee_payment = FeePaymentIntent::authority(vec![], None);
+    let mut alternate = payload.clone();
+    alternate.nonce = NonZeroU32::new(12);
+    for changed in [later, cheaper, alternate] {
+        assert!(slot.retain_payload(&changed).is_err());
+    }
+    slot.retain_payload(&payload).unwrap();
+    slot.sign_original(
+        &key,
+        &mut crate::musubi_publication_service::native_pin::authorization::FixedClock(start + 1),
+        std::time::Instant::now() + Duration::from_secs(30),
+    )
+    .unwrap();
+    let wire = slot.signed().unwrap().encode_wire_v1().unwrap();
+    assert!(slot.record_exposure().unwrap());
+    drop(slot);
+    let reopened =
+        Slot::open(&path, &norito::json::from_slice(&original_request).unwrap()).unwrap();
+    assert_eq!(reopened.signed().unwrap().encode_wire_v1().unwrap(), wire);
+    assert!(!reopened.record_exposure().unwrap());
+}
+
+#[test]
+fn detached_fee_payload_requires_current_signature_and_exposure_custody() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("control");
+    let (key, request, payload) = fixture();
+    let mut slot = Slot::create(&path, request).unwrap();
+    slot.retain_payload(&payload).unwrap();
+    slot.sign_original(
+        &key,
+        &mut crate::musubi_publication_service::native_pin::authorization::FixedClock(1_001),
+        std::time::Instant::now() + Duration::from_secs(30),
+    )
+    .unwrap();
+    assert!(slot.record_exposure().unwrap());
+    drop(slot);
+    let (slot, fee_payload) = Slot::open_retained_with_payload(&path).unwrap();
+    assert_eq!(fee_payload.as_ref(), Some(slot.signed().unwrap().payload()));
+    assert_eq!(fee_payload, Some(payload));
+    drop(slot);
+    let marker = path.join("submission.json");
+    let original = std::fs::read(&marker).unwrap();
+    std::fs::write(&marker, b"{}").unwrap();
+    assert!(Slot::open_retained_with_payload(&path).is_err());
+    std::fs::write(marker, original).unwrap();
+    let (slot, restored) = Slot::open_retained_with_payload(&path).unwrap();
+    assert_eq!(restored, fee_payload);
+    assert!(slot.exposed().unwrap());
+}

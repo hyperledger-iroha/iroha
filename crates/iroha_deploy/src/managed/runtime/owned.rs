@@ -288,18 +288,26 @@ impl PeerProcesses {
                     daemon,
                     budget,
                 )?)));
-            if let Some(listeners) = listeners {
-                let mut child = self.children[index]
-                    .lock()
-                    .map_err(|_| invalid("owned child lock failed"))?;
-                listeners.send_to_child(
-                    index,
-                    &mut child,
-                    budget
-                        .deadline()
-                        .map_err(|failure| Error::Invalid(failure.message()))?,
-                )?;
-            }
+        }
+        if let Some(listeners) = listeners {
+            // Own every spawned process before waiting for any one daemon to finish preparing.
+            // On error the worker still has all child handles for normal shutdown.
+            let mut children = self
+                .children
+                .iter()
+                .map(|child| child.lock().map_err(|_| invalid("owned child lock failed")))
+                .collect::<Result<Vec<_>>>()?;
+            let [first, second, third, fourth] = children.as_mut_slice() else {
+                return Err(invalid(
+                    "managed listener handoff requires four owned children",
+                ));
+            };
+            listeners.send_to_children(
+                [first, second, third, fourth],
+                budget
+                    .deadline()
+                    .map_err(|failure| Error::Invalid(failure.message()))?,
+            )?;
         }
         if let Some(launch) = &self.launch {
             launch.validate()?;
@@ -576,6 +584,7 @@ impl OwnedGateway {
     }
     /// This gateway's exact original plan, with fresh source checks and no serving authority.
     /// Active decode limits retain the renderer's standalone full-capture recipe.
+    #[cfg(all(test, unix))]
     pub(super) fn original_provider_plan(
         &self,
         prepared: &PreparedLocalnet,
@@ -603,15 +612,50 @@ impl OwnedGateway {
             .original_gateway_compliance_plan(prepared, self.provider)
     }
 
-    pub(super) fn required_transactions(&self) -> Result<&[ManagedTransactionFinality]> {
-        self.require_running()?;
-        self.launch.validate()?;
-        Ok(self.launch.revision.required_transactions())
+    pub(super) fn open_catalog_writer(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<crate::managed::gateway_compliance::ManagedGatewayCompliance> {
+        self.launch
+            .owner
+            .open_catalog_writer(prepared, self.provider)
     }
-    pub(super) fn observation_floor(&self) -> Result<ManagedTransactionFinality> {
+
+    pub(super) fn open_provider_advert(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<crate::managed::ManagedProviderAdvertisement> {
+        self.launch
+            .owner
+            .open_provider_advert(prepared, self.provider)
+    }
+
+    pub(super) fn open_custody(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<crate::managed::ManagedStreamTokenCustody> {
+        self.launch.owner.open_custody(prepared, self.provider)
+    }
+
+    pub(super) fn publication_floor(
+        &self,
+        required: &[ManagedTransactionFinality],
+    ) -> Result<ManagedTransactionFinality> {
         self.require_running()?;
         self.launch.validate()?;
-        self.launch.revision.observation_floor()
+        if self.launch.revision.required_transactions() != required {
+            return Err(invalid(
+                "restarted launch changed exact required transactions",
+            ));
+        }
+        // Retain the physical validation recipe in an inherited decode scope.
+        if norito::core::decode_limits_active() {
+            self.require_running()?;
+            self.launch.validate()?;
+        }
+        let floor = self.launch.revision.observation_floor()?;
+        self.require_running()?;
+        Ok(floor)
     }
     /// Borrow only the enrollment retained by this actual launch's opaque renderer revision.
     /// The requested transaction must be exactly the one that the worker confirmed on all peers.
@@ -698,17 +742,37 @@ impl OwnedGateway {
         Ok(())
     }
 }
+impl OwnedGateway {
+    /// Provider-specific admission always brackets the selected launch check.
+    pub(in crate::managed::runtime) fn validate_with_launch(
+        &self,
+        prepared: &PreparedLocalnet,
+        plan: &RetainedGatewayCompliancePlan,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        self.require_running()?;
+        self.require_original(prepared)?;
+        check()?;
+        self.validate_binding(prepared, plan)?;
+        self.require_running()
+    }
+
+    pub(in crate::managed::runtime) fn validate_launch(&self) -> Result<()> {
+        self.launch.validate()
+    }
+
+    pub(in crate::managed::runtime) fn same_launch(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.launch, &other.launch)
+    }
+}
+
 impl LiveGatewayProcess for OwnedGateway {
     fn validate(
         &mut self,
         prepared: &PreparedLocalnet,
         plan: &RetainedGatewayCompliancePlan,
     ) -> Result<()> {
-        self.require_running()?;
-        self.require_original(prepared)?;
-        self.launch.validate()?;
-        self.validate_binding(prepared, plan)?;
-        self.require_running()
+        self.validate_with_launch(prepared, plan, || self.validate_launch())
     }
 }
 

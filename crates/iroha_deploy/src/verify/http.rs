@@ -49,7 +49,7 @@ pub enum HttpFinalityError {
 pub struct HttpFinalitySource {
     proof_clients: Vec<Client>,
     peers: BTreeMap<PeerId, Client>,
-    initial_height: NonZeroU64,
+    initial_height: Option<NonZeroU64>,
     deadline: Instant,
     root_scope: iroha_data_model::block::consensus::SumeragiRootScope,
 }
@@ -103,10 +103,21 @@ impl HttpFinalitySource {
         Ok(Self {
             proof_clients,
             peers,
-            initial_height,
+            initial_height: Some(initial_height),
             deadline,
             root_scope,
         })
+    }
+
+    /// The installed Torii route selects the durable tip while creating the signed capture.
+    /// The resulting statement goes through the same authentication and contiguous quorum walk.
+    pub(crate) fn at_durable_tip(mut self) -> Self {
+        // A caller with a finite cumulative decoder keeps its original height-specific
+        // requests, typed progress checks and refusal order.
+        if !norito::core::decode_limits_active() {
+            self.initial_height = None;
+        }
+        self
     }
 }
 
@@ -172,7 +183,15 @@ impl FinalitySource for HttpFinalitySource {
             .get(peer)
             .ok_or(HttpFinalityError::MissingPeer)?
             .with_request_deadline(deadline);
-        read_tip(self.initial_height, deadline, |height| {
+        let Some(initial_height) = self.initial_height else {
+            let result =
+                client.get_latest_sumeragi_finality_attestation(*challenge, peer, self.root_scope);
+            ensure_deadline(deadline)?;
+            return result
+                .map(FinalityAttestation::Authenticated)
+                .map_err(|_| HttpFinalityError::Read);
+        };
+        read_tip(initial_height, deadline, |height| {
             client
                 .get_sumeragi_finality_attestation(height, *challenge, peer, self.root_scope)
                 .map(FinalityAttestation::Authenticated)

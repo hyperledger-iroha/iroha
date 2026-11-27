@@ -12,6 +12,65 @@ fn with_native_boundary_chain(assert_original: fn(&CertifiedTestChain)) {
 }
 
 #[test]
+fn historical_rereads_keep_their_verified_predecessor_and_reject_a_different_cut() {
+    let make_chain = |step: u64| {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 17_000)).unwrap();
+        for height in 2..=8 {
+            chain.commit_at(17_000 + height * step, Vec::new());
+        }
+        chain
+    };
+    let original = make_chain(1_000);
+    let other = make_chain(1_001);
+    let view = original.state().view();
+    let other_view = other.state().view();
+    assert_eq!(
+        view.block_hashes().get(0).copied().unwrap(),
+        other_view.block_hashes().get(0).copied().unwrap()
+    );
+    assert_ne!(
+        view.block_hashes().get(2).copied().unwrap(),
+        other_view.block_hashes().get(2).copied().unwrap()
+    );
+
+    SHARE_PREFIXES_IN_TEST.set(true);
+    for height in 5..=8 {
+        CertifiedChain::new(&view)
+            .unwrap()
+            .certified(height)
+            .unwrap();
+    }
+    let first = CertifiedChain::new(&view).unwrap();
+    let (receipt, cold) = relation_counts::measure(|| first.certified(4));
+    assert_eq!(receipt.unwrap().verification(), QcVerification::Verified);
+    assert_eq!(cold.qcs, [2, 3, 4]);
+
+    let verified_again = || {
+        let reader = CertifiedChain::new(&view).unwrap();
+        let (receipt, warm) = relation_counts::measure(|| reader.certified(4));
+        assert_eq!(
+            receipt.unwrap().block_hash(),
+            view.block_hashes().get(3).copied().unwrap()
+        );
+        assert_eq!(warm.frames, [4]);
+        assert_eq!(warm.qcs, [4]);
+    };
+    verified_again();
+    CertifiedChain::new(&view).unwrap().certified(8).unwrap();
+    verified_again();
+
+    let foreign = CertifiedChain::new(&other_view).unwrap();
+    let (receipt, distinct) = relation_counts::measure(|| foreign.certified(4));
+    assert_eq!(
+        receipt.unwrap().block_hash(),
+        other_view.block_hashes().get(3).copied().unwrap()
+    );
+    assert_eq!(distinct.qcs, [2, 3, 4]);
+    SHARE_PREFIXES_IN_TEST.set(false);
+}
+
+#[test]
 fn a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds() {
     SHARE_PREFIXES_IN_TEST.set(true);
     let (chain, _) = chain();

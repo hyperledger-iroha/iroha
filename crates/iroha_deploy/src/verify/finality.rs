@@ -398,6 +398,39 @@ pub struct FinalityVerifier {
     verified_tip: Arc<OnceLock<VerifiedSumeragiBlock>>,
 }
 
+/// The verifier produced by one cold, authenticated checkpoint import. Its consumer still
+/// obtains a fresh quorum. The token never enters a checkpoint cache or an ordinary verifier.
+#[derive(Default)]
+pub(crate) struct ObservationStart {
+    imported: Option<
+        Box<(
+            std::sync::Weak<SumeragiFinalityCheckpoint>,
+            SumeragiFinalityVerifier,
+        )>,
+    >,
+}
+
+impl ObservationStart {
+    fn into_prefix(self, owner: &FinalityVerifier) -> Result<Prefix, FinalityError> {
+        if let Some(imported) = self.imported
+            && !norito::core::decode_limits_active()
+            && owner.pending.is_none()
+            && imported.0.as_ptr() == Arc::as_ptr(&owner.checkpoint)
+            && let Some(verified) = owner.verified_tip.get()
+        {
+            // The weak reference keeps allocation identity unique even after its last strong
+            // owner is released. This native state and tip came from the same complete import.
+            return Ok(Prefix {
+                native: imported.1,
+                tip: owner.checkpoint.tip().clone(),
+                verified: verified.clone(),
+                start: owner.checkpoint.height(),
+            });
+        }
+        Prefix::new(owner.pending.as_ref().unwrap_or(&owner.checkpoint))
+    }
+}
+
 impl PartialEq for FinalityVerifier {
     fn eq(&self, other: &Self) -> bool {
         self.checkpoint == other.checkpoint && self.pending == other.pending
@@ -454,7 +487,13 @@ impl FinalityVerifier {
         expected_network: NetworkId,
         expected_chain: &str,
     ) -> Result<Self, FinalityError> {
-        Self::from_checkpoint_with_validation(checkpoint, expected_network, expected_chain, None)
+        Self::from_checkpoint_with_validation(
+            checkpoint,
+            expected_network,
+            expected_chain,
+            None,
+            None,
+        )
     }
 
     pub(crate) fn from_checkpoint_with_validation(
@@ -462,6 +501,7 @@ impl FinalityVerifier {
         expected_network: NetworkId,
         expected_chain: &str,
         validation: Option<&mut EpochValidationScope>,
+        observation: Option<&mut ObservationStart>,
     ) -> Result<Self, FinalityError> {
         let validation = if norito::core::decode_limits_active() {
             None
@@ -474,11 +514,16 @@ impl FinalityVerifier {
             expected_chain,
             validation,
             |checkpoint, native, verified_tip| {
-                // The original importer discarded this verifier before the committee check.
-                drop(native);
+                let retained = observation
+                    .filter(|_| !norito::core::decode_limits_active())
+                    .map(move |start| (start, native));
                 CommitteeSize::new(checkpoint.tip().committee.len())?;
+                let checkpoint = Arc::new(checkpoint);
+                if let Some((start, native)) = retained {
+                    start.imported = Some(Box::new((Arc::downgrade(&checkpoint), native)));
+                }
                 Ok(Self {
-                    checkpoint: Arc::new(checkpoint),
+                    checkpoint,
                     pending: None,
                     verified_tip: Arc::new(OnceLock::from(verified_tip)),
                 })
@@ -780,13 +825,28 @@ impl FinalityVerifier {
         challenge: &[u8; 32],
         budget: &mut Budget,
     ) -> Result<AttestationQuorum, FinalityError> {
+        self.observe_from(source, challenge, budget, ObservationStart::default())
+    }
+
+    pub(crate) fn observe_imported<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        challenge: &[u8; 32],
+        start: ObservationStart,
+    ) -> Result<AttestationQuorum, FinalityError> {
+        self.observe_from(source, challenge, &mut Budget::new(), start)
+    }
+
+    fn observe_from<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        challenge: &[u8; 32],
+        budget: &mut Budget,
+        start: ObservationStart,
+    ) -> Result<AttestationQuorum, FinalityError> {
         require_challenge(challenge)?;
         let network = self.checkpoint.network_id();
-        let mut prefix = Prefix::new(
-            self.pending
-                .as_ref()
-                .unwrap_or_else(|| self.checkpoint.as_ref()),
-        )?;
+        let mut prefix = start.into_prefix(self)?;
         let mut reads = BTreeMap::new();
         // Why a member's own proof could not extend the prefix: invalid or over budget.
         let mut unverified = BTreeMap::new();

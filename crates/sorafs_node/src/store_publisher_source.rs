@@ -5,6 +5,7 @@ use sorafs_car::publisher::{
     PUBLISHER_SOURCE_HEADER_MAX_BYTES_V1, PublisherSourceChunkRequestV1, PublisherSourceHeaderV1,
 };
 const PUBLISHER_SOURCE_DIR_V1: &str = ".publisher-sources";
+const PUBLISHER_SOURCE_PREPARATION_V1: &str = ".complete-preparation";
 const PUBLISHER_SOURCE_METADATA_V1: &str = "source.to";
 const PUBLISHER_SOURCE_CACHE_BYTES_V1: u64 = 16 * 1024 * 1024;
 const PUBLISHER_SOURCE_CACHE_ENTRIES_V1: usize = 32;
@@ -164,7 +165,95 @@ fn read_publisher_source(path: &Path) -> Result<VerifiedPublisherSourceV1, Stora
     })
 }
 
+/// Local byte availability for one exact, currently authorized publisher assignment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublisherSourceProgressV1 {
+    /// No matching staging session exists for this assignment.
+    NeedsHeader,
+    /// The header and preceding chunks verified. This ordinal is missing.
+    NeedsChunk(usize),
+    /// The source is fully staged or its identical payload has already been admitted locally.
+    Available,
+}
+
 impl StorageBackend {
+    /// Locate the first missing part of the current authenticated assignment.
+    /// This read does not admit bytes or assert native provider completion. The caller
+    /// supplies the exact current assignment and its certified staging deadline.
+    pub fn publisher_source_progress(
+        &self,
+        provider: [u8; 32],
+        order: [u8; 32],
+        manifest: [u8; 32],
+        revision: u64,
+        deadline_epoch: u64,
+    ) -> Result<PublisherSourceProgressV1, StorageError> {
+        self.ensure_durability_healthy()?;
+        let now = crate::unix_now_secs();
+        if self.config.provider_id().map(|id| *id.as_bytes()) != Some(provider)
+            || revision == 0
+            || now == 0
+            || now > deadline_epoch
+        {
+            return Err(publisher_source_rejected());
+        }
+        let mut cache = self
+            .publisher_sources
+            .lock()
+            .map_err(|_| publisher_source_rejected())?;
+        // Native ingest publishes the verified payload before retiring its staging directory
+        // under this same lock. Other assignments may also already hold the identical payload.
+        if self.with_manifest_io_by_digest(&manifest, StoredManifest::payload_available)?
+            == Some(true)
+        {
+            return Ok(PublisherSourceProgressV1::Available);
+        }
+        let path = self
+            .root_dir
+            .join(PUBLISHER_SOURCE_DIR_V1)
+            .join(hex::encode(order));
+        match fs::symlink_metadata(&path) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Ok(PublisherSourceProgressV1::NeedsHeader);
+            }
+            result => {
+                result?;
+            }
+        }
+        let source = match cache.load(&path, order, &self.config) {
+            // A crash can leave the new session directory before header publication. The
+            // authenticated writer already recovers that state under the same staging lock.
+            Err(StorageError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
+                return Ok(PublisherSourceProgressV1::NeedsHeader);
+            }
+            result => result?,
+        };
+        let header = &source.source.header;
+        if header.provider_id != provider
+            || source.manifest_digest != manifest
+            || header.assignment_revision != revision
+            || source.source.deadline_epoch != deadline_epoch
+        {
+            return Ok(PublisherSourceProgressV1::NeedsHeader);
+        }
+        for (index, chunk) in header.chunks.iter().enumerate() {
+            let file = path.join(format!("chunk-{index:08x}"));
+            match read_bounded_regular_file(&file, u64::from(chunk.length)) {
+                Ok(bytes)
+                    if bytes.len() == chunk.length as usize
+                        && blake3::hash(&bytes).as_bytes() == &chunk.digest => {}
+                Ok(_) => return Err(publisher_source_rejected()),
+                Err(StorageError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
+                    source.check_identity(&path)?;
+                    return Ok(PublisherSourceProgressV1::NeedsChunk(index));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        source.check_identity(&path)?;
+        Ok(PublisherSourceProgressV1::Available)
+    }
+
     /// Reserve restart-safe staging for one publisher-authenticated finalized assignment.
     ///
     /// The trusted caller must authenticate the request's publisher, exact provider/order/revision,
@@ -215,10 +304,51 @@ impl StorageBackend {
             .content_length
             .checked_add(encoded.len() as u64)
             .ok_or_else(publisher_source_rejected)?;
+        if let Some(digest) = self.reserve_publisher_source_space(
+            &mut cache,
+            &root,
+            &metadata,
+            required,
+            finalized_epoch.max(wall_epoch),
+        )? {
+            return Ok(digest);
+        }
+        fs::create_dir(&target)?;
+        sync_directory(&root)?;
+        write_atomic(&target.join(PUBLISHER_SOURCE_METADATA_V1), &encoded)?;
+        let identity =
+            RetainedFile::open_regular(target.join(PUBLISHER_SOURCE_METADATA_V1))?.snapshot()?;
+        cache.retain(
+            Arc::new(VerifiedPublisherSourceV1 {
+                manifest_digest: *manifest.digest()?.as_bytes(),
+                source: metadata,
+                manifest,
+                plan,
+                header_digest,
+                identity,
+                encoded_bytes: encoded.len() as u64,
+            }),
+            &self.config,
+        );
+        Ok(header_digest)
+    }
+
+    fn reserve_publisher_source_space(
+        &self,
+        cache: &mut PublisherSourceCacheV1,
+        root: &Path,
+        metadata: &StoredPublisherSourceV1,
+        required: u64,
+        through_epoch: u64,
+    ) -> Result<Option<[u8; 32]>, StorageError> {
         let mut reserved = 0_u64;
         let mut sessions = 0_usize;
-        for entry in fs::read_dir(&root)? {
+        for entry in fs::read_dir(root)? {
             let entry = entry?;
+            if entry.file_name() == PUBLISHER_SOURCE_PREPARATION_V1 {
+                remove_transaction_directory(&entry.path())?;
+                continue;
+            }
             if !entry
                 .file_name()
                 .to_str()
@@ -244,18 +374,19 @@ impl StorageBackend {
                 continue;
             }
             let existing = cache.load(&path, order, &self.config)?;
-            if existing.source.deadline_epoch < finalized_epoch.max(wall_epoch) {
+            if existing.source.deadline_epoch < through_epoch {
                 remove_transaction_directory(&path)?;
                 cache.remove(&order);
                 continue;
             }
-            if path == target {
-                if existing.source.header == *header
-                    && existing.source.deadline_epoch == deadline_epoch
+            if order == metadata.header.order_id {
+                if existing.source.header == metadata.header
+                    && existing.source.deadline_epoch == metadata.deadline_epoch
                 {
-                    return Ok(existing.header_digest);
+                    return Ok(Some(existing.header_digest));
                 }
-                if existing.source.header.assignment_revision >= header.assignment_revision {
+                if existing.source.header.assignment_revision >= metadata.header.assignment_revision
+                {
                     return Err(publisher_source_rejected());
                 }
                 // The trusted caller rechecked the new finalized revision. Old bytes cannot cross
@@ -275,6 +406,10 @@ impl StorageBackend {
                 });
             }
         }
+        // An empty inventory still needs a slot for this new source.
+        if self.config.max_pins() == 0 {
+            return Err(StorageError::PinLimitReached { limit: 0 });
+        }
         let available = self.config.max_capacity_bytes().0.saturating_sub(reserved);
         if required > available {
             return Err(StorageError::CapacityExceeded {
@@ -282,24 +417,151 @@ impl StorageBackend {
                 available,
             });
         }
-        fs::create_dir(&target)?;
-        sync_directory(&root)?;
-        write_atomic(&target.join(PUBLISHER_SOURCE_METADATA_V1), &encoded)?;
-        let identity =
-            RetainedFile::open_regular(target.join(PUBLISHER_SOURCE_METADATA_V1))?.snapshot()?;
-        cache.retain(
-            Arc::new(VerifiedPublisherSourceV1 {
-                manifest_digest: *manifest.digest()?.as_bytes(),
-                source: metadata,
-                manifest,
-                plan,
-                header_digest,
-                identity,
-                encoded_bytes: encoded.len() as u64,
-            }),
-            &self.config,
-        );
-        Ok(header_digest)
+        Ok(None)
+    }
+
+    /// Publish a fresh, complete publisher source for one authenticated assignment.
+    ///
+    /// The caller supplies the retained verified CAR's payload stream and freshly authenticates
+    /// the same provider, order, manifest, revision and deadline on each authority callback.
+    /// The callback returns the current finalized epoch. The cheap deadline callback checks the
+    /// original UTC and monotonic bounds during copying. Neither callback may reenter storage.
+    /// An existing session returns `false` and remains available for ordinary resumable staging.
+    /// The native worker independently authenticates the completed source before admitting it.
+    pub fn stage_complete_publisher_source(
+        &self,
+        header: &PublisherSourceHeaderV1,
+        deadline_epoch: u64,
+        payload: &mut impl Read,
+        mut current_authority: impl FnMut() -> Result<u64, StorageError>,
+        mut check_deadline: impl FnMut() -> Result<(), StorageError>,
+    ) -> Result<bool, StorageError> {
+        self.ensure_durability_healthy()?;
+        let (manifest, _) = header.verify().map_err(|_| publisher_source_rejected())?;
+        if self.config.provider_id().map(|id| *id.as_bytes()) != Some(header.provider_id)
+            || deadline_epoch > manifest.pin_policy.retention_epoch
+        {
+            return Err(publisher_source_rejected());
+        }
+        let mut cache = self
+            .publisher_sources
+            .lock()
+            .map_err(|_| publisher_source_rejected())?;
+        self.ensure_durability_healthy()?;
+        let mut authorize = || {
+            let epoch = current_authority()?;
+            let wall = crate::unix_now_secs();
+            if wall == 0 || epoch == 0 || epoch.max(wall) > deadline_epoch {
+                return Err(publisher_source_rejected());
+            }
+            Ok(epoch.max(wall))
+        };
+        check_deadline()?;
+        let through_epoch = authorize()?;
+        check_deadline()?;
+        let root = OwnerDirectory::open_or_create(self.root_dir.join(PUBLISHER_SOURCE_DIR_V1))?;
+        let name = hex::encode(header.order_id);
+        if root.open_child_optional(&name)?.is_some() {
+            return Ok(false);
+        }
+        let metadata = StoredPublisherSourceV1 {
+            version: 1,
+            deadline_epoch,
+            header: header.clone(),
+        };
+        let encoded = norito::encode_canonical(&metadata)?;
+        let required = manifest
+            .content_length
+            .checked_add(encoded.len() as u64)
+            .ok_or_else(publisher_source_rejected)?;
+        if self
+            .reserve_publisher_source_space(
+                &mut cache,
+                root.path(),
+                &metadata,
+                required,
+                through_epoch,
+            )?
+            .is_some()
+        {
+            return Ok(false);
+        }
+
+        // Only one preparation can exist under the exclusive store and publisher locks.
+        // A stopped writer leaves private scratch that the next reservation removes. Readers
+        // consider only canonical order names, so a prefix can never become an ingest source.
+        let mut preparation =
+            StagingDirectory::new(root.create_child(PUBLISHER_SOURCE_PREPARATION_V1)?);
+        let directory = preparation
+            .original
+            .as_ref()
+            .ok_or_else(publisher_source_rejected)?;
+        directory.write_private_atomic(
+            PUBLISHER_SOURCE_METADATA_V1,
+            &encoded,
+            PublishMode::CreateNew,
+        )?;
+        let max_chunk = header
+            .chunks
+            .iter()
+            .map(|chunk| chunk.length)
+            .max()
+            .unwrap_or(0);
+        if max_chunk > sorafs_car::CHUNK_STORE_MAX_CHUNK_BYTES {
+            return Err(publisher_source_rejected());
+        }
+        let mut bytes = Vec::new();
+        norito::core::reserve_decode_allocation(max_chunk as usize)?;
+        bytes
+            .try_reserve_exact(max_chunk as usize)
+            .map_err(|_| publisher_source_rejected())?;
+        let mut digest = blake3::Hasher::new();
+        for (index, chunk) in header.chunks.iter().enumerate() {
+            check_deadline()?;
+            bytes.resize(chunk.length as usize, 0);
+            payload.read_exact(&mut bytes)?;
+            if blake3::hash(&bytes).as_bytes() != &chunk.digest {
+                return Err(publisher_source_rejected());
+            }
+            digest.update(&bytes);
+            check_deadline()?;
+            directory.write_private_atomic(
+                format!("chunk-{index:08x}"),
+                &bytes,
+                PublishMode::CreateNew,
+            )?;
+        }
+        if payload.read(&mut [0u8; 1])? != 0
+            || digest.finalize().as_bytes() != &header.payload_digest
+        {
+            return Err(publisher_source_rejected());
+        }
+        check_deadline()?;
+        authorize()?;
+        check_deadline()?;
+        let target = root.path().join(name);
+        let published = match move_original_directory(preparation.take_original()?, &target) {
+            Ok(published) => published,
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => {
+                self.fail_stop_durability(&error);
+                return Err(error.into_storage_error());
+            }
+            Err(error) => return Err(error.into_storage_error()),
+        };
+        if let Err(refusal) = authorize().and_then(|_| check_deadline()) {
+            // The ingest worker cannot enter this source while the publisher mutex is held.
+            // Remove only the exact directory just published before allowing another lookup.
+            if let Err(source) = published.remove() {
+                let error = AtomicWriteError::DurabilityUncertain {
+                    path: target,
+                    source,
+                };
+                self.fail_stop_durability(&error);
+                return Err(error.into_storage_error());
+            }
+            return Err(refusal);
+        }
+        Ok(true)
     }
 
     /// Persist one exact signed-request chunk for the currently authorized staging session.
