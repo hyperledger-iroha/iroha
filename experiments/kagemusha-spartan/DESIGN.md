@@ -838,6 +838,31 @@ Against `f7a213db1c`, a fixed-entropy differential at both wallet widths reprodu
 byte for byte. Each curve covered a first opening with no inherited claim and a second opening with one claim.
 The verifier checked each proof, and the next transcript challenge and blinding-stream scalar also matched.
 
+**First-round generator table on the signed 968f wallet.** Four fresh-process pairs compared
+`f7a213db1c` with `c484a75259` on an M4 Max. Both installations, seven operations and both recipient
+verifications are included. Each version ran first in two of the six-worker pairs. Stage profiling was off.
+Elapsed savings are relative to the baseline mean.
+
+| Full round trip | Mean elapsed, baseline → candidate | Elapsed saved | Mean process CPU, baseline → candidate | Candidate faster |
+|---|---:|---:|---:|---:|
+| Six workers, sequential | 73.714 → 75.042 s | -1.80% | 239.169 → 237.975 s | 2/4 |
+| Three workers per version, simultaneous | 100.970 → 99.737 s | +1.22% | 214.653 → 210.988 s | 4/4 |
+
+| Elapsed per pair in seconds, baseline / candidate | Pair 1 | Pair 2 | Pair 3 | Pair 4 |
+|---|---:|---:|---:|---:|
+| Six workers, sequential | 97.237 / 71.661 | 73.888 / 73.629 | 63.575 / 85.150 | 60.156 / 69.728 |
+| Three workers per version, simultaneous | 108.942 / 107.574 | 101.770 / 101.253 | 83.071 / 82.123 | 110.096 / 107.998 |
+
+Two additional pairs profiled both versions simultaneously with three workers each and reversed the launch
+order. Each entry sums the seven openings on that curve, then averages the two runs. The candidate includes
+table preparation for both wallets. Both recipients independently verified their 10,231-byte Payments in every run.
+
+| Profiled opening work | Mean elapsed, baseline → candidate | Elapsed saved |
+|---|---:|---:|
+| Primary first generator fold | 3.915 → 3.152 s | +19.48% |
+| Complete primary IPA | 12.935 → 12.397 s | +4.16% |
+| Complete secondary IPA | 5.977 → 5.611 s | +6.13% |
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
