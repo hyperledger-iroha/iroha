@@ -1913,7 +1913,7 @@ impl BaselineEncoder {
                             optimizer.select_levels(&coeffs, &mut levels, frame_type, block_index);
                             levels
                         } else {
-                            let folded = fold_rows(|y| rows.row(y));
+                            let folded = rows.folded();
                             let sum = if quantizer == 0 {
                                 folded_sum(&folded)
                             } else {
@@ -2114,6 +2114,29 @@ impl<'a> ResidualRows<'a> {
             None => src.map(i16::from),
         }
     }
+
+    fn folded(&self) -> FoldedBlock {
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        {
+            use std::arch::aarch64::*;
+            // SAFETY: ResidualRows::new checked both planes through the end of row seven.
+            // The fold requests exactly those eight complete rows.
+            let load =
+                |plane: &[u8], y: usize| unsafe { vld1_u8(plane.as_ptr().add(y * self.stride)) };
+            if let Some(reference) = self.reference {
+                fold_vectors(|y| unsafe {
+                    vreinterpretq_s16_u16(vsubl_u8(load(self.source, y), load(reference, y)))
+                })
+            } else {
+                fold_vectors(|y| unsafe { vreinterpretq_s16_u16(vmovl_u8(load(self.source, y))) })
+            }
+        }
+        #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+        {
+            fold_scalar(|y| self.row(y))
+        }
+    }
+
     fn block(&self) -> [i16; BLOCK_PIXELS] {
         let mut block = [0; BLOCK_PIXELS];
         for (y, row) in block.as_chunks_mut::<BLOCK_SIZE>().0.iter_mut().enumerate() {
@@ -2691,13 +2714,20 @@ fn fold_scalar(row: impl Fn(usize) -> [i16; BLOCK_SIZE]) -> FoldedBlock {
 #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
 fn fold_rows(row: impl Fn(usize) -> [i16; BLOCK_SIZE]) -> FoldedBlock {
     use std::arch::aarch64::*;
+    fold_vectors(|y| unsafe { vld1q_s16(row(y).as_ptr()) })
+}
+
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[inline(always)]
+fn fold_vectors(row: impl Fn(usize) -> std::arch::aarch64::int16x8_t) -> FoldedBlock {
+    use std::arch::aarch64::*;
     let mut folded = [[[0; 4]; 4]; 4];
     // SAFETY: AArch64 has baseline NEON. Each load covers a full eight-sample
     // row, and each store writes one complete four-lane row of a parity group.
     unsafe {
         for y in 0..4 {
-            let upper = vld1q_s16(row(y).as_ptr());
-            let lower = vld1q_s16(row(7 - y).as_ptr());
+            let upper = row(y);
+            let lower = row(7 - y);
             let (a, b) = (vget_low_s16(upper), vrev64_s16(vget_high_s16(upper)));
             let (c, d) = (vget_low_s16(lower), vrev64_s16(vget_high_s16(lower)));
             let (upper_sum, lower_sum) = (vaddl_s16(a, b), vaddl_s16(c, d));
@@ -4093,10 +4123,40 @@ impl<'a> BundleStreamRecorder<'a> {
                 telemetry_buffer(old_stream, total),
             )
         };
+        if !overwrite {
+            // In a full-length block each zero is one significance-RLE record for symbol 1.
+            stream.resize(total, 1);
+        }
         const SLOTS: usize = BLOCK_PIXELS - 1;
         let mut repeat_keys = vec![u16::MAX; total / SLOTS];
+        const TILE_COLUMNS: usize = 8;
         let mut written = 0;
-        let mut append = |start: usize, end: usize, key: Option<u16>| {
+        enum Source {
+            Span(usize, usize, Option<u16>),
+            DcCycles(usize),
+        }
+        let mut append = |source| {
+            let (start, end, key) = match source {
+                Source::Span(start, end, key) => (start, end, key),
+                Source::DcCycles(cycles) => {
+                    // The preceding eight DC templates have the same complete
+                    // record sequence and singleton symbols as each following cycle.
+                    let period = TILE_COLUMNS * SLOTS;
+                    let src = written - period;
+                    let mut remaining = cycles * period;
+                    while remaining != 0 {
+                        let len = (written - src).min(remaining);
+                        records.extend_from_within(src..src + len);
+                        if written.is_multiple_of(SLOTS) {
+                            repeat_keys
+                                .copy_within(src / SLOTS..(src + len) / SLOTS, written / SLOTS);
+                        }
+                        written += len;
+                        remaining -= len;
+                    }
+                    return;
+                }
+            };
             let dest = written;
             written += end - start;
             let mut copy_end = written;
@@ -4125,8 +4185,35 @@ impl<'a> BundleStreamRecorder<'a> {
                 records[dest..copy_end].copy_from_slice(&self.bundles[start..start + n]);
                 stream[dest..copy_end].copy_from_slice(&symbols[start..start + n]);
             } else {
-                records.extend_from_slice(&self.bundles[start..end]);
-                stream.extend_from_slice(&symbols[start..end]);
+                if end - start == SLOTS {
+                    let block = self.bundles[start..]
+                        .first_chunk::<SLOTS>()
+                        .expect("complete template");
+                    records.extend_from_slice(block);
+                } else {
+                    records.extend_from_slice(&self.bundles[start..end]);
+                }
+                let symbol_len = match key {
+                    Some(k) if k < TAIL_KEY && end - start == SLOTS => {
+                        // A sparse template can have nonzeros only in the first five AC orders.
+                        if k >> 8 == 0 { 0 } else { 5 }
+                    }
+                    Some(k) if k >= TAIL_KEY => {
+                        let order = if pattern_tail(k) < TILE_CLASSES {
+                            FIRST_AC_TAIL_ORDER
+                        } else {
+                            ZERO_TAIL_ORDER
+                        };
+                        if end - start == BLOCK_PIXELS - order {
+                            0
+                        } else {
+                            end - start
+                        }
+                    }
+                    _ => end - start,
+                };
+                stream[dest..dest + symbol_len]
+                    .copy_from_slice(&symbols[start..start + symbol_len]);
             }
         };
         let (mut repeat_start, mut literal_start) = (0, 0);
@@ -4136,16 +4223,42 @@ impl<'a> BundleStreamRecorder<'a> {
             .copied()
             .chain(std::iter::once((self.repeats.len(), self.bundles.len())))
         {
-            for &key in &self.repeats[repeat_start..repeat_end] {
-                if key >= TAIL_KEY {
-                    let tail = self.zero_tails[usize::from(key - TAIL_KEY)];
-                    append(tail.start, tail.end, Some(key));
+            let mut keys = &self.repeats[repeat_start..repeat_end];
+            while let Some((&key, rest)) = keys.split_first() {
+                if !overwrite
+                    && keys.len() >= 2 * TILE_COLUMNS
+                    && keys[..TILE_COLUMNS] == keys[TILE_COLUMNS..2 * TILE_COLUMNS]
+                    && keys[..TILE_COLUMNS].iter().all(|&k| {
+                        // The first 256 slots are reserved for DC-only patterns.
+                        k < 256
+                            && self.sparse_patterns[usize::from(k)].end
+                                - self.sparse_patterns[usize::from(k)].start
+                                == SLOTS
+                    })
+                {
+                    let period = &keys[..TILE_COLUMNS];
+                    let cycles = keys[TILE_COLUMNS..]
+                        .chunks_exact(TILE_COLUMNS)
+                        .take_while(|chunk| *chunk == period)
+                        .count();
+                    for &k in period {
+                        let p = self.sparse_patterns[usize::from(k)];
+                        append(Source::Span(p.start, p.end, Some(p.key)));
+                    }
+                    append(Source::DcCycles(cycles));
+                    keys = &keys[TILE_COLUMNS * (cycles + 1)..];
                 } else {
-                    let p = self.sparse_patterns[usize::from(key)];
-                    append(p.start, p.end, Some(p.key));
+                    if key >= TAIL_KEY {
+                        let tail = self.zero_tails[usize::from(key - TAIL_KEY)];
+                        append(Source::Span(tail.start, tail.end, Some(key)));
+                    } else {
+                        let p = self.sparse_patterns[usize::from(key)];
+                        append(Source::Span(p.start, p.end, Some(p.key)));
+                    }
+                    keys = rest;
                 }
             }
-            append(literal_start, literal_end, None);
+            append(Source::Span(literal_start, literal_end, None));
             (repeat_start, literal_start) = (repeat_end, literal_end);
         }
         (records, stream, repeat_keys)
@@ -4381,17 +4494,29 @@ impl<'a> BundleStreamRecorder<'a> {
                     ZERO_TAIL_ORDER
                 };
                 let structural_key = usize::from(support) * 256 + (key & 255);
-                if let Some(context) = self.cached_prefixes.as_deref().and_then(|cache| {
-                    cache.append(structural_key, signs, self.width, &mut self.bundles)
-                }) {
-                    self.last_context_slot = Some(self.context_slot(context));
-                    deferred_prefix = true;
-                } else {
-                    self.record_ac_range(tile as u8, coeffs, frame_type, 1..end);
-                    if let Some(cache) = self.cached_prefixes.as_deref_mut() {
-                        cache.insert(structural_key, signs, &self.bundles[start..]);
-                    }
-                }
+                let context = self
+                    .cached_prefixes
+                    .as_deref()
+                    .and_then(|cache| {
+                        cache.append(structural_key, signs, self.width, &mut self.bundles)
+                    })
+                    .unwrap_or_else(|| {
+                        self.write_sparse_prefix(
+                            tile as u8,
+                            frame_type,
+                            support,
+                            signs,
+                            coeffs[0] != 0,
+                            end,
+                        );
+                        let prefix = &self.bundles[start..];
+                        if let Some(cache) = self.cached_prefixes.as_deref_mut() {
+                            cache.insert(structural_key, signs, prefix);
+                        }
+                        prefix.last().expect("nonempty sparse prefix").context
+                    });
+                self.last_context_slot = Some(self.context_slot(context));
+                deferred_prefix = true;
                 self.record_neutral_tail(tile as u8, coeffs, frame_type, end, tail, true);
             }
             self.sparse_patterns[slot] = SparseAcPattern {
@@ -4408,6 +4533,60 @@ impl<'a> BundleStreamRecorder<'a> {
             };
         }
     }
+
+    /// Unmapped ternary blocks have only 32 AC support masks and two DC states.
+    /// Emit the prefix now and count it once with the pattern's full multiplicity.
+    fn write_sparse_prefix(
+        &mut self,
+        tile: u8,
+        frame: FrameType,
+        support: u8,
+        signs: u8,
+        dc: bool,
+        end: usize,
+    ) {
+        let geometry = &SPARSE_CONTEXT_OFFSETS[usize::from(support) + 32 * usize::from(dc)];
+        let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame.as_byte());
+        let table = &CONTEXT_PREFIX[state];
+        let positive = bundle_bits(1, self.width);
+        let negative = bundle_bits(-1, self.width);
+        let zero_width = self.width.max(2);
+        let mut run = 0;
+        let mut last = BundleContextId::default();
+        self.bundles.reserve(end - 1);
+        for (i, &offset) in geometry[..end - 1].iter().enumerate() {
+            let bit = 1_u32 << i;
+            let nonzero = u32::from(support) & bit != 0;
+            let (kind, bits, bit_len) = if !nonzero {
+                (BundleType::SignificanceOnly, 1, zero_width)
+            } else if u32::from(signs) & bit != 0 {
+                negative
+            } else {
+                positive
+            };
+            let prefix = table[usize::from(kind.as_u8())][usize::from(offset)];
+            let context = finish_context(prefix, tile, nonzero, i + 1);
+            if !nonzero && run != 0 && context == last && run < (1 << zero_width) - 1 {
+                run += 1;
+                self.bundles.last_mut().expect("started zero run").bits = run;
+            } else {
+                self.bundles.push(BundleRecord {
+                    bundle_type: if nonzero {
+                        kind
+                    } else {
+                        BundleType::SignificanceRle
+                    },
+                    context,
+                    bits,
+                    bit_len,
+                    flush: BundleFlushReason::TypeComplete,
+                });
+                run = u8::from(!nonzero);
+            }
+            last = context;
+        }
+    }
+
     fn record_ac_slots(
         &mut self,
         tile: u8,
@@ -4583,12 +4762,7 @@ impl<'a> BundleStreamRecorder<'a> {
         let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame_type.as_byte());
         let prefix = CONTEXT_PREFIX[state][bundle_type.as_u8() as usize]
             [class + usize::from(neighbor_nz.min(3)) * 4 + prev];
-        let coeff_bucket = u8::from(coeff != 0);
-        let mut hash = u32::from(prefix);
-        hash = hash_mix(hash, block_tile.into());
-        hash = hash_mix(hash, coeff_bucket.into());
-        hash = hash_mix(hash, (zigzag_order as u32) & 0x3F);
-        BundleContextId::new((hash & 0xFFFF) as u16)
+        finish_context(prefix, block_tile, coeff != 0, zigzag_order)
     }
 }
 impl BundledHooks for BundleStreamRecorder<'_> {
@@ -5234,6 +5408,53 @@ const CONTEXT_POSITION: [usize; BLOCK_PIXELS] = {
     }
     offsets
 };
+// Prefix positions depend solely on support and DC significance. The first AC
+// has no preceding AC level; later ternary levels have magnitude zero or one.
+const SPARSE_CONTEXT_OFFSETS: [[u16; ZERO_TAIL_ORDER - 1]; 64] = {
+    let mut offsets = [[0; ZERO_TAIL_ORDER - 1]; 64];
+    let mut mask = 0;
+    while mask < 64 {
+        let mut occupied = [0; BLOCK_PIXELS];
+        occupied[0] = mask >> 5;
+        let mut i = 0;
+        while i < 5 {
+            occupied[ZIG_ZAG[i + 1]] = (mask >> i) & 1;
+            i += 1;
+        }
+        let mut order = 1;
+        let mut previous = 0;
+        while order < ZERO_TAIL_ORDER {
+            let slot = ZIG_ZAG[order];
+            let (x, y) = (slot % BLOCK_SIZE, slot / BLOCK_SIZE);
+            let mut neighbors = 0;
+            if x > 0 {
+                neighbors += occupied[slot - 1];
+            }
+            if y > 0 {
+                neighbors += occupied[slot - BLOCK_SIZE];
+                if x > 0 {
+                    neighbors += occupied[slot - BLOCK_SIZE - 1];
+                }
+                if x + 1 < BLOCK_SIZE {
+                    neighbors += occupied[slot - BLOCK_SIZE + 1];
+                }
+            }
+            offsets[mask][order - 1] = (CONTEXT_POSITION[order]
+                + 4 * (if neighbors > 3 { 3 } else { neighbors })
+                + previous) as u16;
+            previous = occupied[slot];
+            order += 1;
+        }
+        mask += 1;
+    }
+    offsets
+};
+
+fn finish_context(prefix: u16, tile: u8, nonzero: bool, order: usize) -> BundleContextId {
+    let hash = hash_mix(u32::from(prefix), u32::from(tile));
+    let hash = hash_mix(hash, u32::from(nonzero));
+    BundleContextId::new(hash_mix(hash, (order & 63) as u32) as u16)
+}
 static CONTEXT_PREFIX: [[[u16; 5 * 4 * 16]; 5]; 8] = {
     let mut table = [[[0; 5 * 4 * 16]; 5]; 8];
     let mut state = 0;

@@ -35,7 +35,9 @@ quartet. For frequency indices `u,v`, an 8×8 projection uses a 4×4 array
 with entries `a + (-1)^v b + (-1)^u c + (-1)^(u+v) d`. The encoder forms
 the four arrays once and evaluates each frequency from its parity group.
 The encoder folds directly from the source and collocated prediction rows. At
-nonzero quantizers the band moments already supply the DC sum. The 16 weights
+nonzero quantizers the band moments already supply the DC sum. AArch64 NEON
+widening subtraction produces the eight signed residuals of each predicted row
+directly from the two byte planes. Intra rows use unsigned widening. The 16 weights
 of each projection are the outer product of the vertical and
 horizontal basis factors. In the Q15 transform these products are exact Q30
 integers. A signed 64-bit dot product accumulates all terms before rounding.
@@ -137,6 +139,18 @@ span can retain both arrays from the preceding report when its canonical key
 matches. When just the neutral suffix matches at the same offset, only the
 prefix needs to be written. The canonical keys are independent of the order
 in which patterns first appear in either segment.
+
+On the first occurrence of an unmapped ternary pattern, the five AC occupancy
+bits and the DC significance bit select the neighbor counts and preceding
+magnitudes for its prefix. The recorder finishes the ordinary context hash
+for each position and merges adjacent zeros with the same context, up to the
+symbol-width limit. A block with 63 records has one record per AC position.
+All its zero positions therefore project to symbol 1. A fresh report fills
+that symbol once across the output, then overwrites the literal spans and
+occupied prefixes. If two adjacent groups of eight full DC-only blocks have
+identical template keys, their 504 records are identical. The recorder copies
+the period from the preceding records and doubles the initialized span for
+each additional copy, up to the length of the matching run.
 
 For unmapped contexts, blocks supported in the upper-left 3×3 share one
 more sequence per tile and frame class. From zigzag order 26 onward, the

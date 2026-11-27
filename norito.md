@@ -1877,7 +1877,9 @@ with reference-order evaluation at ambiguous binary64 rounding boundaries. Predi
 reuses the reference pixels when all residual levels quantize to zero.
 The bundled entropy recorder counts repeated low-frequency patterns and neutral
 zero suffixes by multiplicity. Unmapped sparse prefixes with the same occupied
-AC positions share their context sequence across signs. Matching aligned spans in successive reports
+AC positions share their context sequence across signs. On a fresh report the
+recorder fills singleton zero symbols together and copies repeated eight-block
+DC sequences in tile order. Matching aligned spans in successive reports
 reuse both the records and their projected symbols. The encoder writes luma
 and chroma run/level records directly into the frame buffer.
 Reconstruction sums the contributions of the nonzero coefficients in raster

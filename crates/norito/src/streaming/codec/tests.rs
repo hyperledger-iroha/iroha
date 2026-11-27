@@ -1168,6 +1168,59 @@ fn five_ac_templates_preserve_rle_and_reports_across_key_allocation_orders() {
 }
 
 #[test]
+fn synthesized_prefix_matches_direct_contexts_in_all_quantizer_buckets() {
+    for (width, quantizer) in [(1, 0), (2, 16), (3, 32), (4, 255)] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut fast, mut direct] = slots.each_mut().map(|s| {
+            BundleStreamRecorder::new(
+                s,
+                width,
+                FrameDimensions::new(64, 64),
+                quantizer,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        for (class, &(support, signs)) in SPARSE_MASKS.iter().enumerate() {
+            let mut levels = [0; BLOCK_PIXELS];
+            for (i, &slot) in ZIG_ZAG[1..6].iter().enumerate() {
+                levels[slot] = if support & (1 << i) == 0 {
+                    0
+                } else if signs & (1 << i) == 0 {
+                    1
+                } else {
+                    -1
+                };
+            }
+            let tile = (class % 64) as u8;
+            let end = if class < 9 {
+                FIRST_AC_TAIL_ORDER
+            } else {
+                ZERO_TAIL_ORDER
+            };
+            for dc in [false, true] {
+                levels[0] = i16::from(dc);
+                for frame in [FrameType::Intra, FrameType::Predicted] {
+                    direct.bundles.clear();
+                    direct.record_ac_range(tile, &levels, frame, 1..end);
+                    fast.bundles.clear();
+                    fast.write_sparse_prefix(tile, frame, support, signs, dc, end);
+                    assert_eq!(fast.bundles.len(), direct.bundles.len());
+                    for (a, b) in fast.bundles.iter().zip(&direct.bundles) {
+                        assert_eq!(
+                            (a.bundle_type.as_u8(), a.context, a.bits, a.bit_len, a.flush),
+                            (b.bundle_type.as_u8(), b.context, b.bits, b.bit_len, b.flush)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn sparse_prefix_signs_match_the_direct_recorder_at_every_width() {
     for width in 1..=4 {
         let mut cache = SparsePrefixes::default();
@@ -1366,6 +1419,50 @@ fn implicit_switch_counts_exclude_unterminated_and_same_context_records() {
     assert_eq!(report.context_stats[0].flush_context_switch, 0);
     assert_eq!(report.context_stats[1].flush_context_switch, 2);
     assert_eq!(report.context_stats[0].flush_end_of_block, 1);
+}
+
+#[test]
+fn cold_dc_cycles_materialize_records_symbols_and_reusable_keys() {
+    // A long row has multiple complete tile cycles and a partial final cycle.
+    let dims = FrameDimensions::new(8 * 101, 8);
+    let mut previous = None;
+    for exceptional in [29, 67, 67] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut cached, mut direct] = slots.each_mut().map(|s| {
+            BundleStreamRecorder::new(
+                s,
+                4,
+                dims,
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        for i in 0..101 {
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = 7;
+            if i == exceptional {
+                levels[ZIG_ZAG[5]] = -1;
+            }
+            cached.record_block(i, &levels, FrameType::Intra);
+            direct.record_ac_range(cached.tile(i), &levels, FrameType::Intra, 1..BLOCK_PIXELS);
+            cached.record_eob();
+            direct.record_eob();
+        }
+        let actual = cached.finish_segment(previous);
+        for i in 8..101 {
+            if i != exceptional {
+                assert_eq!(actual.repeat_keys[i], 128 + (i % 8) as u16);
+            }
+        }
+        assert_eq!(
+            crate::core::to_bytes(&actual.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        previous = Some(actual);
+    }
 }
 
 #[test]
@@ -3147,6 +3244,28 @@ fn dct_tables_satisfy_centered_projection_bound() {
             assert!(row.iter().sum::<f64>().abs() < 1e-12);
         } else {
             assert!(row.iter().all(|&v| v == row[0]));
+        }
+    }
+}
+
+#[test]
+fn strided_pixel_folds_match_signed_scalar_residuals() {
+    for stride in [8, 15, 32, 129] {
+        let start = 3 * stride + stride - BLOCK_SIZE;
+        let len = start + 7 * stride + BLOCK_SIZE;
+        let pixels: Vec<_> = (0..len).map(|i| (i * 79) as u8).collect();
+        let predictor: Vec<_> = pixels.iter().map(|&v| 255 - v).collect();
+        for reference in [None, Some(&predictor[..])] {
+            let expected = fold_scalar(|y| {
+                std::array::from_fn(|x| {
+                    let i = start + y * stride + x;
+                    i16::from(pixels[i]) - reference.map_or(0, |p| i16::from(p[i]))
+                })
+            });
+            assert_eq!(
+                ResidualRows::new(&pixels, reference, stride, start).folded(),
+                expected
+            );
         }
     }
 }
