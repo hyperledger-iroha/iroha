@@ -12671,6 +12671,12 @@
    "evidence": {"path": "crates/iroha_data_model/src/isi/registry.rs", "literal": "fn baseline_instruction_layouts_stay_frozen()"}
   },
   {
+   "path": "specs/runtime_baseline_storage_layouts.tsv",
+   "registered": false,
+   "purpose": "Core's baseline storage test compares the installed key and value schemas and their structural digests with this fixture, including both positions of the RAM-LFE program policy table.",
+   "evidence": {"path": "crates/iroha_core/src/state/authority_registry/storage_layout.rs", "literal": "fn baseline_storage_layouts_stay_frozen()"}
+  },
+  {
    "path": "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
    "kind": "registered_regions_only",
    "registered": true,
@@ -13032,11 +13038,12 @@
    "component": "specs",
    "role": "generated_artifact",
    "tasks": ["F.4", "V.1"],
-   "summary": "Generated installed-interface baseline definitions and the pinned payload layout of every baseline instruction name FHE and RAM-LFE policies and operations. These files own no arithmetic; inventory registration neither regenerates nor qualifies the frozen runtime baseline.",
+   "summary": "Generated installed-interface baseline definitions and the pinned payload layout of every baseline instruction name FHE and RAM-LFE policies and operations. The storage layout fixture records the RAM-LFE program policy table's key and value schemas for the Core baseline test. These files own no arithmetic; inventory registration neither regenerates nor qualifies the frozen runtime baseline.",
    "files": [
     {"path": "crates/ivm/tests/fixtures/baseline_v1/descriptors/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"], "test_only": true},
     {"path": "specs/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"]},
-    {"path": "specs/runtime_baseline_instruction_layouts.tsv", "patterns": ["fhe", "ram_lfe"]}
+    {"path": "specs/runtime_baseline_instruction_layouts.tsv", "patterns": ["fhe", "ram_lfe"]},
+    {"path": "specs/runtime_baseline_storage_layouts.tsv", "patterns": ["ram_lfe"]}
    ]
   },
   {
