@@ -224,8 +224,15 @@ pub(crate) fn global_data_trigger_scope_metadata_for_testing(grantee: &AccountId
 pub mod isi {
     use super::specialized::LoadedActionTrait as _;
     use super::{super::prelude::*, *};
+    use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
+    use crate::smartcontracts::ivm::profile::ResolvedIvmProfile;
     use iroha_data_model::isi::error::{InvalidParameterError, RepetitionError};
+    use iroha_data_model::ivm_c10::{
+        EventFilterBoxC10V1, PipelineEventFilterBoxC10V1, RegisterTriggerC10V1, StoredC10TriggerV1,
+        TransactionStatusC10V1, TriggerC10V1,
+    };
     use iroha_model_base::name::Name;
+
     const RESERVED_TRIGGER_METADATA_KEYS: [&str; 5] = [
         TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
         "__registered_at_ms",
@@ -251,6 +258,23 @@ pub mod isi {
             .get(submitting_authority)
             .is_some_and(|permissions| permissions.contains(&required))
     }
+    /// Resolve the actual owner across the two disjoint trigger identifier stores.
+    pub(crate) fn trigger_belongs_to(
+        world: &impl crate::state::WorldReadOnly,
+        id: &TriggerId,
+        authority: &AccountId,
+    ) -> Option<bool> {
+        world
+            .c10_triggers()
+            .get(id)
+            .map(|row| row.trigger().action.authority() == authority)
+            .or_else(|| {
+                world
+                    .triggers()
+                    .inspect_by_id(id, |action| action.authority() == authority)
+            })
+    }
+
     fn account_owns_data_trigger_scope(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -309,11 +333,7 @@ pub mod isi {
                     .is_ok_and(|rwa| &rwa.owned_by == authority)
             }),
             DataEventFilter::Trigger(filter) => filter.id_matcher().as_ref().is_some_and(|id| {
-                state_transaction
-                    .world
-                    .triggers
-                    .inspect_by_id(id, |action| action.authority() == authority)
-                    .unwrap_or(false)
+                trigger_belongs_to(&state_transaction.world, id, authority) == Some(true)
             }),
             // A bond-scoped filter belongs to the issuer owning the bond definition.
             DataEventFilter::Bond(bond) => bond.as_ref().is_some_and(|bond| {
@@ -347,12 +367,12 @@ pub mod isi {
     fn enforce_data_trigger_scope_and_capacity(
         state_transaction: &StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
-        trigger: &Trigger,
+        trigger_authority: &AccountId,
+        filter: Option<&DataEventFilter>,
     ) -> Result<Option<DataTriggerScopeAuthorization>, Error> {
-        let EventFilterBox::Data(filter) = trigger.action().filter() else {
+        let Some(filter) = filter else {
             return Ok(None);
         };
-        let trigger_authority = trigger.action().authority();
         let authorization = if account_owns_data_trigger_scope(
             state_transaction,
             trigger_authority,
@@ -374,7 +394,14 @@ pub mod isi {
             ));
         };
         let triggers = state_transaction.world.triggers.data_triggers();
-        if triggers.len() >= MAX_DATA_TRIGGERS_TOTAL {
+        let c10_data = || {
+            state_transaction
+                .world
+                .c10_trigger_candidates
+                .iter()
+                .filter(|(_, kind)| **kind == TriggeringEventType::Data)
+        };
+        if triggers.len().saturating_add(c10_data().count()) >= MAX_DATA_TRIGGERS_TOTAL {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(format!(
                     "data trigger capacity exceeded: maximum {MAX_DATA_TRIGGERS_TOTAL}"
@@ -385,7 +412,16 @@ pub mod isi {
             .iter()
             .filter(|(_, action)| &action.authority == trigger_authority)
             .count();
-        if authority_count >= MAX_DATA_TRIGGERS_PER_AUTHORITY {
+        let c10_authority_count = c10_data()
+            .filter(|(id, _)| {
+                state_transaction
+                    .world
+                    .c10_triggers
+                    .get(id)
+                    .is_some_and(|stored| stored.trigger().action.authority() == trigger_authority)
+            })
+            .count();
+        if authority_count.saturating_add(c10_authority_count) >= MAX_DATA_TRIGGERS_PER_AUTHORITY {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(format!(
                     "data trigger authority capacity exceeded: maximum {MAX_DATA_TRIGGERS_PER_AUTHORITY}"
@@ -404,18 +440,26 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         action: &super::specialized::LoadedAction<DataEventFilter>,
     ) -> bool {
-        match decode_data_trigger_scope_authorization(action.metadata()) {
-            Some(DataTriggerScopeAuthorization::Owned) => account_owns_data_trigger_scope(
-                state_transaction,
-                action.authority(),
-                &action.filter,
-            ),
+        data_scope_is_authorized(
+            state_transaction,
+            action.authority(),
+            &action.filter,
+            action.metadata(),
+        )
+    }
+
+    pub(crate) fn data_scope_is_authorized(
+        tx: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        filter: &DataEventFilter,
+        metadata: &Metadata,
+    ) -> bool {
+        match decode_data_trigger_scope_authorization(metadata) {
+            Some(DataTriggerScopeAuthorization::Owned) => {
+                account_owns_data_trigger_scope(tx, authority, filter)
+            }
             Some(DataTriggerScopeAuthorization::GlobalPermission(grantee)) => {
-                has_exact_global_data_trigger_permission(
-                    state_transaction,
-                    &grantee,
-                    action.authority(),
-                )
+                has_exact_global_data_trigger_permission(tx, &grantee, authority)
             }
             None => false,
         }
@@ -449,11 +493,13 @@ pub mod isi {
         Ok(())
     }
     fn enforce_ivm_trigger_program_policy(
+        profile: ResolvedIvmProfile,
         executable: &Executable,
         metadata: &Metadata,
         upper_bound: core::num::NonZeroU64,
         fuel: core::num::NonZeroU64,
         prepared_contracts: crate::smartcontracts::ivm::cache::PreparedContractCache,
+        record_admission: impl FnOnce(&::ivm::VMError),
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
@@ -476,13 +522,15 @@ pub mod isi {
         };
         // Trigger registration is a first-release interface: it names the interface profile,
         // resolved before any header byte is read.
-        let profile = crate::smartcontracts::ivm::profile::ResolvedIvmProfile::interface_default();
         let admitted = crate::smartcontracts::ivm::cache::IvmCache::with_prepared_contract_cache(
             0,
             prepared_contracts,
         )
         .summarize_executable_for_profile(bytecode, profile.id())
         .map_err(|error| {
+            if profile.id() == ::ivm::IvmProfileId::C10_ABI_V1 {
+                record_admission(&error);
+            }
             match crate::execution_attempt::ExecutionDeferred::try_from_vm_error(error) {
                 Ok(original) => crate::execution_attempt::ExecutionAttemptError::Deferred(original),
                 Err(error) => crate::execution_attempt::ExecutionAttemptError::Rejected(
@@ -655,21 +703,123 @@ pub mod isi {
         )
     }
 
-    /// Register one fresh incarnation with the mode carried by its signed instruction.
+    struct RegistrationAction<'a> {
+        id: &'a TriggerId,
+        executable: &'a Executable,
+        authority: &'a AccountId,
+        repeats: Repeats,
+        metadata: &'a Metadata,
+        has_retry_policy: bool,
+        kind: TriggeringEventType,
+        data: Option<&'a DataEventFilter>,
+        time: Option<&'a TimeEventFilter>,
+        deterministic: bool,
+        mintable: bool,
+        profile: ResolvedIvmProfile,
+    }
+
+    impl<'a> RegistrationAction<'a> {
+        fn baseline(trigger: &'a Trigger) -> Self {
+            let action = trigger.action();
+            let (kind, data, time, deterministic) = match action.filter() {
+                EventFilterBox::Data(f) => (TriggeringEventType::Data, Some(f), None, true),
+                EventFilterBox::Time(f) => (TriggeringEventType::Time, None, Some(f), true),
+                EventFilterBox::ExecuteTrigger(_) => {
+                    (TriggeringEventType::ExecuteTrigger, None, None, true)
+                }
+                EventFilterBox::Pipeline(f) => (
+                    TriggeringEventType::Pipeline,
+                    None,
+                    None,
+                    match f {
+                        PipelineEventFilterBox::Transaction(f) => matches!(
+                            f.status().as_ref(),
+                            Some(TransactionStatus::Approved | TransactionStatus::Rejected(_))
+                        ),
+                        PipelineEventFilterBox::Block(f) => {
+                            matches!(f.status().as_ref(), Some(BlockStatus::Approved))
+                        }
+                        _ => false,
+                    },
+                ),
+                EventFilterBox::TriggerCompleted(_) => unreachable!("action constructor invariant"),
+            };
+            Self {
+                id: trigger.id(),
+                executable: action.executable(),
+                authority: action.authority(),
+                repeats: action.repeats,
+                metadata: action.metadata(),
+                has_retry_policy: action.retry_policy().is_some(),
+                kind,
+                data,
+                time,
+                deterministic,
+                mintable: action.filter().mintable(),
+                profile: ResolvedIvmProfile::interface_default(),
+            }
+        }
+
+        fn c10(trigger: &'a TriggerC10V1) -> Self {
+            let action = &trigger.action;
+            let (kind, data, time, deterministic) = match action.filter() {
+                EventFilterBoxC10V1::Data(f) => (TriggeringEventType::Data, Some(f), None, true),
+                EventFilterBoxC10V1::Time(f) => (TriggeringEventType::Time, None, Some(f), true),
+                EventFilterBoxC10V1::ExecuteTrigger(_) => {
+                    (TriggeringEventType::ExecuteTrigger, None, None, true)
+                }
+                EventFilterBoxC10V1::Pipeline(f) => (
+                    TriggeringEventType::Pipeline,
+                    None,
+                    None,
+                    match f {
+                        PipelineEventFilterBoxC10V1::Transaction(f) => matches!(
+                            f.status.as_ref(),
+                            Some(
+                                TransactionStatusC10V1::Approved
+                                    | TransactionStatusC10V1::Rejected(_)
+                            )
+                        ),
+                        PipelineEventFilterBoxC10V1::Block(f) => {
+                            matches!(f.status().as_ref(), Some(BlockStatus::Approved))
+                        }
+                        _ => false,
+                    },
+                ),
+                EventFilterBoxC10V1::TriggerCompleted(_) => {
+                    unreachable!("action constructor invariant")
+                }
+            };
+            Self {
+                id: &trigger.id,
+                executable: action.executable(),
+                authority: action.authority(),
+                repeats: action.repeats(),
+                metadata: action.metadata(),
+                has_retry_policy: action.retry_policy().is_some(),
+                kind,
+                data,
+                time,
+                deterministic,
+                mintable: action.filter().mintable(),
+                profile: ResolvedIvmProfile::of_id(::ivm::IvmProfileId::C10_ABI_V1),
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn register_trigger_internal_with_consent(
+    fn registration_metadata(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
-        trigger: Trigger,
+        action: &RegistrationAction<'_>,
         preauthorized_manifest_contract_subject: Option<&AccountId>,
         current_bindings: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<Metadata, Error> {
         if current_bindings {
             crate::runtime::deferred_consent::require_enabled(state_transaction)?;
         }
-        let mut new_trigger = trigger;
         crate::runtime::ironwood::admission::executable(
-            new_trigger.action().executable(),
+            action.executable,
             state_transaction.world.runtime_selection.get(),
         )
         .map_err(|error| {
@@ -677,8 +827,8 @@ pub mod isi {
                 Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
             }))
         })?;
-        state_transaction.validate_execution_output_registration(&new_trigger)?;
-        if new_trigger.action().repeats().is_depleted() {
+        state_transaction.validate_execution_output_registration(action.id, action.kind)?;
+        if action.repeats.is_depleted() {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "trigger repeat count must be greater than zero".into(),
@@ -689,7 +839,7 @@ pub mod isi {
         // opaque deferred executable, so refuse the action before it is stored. Execution
         // re-checks every derived group, including contract outputs and multisig approvals.
         if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
-            new_trigger.action().executable(),
+            action.executable,
             state_transaction.world.runtime_selection.get(),
         ) {
             return Err(Error::InvalidParameter(
@@ -700,8 +850,9 @@ pub mod isi {
             ));
         }
         enforce_ivm_trigger_program_policy(
-            new_trigger.action().executable(),
-            new_trigger.metadata(),
+            action.profile,
+            action.executable,
+            action.metadata,
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
             state_transaction
                 .world
@@ -710,17 +861,22 @@ pub mod isi {
                 .smart_contract()
                 .fuel(),
             state_transaction.prepared_contract_cache(),
+            |error| state_transaction.record_c10_admission_error(error),
         )
         .map_err(|error| state_transaction.attempt_error_to_instruction_error(error))?;
-        let data_scope_authorization =
-            enforce_data_trigger_scope_and_capacity(state_transaction, authority, &new_trigger)?;
+        let data_scope_authorization = enforce_data_trigger_scope_and_capacity(
+            state_transaction,
+            authority,
+            action.authority,
+            action.data,
+        )?;
         {
             // Enforce minimal permission: only genesis block, the trigger owner,
             // an account with CanRegisterTrigger{authority: <owner>}, or the
             // contract lifecycle path for its exact derived and already-registered
             // subject may register the trigger. Alias-domain ownership does not
             // authorize acting as the canonical, domainless account.
-            let owner = new_trigger.action().authority().clone();
+            let owner = action.authority.clone();
             let is_preauthorized_manifest_contract_subject =
                 preauthorized_manifest_contract_subject.is_some_and(|subject| subject == &owner);
             if is_preauthorized_manifest_contract_subject {
@@ -748,8 +904,7 @@ pub mod isi {
                 ));
             }
         }
-        if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
-            new_trigger.action().filter()
+        if let Some(TimeEventFilter(ExecutionTime::Schedule(schedule))) = action.time
             && let Some(period_ms) = schedule.period_ms
         {
             if period_ms == 0 {
@@ -773,10 +928,10 @@ pub mod isi {
                 ));
             }
         }
-        if new_trigger.action().retry_policy().is_some()
+        if action.has_retry_policy
             && !matches!(
-                new_trigger.action().filter(),
-                EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(_)))
+                action.time,
+                Some(TimeEventFilter(ExecutionTime::Schedule(_)))
             )
         {
             return Err(Error::InvalidParameter(
@@ -786,7 +941,7 @@ pub mod isi {
                 ),
             ));
         }
-        let progress_attempts = progress::declaration(new_trigger.action().metadata())
+        let progress_attempts = progress::declaration(action.metadata)
             .map_err(|message| InvalidParameterError::SmartContract(message.into()))?;
         if progress_attempts.is_some() && state_transaction.is_trigger_execution_active() {
             return Err(InvalidParameterError::SmartContract(
@@ -796,8 +951,8 @@ pub mod isi {
         }
         if progress_attempts.is_some()
             && !matches!(
-                new_trigger.action().filter(),
-                EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(_)))
+                action.time,
+                Some(TimeEventFilter(ExecutionTime::Schedule(_)))
             )
         {
             return Err(InvalidParameterError::SmartContract(
@@ -812,7 +967,7 @@ pub mod isi {
                     invocation,
                 )
             };
-        let executable_duplicates_enacted_payout = match new_trigger.action().executable() {
+        let executable_duplicates_enacted_payout = match action.executable {
             Executable::ContractCall(invocation) => duplicates_enacted_payout(invocation),
             Executable::Batch(items) => items.iter().any(|item| {
                 matches!(
@@ -825,38 +980,22 @@ pub mod isi {
             }),
             Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
         };
-        if matches!(new_trigger.action().filter(), EventFilterBox::Time(_))
-            && executable_duplicates_enacted_payout
-        {
+        if action.time.is_some() && executable_duplicates_enacted_payout {
             return Err(Error::InvariantViolation(
                 "an enacted validation-fee payout lifecycle pins its sole scheduled trigger".into(),
             ));
         }
-        if let EventFilterBox::Pipeline(filter) = new_trigger.action().filter() {
-            match filter {
-                PipelineEventFilterBox::Transaction(filter)
-                    if matches!(
-                        filter.status().as_ref(),
-                        Some(TransactionStatus::Approved | TransactionStatus::Rejected(_))
-                    ) => {}
-                PipelineEventFilterBox::Block(filter)
-                    if matches!(filter.status().as_ref(), Some(BlockStatus::Approved)) => {}
-                _ => {
-                    return Err(Error::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "pipeline triggers may only target deterministic transaction Approved/Rejected or block Approved events"
-                                .into(),
-                        ),
-                    ));
-                }
-            }
+        if !action.deterministic {
+            return Err(Error::InvalidParameter(InvalidParameterError::SmartContract(
+                "pipeline triggers may only target deterministic transaction Approved/Rejected or block Approved events".into(),
+            )));
         }
         // Mark the registration block so scheduled time and pipeline callbacks do not
         // inherit a same-block match from an older incarnation of the same ID. Data
         // and explicit-call triggers intentionally remain executable in-transaction.
-        {
+        let metadata = {
             use iroha_primitives::json::Json;
-            enforce_trigger_metadata_limits(new_trigger.action().metadata(), state_transaction)?;
+            enforce_trigger_metadata_limits(action.metadata, state_transaction)?;
             let key_height = TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse::<Name>()
                 .expect("Valid metadata key");
@@ -866,7 +1005,7 @@ pub mod isi {
             let height = state_transaction._curr_block.height().get();
             let created_ms = state_transaction._curr_block.creation_time().as_millis();
             let created_ms = u64::try_from(created_ms).unwrap_or(u64::MAX);
-            let mut metadata = new_trigger.action().clone().metadata;
+            let mut metadata = action.metadata.clone();
             metadata.insert(key_height, Json::from(height));
             metadata.insert(key_time, Json::from(created_ms));
             if let Some(attempts) = progress_attempts {
@@ -892,17 +1031,51 @@ pub mod isi {
                     );
                 }
             }
-            let action = new_trigger.action().clone().with_metadata(metadata);
-            new_trigger = Trigger::new(new_trigger.id().clone(), action);
-        }
-        if !new_trigger.action().filter().mintable() {
-            match new_trigger.action().repeats() {
+            metadata
+        };
+        if !action.mintable {
+            match action.repeats {
                 Repeats::Exactly(1) => (),
                 _ => {
                     return Err(MathError::Overflow.into());
                 }
             }
         }
+        Ok(metadata)
+    }
+
+    /// Register one fresh incarnation with the mode carried by its signed instruction.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn register_trigger_internal_with_consent(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        trigger: Trigger,
+        preauthorized_manifest_contract_subject: Option<&AccountId>,
+        current_bindings: bool,
+    ) -> Result<(), Error> {
+        let metadata = registration_metadata(
+            authority,
+            state_transaction,
+            &RegistrationAction::baseline(&trigger),
+            preauthorized_manifest_contract_subject,
+            current_bindings,
+        )?;
+        if state_transaction
+            .world
+            .c10_triggers
+            .get(trigger.id())
+            .is_some()
+        {
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: trigger.id().clone().into(),
+            }
+            .into());
+        }
+        let new_trigger = Trigger::new(
+            trigger.id().clone(),
+            trigger.action().clone().with_metadata(metadata),
+        );
         let consent = crate::runtime::deferred_consent::prepare_trigger(
             state_transaction,
             &new_trigger,
@@ -956,6 +1129,203 @@ pub mod isi {
             .emit_events(Some(TriggerEvent::Created(trigger_id)));
         Ok(())
     }
+    /// Install an action bound to the selected C10 host and its typed event family.
+    pub(crate) fn register_c10_trigger_internal(
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        mut trigger: TriggerC10V1,
+        preauthorized_manifest_contract_subject: Option<&AccountId>,
+    ) -> Result<(), Error> {
+        crate::smartcontracts::ivm::host_profile::ensure_at_height(
+            &state_transaction.world,
+            ::ivm::IvmProfileId::C10_ABI_V1,
+            state_transaction.block_height(),
+        )
+        .map_err(|error| match error {
+            ValidationFail::InstructionFailed(error) => error,
+            other => {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(other.to_string()))
+            }
+        })?;
+        state_transaction.mark_c10_execution();
+        let action = RegistrationAction::c10(&trigger);
+        let scan_kind = trigger.event_scan_kind();
+        let metadata = registration_metadata(
+            authority,
+            state_transaction,
+            &action,
+            preauthorized_manifest_contract_subject,
+            false,
+        )?;
+        let id = trigger.id.clone();
+        if state_transaction.world.triggers.ids().get(&id).is_some()
+            || state_transaction.world.c10_triggers.get(&id).is_some()
+        {
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: id.into(),
+            }
+            .into());
+        }
+        let consent = crate::runtime::deferred_consent::prepare_trigger_action(
+            state_transaction,
+            trigger.action.executable(),
+            trigger.action.authority(),
+            false,
+        )?;
+        trigger.action = trigger.action.with_metadata(metadata);
+        state_transaction
+            .world
+            .c10_triggers
+            .insert(id.clone(), StoredC10TriggerV1::new(trigger));
+        state_transaction.c10_trigger_inserted(&id);
+        if let Some(kind) = scan_kind {
+            state_transaction
+                .world
+                .c10_trigger_candidates
+                .insert(id.clone(), kind);
+        }
+        if let Some(record) = consent {
+            state_transaction.world.runtime_deferred_consents.insert(
+                iroha_data_model::runtime::deferred::DeferredConsentKeyV1::Trigger(id.clone()),
+                record,
+            );
+        }
+        state_transaction
+            .world
+            .emit_events(Some(TriggerEvent::Created(id)));
+        Ok(())
+    }
+
+    /// Delete the C10 incarnation, its derived index, deferred consent and permissions.
+    /// Emit the deletion only for the owner that actually removed a row.
+    pub(crate) fn remove_c10_trigger(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        id: &TriggerId,
+    ) -> bool {
+        let before = state_transaction.c10_trigger_snapshot(id);
+        if state_transaction
+            .world
+            .c10_triggers
+            .remove(id.clone())
+            .is_none()
+        {
+            return false;
+        }
+        state_transaction
+            .world
+            .c10_trigger_candidates
+            .remove(id.clone());
+        state_transaction.c10_trigger_removed(id, before);
+        remove_trigger_associated_permissions(state_transaction, id);
+        state_transaction
+            .world
+            .emit_events(Some(TriggerEvent::Deleted(id.clone())));
+        true
+    }
+
+    /// Source-grantee migrations and affected C10 rows, captured before any controller write.
+    pub(crate) fn preflight_c10_rekey(
+        tx: &StateTransaction<'_, '_>,
+        old: &AccountId,
+        new: &AccountId,
+    ) -> Result<(Vec<TriggerId>, Vec<(AccountId, AccountId)>), Error> {
+        let mut ids = Vec::new();
+        let mut grantees = Vec::new();
+        let mut merged = 0;
+        for (id, row) in tx.world.c10_triggers.iter() {
+            let action = &row.trigger().action;
+            let mut affected = action.authority() == old;
+            match action.filter() {
+                EventFilterBoxC10V1::Data(filter) => {
+                    merged += usize::from(affected || action.authority() == new);
+                    let grantee = super::data_trigger_global_permission_grantee(action.metadata())
+                        .map_err(|()| {
+                            Error::InvariantViolation(
+                                "malformed C10 data trigger scope during controller change".into(),
+                            )
+                        })?;
+                    if let Some(grantee) = grantee {
+                        if affected {
+                            let migrated = if &grantee == old {
+                                new.clone()
+                            } else {
+                                grantee.clone()
+                            };
+                            grantees.push((grantee.clone(), migrated));
+                        }
+                        affected |= &grantee == old;
+                    }
+                    affected |= filter.references_account_id(old);
+                }
+                EventFilterBoxC10V1::ExecuteTrigger(f) => affected |= f.authority() == Some(old),
+                _ => {}
+            }
+            if affected {
+                ids.push(id.clone());
+            }
+        }
+        if merged != 0 {
+            let previous = tx
+                .world
+                .triggers
+                .data_triggers()
+                .iter()
+                .filter(|(_, action)| action.authority() == old || action.authority() == new)
+                .count();
+            if merged + previous > MAX_DATA_TRIGGERS_PER_AUTHORITY {
+                return Err(Error::InvariantViolation(
+                    "controller change would exceed the combined data trigger authority capacity"
+                        .into(),
+                ));
+            }
+        }
+        Ok((ids, grantees))
+    }
+
+    /// Apply the preflighted changes in the lifecycle journal for the same transaction.
+    pub(crate) fn apply_c10_rekey(
+        tx: &mut StateTransaction<'_, '_>,
+        ids: Vec<TriggerId>,
+        old: &AccountId,
+        new: &AccountId,
+    ) -> Result<(), Error> {
+        for id in ids {
+            let changed_filter = tx
+                .update_c10_trigger(&id, |row| {
+                    let changed_filter = row.replace_account_id(old, new);
+                    if matches!(row.trigger().action.filter(), EventFilterBoxC10V1::Data(_)) {
+                        super::replace_data_trigger_global_permission_grantee(
+                            row.metadata_mut(),
+                            old,
+                            new,
+                        )?;
+                    }
+                    Ok::<_, ()>(changed_filter)
+                })
+                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))?
+                .map_err(|()| {
+                    Error::InvariantViolation(
+                        "C10 data trigger scope changed after controller preflight".into(),
+                    )
+                })?;
+            if changed_filter {
+                tx.world.triggers.data_trigger_reenabled(&id);
+            }
+        }
+        Ok(())
+    }
+
+    impl Execute for RegisterTriggerC10V1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            register_c10_trigger_internal(authority, state_transaction, self.object, None)
+        }
+    }
+
     impl Execute for Register<Trigger> {
         #[metrics(+"register_trigger")]
         fn execute(
@@ -981,6 +1351,16 @@ pub mod isi {
                 return Err(Error::InvariantViolation(
                     "an enacted validation-fee payout lifecycle pins this trigger".into(),
                 ));
+            }
+            if state_transaction
+                .world
+                .c10_triggers
+                .get(&trigger_id)
+                .is_some()
+            {
+                state_transaction.mark_c10_execution();
+                remove_c10_trigger(state_transaction, &trigger_id);
+                return Ok(());
             }
             if state_transaction.world.triggers.remove(&trigger_id) {
                 remove_trigger_associated_permissions(state_transaction, &trigger_id);
@@ -1013,20 +1393,34 @@ pub mod isi {
                     "an enacted validation-fee payout lifecycle pins this trigger".into(),
                 ));
             }
-            let triggers = &mut state_transaction.world.triggers;
-            triggers
-                .inspect_by_id(&id, |action| -> Result<(), Error> {
-                    if action.mintable() {
-                        Ok(())
-                    } else {
-                        Err(MathError::Overflow.into())
+            if let Some(row) = state_transaction.world.c10_triggers.get(&id) {
+                let action = &row.trigger().action;
+                let total = match action.repeats() {
+                    Repeats::Exactly(n) if action.filter().mintable() => {
+                        n.checked_add(*self.object())
                     }
-                })
-                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))??;
-            triggers.mod_repeats(&id, |n| {
-                n.checked_add(*self.object())
-                    .ok_or(super::set::RepeatsOverflowError)
-            })?;
+                    _ => None,
+                };
+                state_transaction.mark_c10_execution();
+                let remaining = total.ok_or(MathError::Overflow)?;
+                state_transaction
+                    .update_c10_trigger(&id, |row| row.set_repeats(Repeats::Exactly(remaining)));
+            } else {
+                let triggers = &mut state_transaction.world.triggers;
+                triggers
+                    .inspect_by_id(&id, |action| -> Result<(), Error> {
+                        if action.mintable() {
+                            Ok(())
+                        } else {
+                            Err(MathError::Overflow.into())
+                        }
+                    })
+                    .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))??;
+                triggers.mod_repeats(&id, |n| {
+                    n.checked_add(*self.object())
+                        .ok_or(super::set::RepeatsOverflowError)
+                })?;
+            }
             state_transaction
                 .world
                 .emit_events(Some(TriggerEvent::Extended(
@@ -1054,23 +1448,39 @@ pub mod isi {
                     "an enacted validation-fee payout lifecycle pins this trigger".into(),
                 ));
             }
-            let mut removed = false;
-            {
-                let triggers = &mut state_transaction.world.triggers;
-                triggers.mod_repeats(&trigger, |n| {
-                    n.checked_sub(*self.object())
-                        .ok_or(super::set::RepeatsOverflowError)
-                })?;
-                // Remove triggers that reached zero repeats immediately to avoid latent state
-                let should_remove = triggers
-                    .inspect_by_id(&trigger, |action| action.repeats().is_depleted())
-                    .unwrap_or(false);
-                if should_remove {
-                    removed = triggers.remove(&trigger);
+            if let Some(row) = state_transaction.world.c10_triggers.get(&trigger) {
+                let remaining = match row.trigger().action.repeats() {
+                    Repeats::Exactly(n) => n.checked_sub(*self.object()),
+                    Repeats::Indefinitely => None,
+                };
+                state_transaction.mark_c10_execution();
+                let remaining = remaining.ok_or(MathError::Overflow)?;
+                if remaining == 0 {
+                    remove_c10_trigger(state_transaction, &trigger);
+                } else {
+                    state_transaction.update_c10_trigger(&trigger, |row| {
+                        row.set_repeats(Repeats::Exactly(remaining))
+                    });
                 }
-            }
-            if removed {
-                remove_trigger_associated_permissions(state_transaction, &trigger);
+            } else {
+                let mut removed = false;
+                {
+                    let triggers = &mut state_transaction.world.triggers;
+                    triggers.mod_repeats(&trigger, |n| {
+                        n.checked_sub(*self.object())
+                            .ok_or(super::set::RepeatsOverflowError)
+                    })?;
+                    // Remove triggers that reached zero repeats immediately to avoid latent state
+                    let should_remove = triggers
+                        .inspect_by_id(&trigger, |action| action.repeats().is_depleted())
+                        .unwrap_or(false);
+                    if should_remove {
+                        removed = triggers.remove(&trigger);
+                    }
+                }
+                if removed {
+                    remove_trigger_associated_permissions(state_transaction, &trigger);
+                }
             }
             state_transaction
                 .world
@@ -1116,13 +1526,25 @@ pub mod isi {
                 "max_metadata_value_bytes",
                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
             )?;
-            state_transaction
+            if state_transaction
                 .world
-                .triggers
-                .inspect_by_id_mut(&trigger_id, |action| {
-                    action.metadata_mut().insert(key.clone(), value.clone())
-                })
-                .ok_or(FindError::Trigger(trigger_id.clone()))?;
+                .c10_triggers
+                .get(&trigger_id)
+                .is_some()
+            {
+                state_transaction.mark_c10_execution();
+                state_transaction.update_c10_trigger(&trigger_id, |row| {
+                    row.metadata_mut().insert(key.clone(), value.clone())
+                });
+            } else {
+                state_transaction
+                    .world
+                    .triggers
+                    .inspect_by_id_mut(&trigger_id, |action| {
+                        action.metadata_mut().insert(key.clone(), value.clone())
+                    })
+                    .ok_or(FindError::Trigger(trigger_id.clone()))?;
+            }
             state_transaction
                 .world
                 .emit_events(Some(TriggerEvent::MetadataInserted(MetadataChanged {
@@ -1156,16 +1578,31 @@ pub mod isi {
                 )
                 .into());
             }
-            let value = state_transaction
+            let value = if state_transaction
                 .world
-                .triggers
-                .try_inspect_by_id_mut(&trigger_id, |action| {
-                    action
-                        .metadata_mut()
-                        .remove(self.key().as_ref())
-                        .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
-                })
-                .ok_or(FindError::Trigger(trigger_id.clone()))??;
+                .c10_triggers
+                .get(&trigger_id)
+                .is_some()
+            {
+                state_transaction.mark_c10_execution();
+                state_transaction
+                    .update_c10_trigger(&trigger_id, |row| {
+                        row.metadata_mut().remove(self.key().as_ref())
+                    })
+                    .flatten()
+                    .ok_or_else(|| FindError::MetadataKey(self.key().clone()))?
+            } else {
+                state_transaction
+                    .world
+                    .triggers
+                    .try_inspect_by_id_mut(&trigger_id, |action| {
+                        action
+                            .metadata_mut()
+                            .remove(self.key().as_ref())
+                            .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
+                    })
+                    .ok_or(FindError::Trigger(trigger_id.clone()))??
+            };
             state_transaction
                 .world
                 .emit_events(Some(TriggerEvent::MetadataRemoved(MetadataChanged {
@@ -1443,11 +1880,13 @@ pub mod isi {
             let bound = core::num::NonZeroU64::new(1).expect("nonzero bound");
             let check = |invocation| {
                 enforce_ivm_trigger_program_policy(
+                    ResolvedIvmProfile::interface_default(),
                     &Executable::ContractCall(invocation),
                     &Metadata::default(),
                     bound,
                     bound,
                     PreparedContractCache::with_capacity(0),
+                    |_| {},
                 )
             };
             assert!(matches!(
@@ -1478,11 +1917,13 @@ pub mod isi {
             let budget = AllocationBudget::new(0);
             let cache = PreparedContractCache::with_execution_budget(0, budget.clone());
             let result = enforce_ivm_trigger_program_policy(
+                ResolvedIvmProfile::interface_default(),
                 &executable,
                 &Metadata::default(),
                 bound,
                 bound,
                 cache.clone(),
+                |_| {},
             );
             let Err(ExecutionAttemptError::Deferred(reason)) = result else {
                 panic!("original pool pressure must not become trigger rejection");
@@ -1494,11 +1935,13 @@ pub mod isi {
             assert_eq!(budget.peak_reserved_bytes(), 0);
             budget.set_limit_bytes(64 * 1024 * 1024);
             enforce_ivm_trigger_program_policy(
+                ResolvedIvmProfile::interface_default(),
                 &executable,
                 &Metadata::default(),
                 bound,
                 bound,
                 cache,
+                |_| {},
             )
             .expect("same original pool admits after local pressure resolves");
             assert!(budget.peak_reserved_bytes() > 0);
@@ -1517,11 +1960,13 @@ pub mod isi {
             let bound = core::num::NonZeroU64::new(1).expect("nonzero bound");
             assert!(matches!(
                 enforce_ivm_trigger_program_policy(
+                    ResolvedIvmProfile::interface_default(),
                     &executable,
                     &Metadata::default(),
                     bound,
                     bound,
                     crate::smartcontracts::ivm::cache::PreparedContractCache::with_capacity(0),
+                    |_| {},
                 ),
                 Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
                     Error::InvalidParameter(InvalidParameterError::SmartContract(message))
@@ -1612,13 +2057,18 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = TriggerId>, Error> {
             let triggers = state_ro.world().triggers();
+            let c10 = state_ro.world().c10_triggers();
+            let active = |row: &iroha_data_model::ivm_c10::StoredC10TriggerV1| {
+                let action = &row.trigger().action;
+                super::trigger_is_enabled(action.metadata()) && !action.repeats().is_depleted()
+            };
             let predicate_json = filter.json_payload().and_then(
                 iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
             );
             if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
                 let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
                     Box::new(candidate_ids.into_iter().filter(move |id| {
-                        trigger_id_is_active(triggers, id)
+                        (trigger_id_is_active(triggers, id) || c10.get(id).is_some_and(active))
                             && predicate_json.as_ref().map_or_else(
                                 || filter.applies(id),
                                 |predicate| predicate_matches_trigger_id(predicate, id),
@@ -1626,8 +2076,16 @@ pub mod query {
                     }));
                 return Ok(iter);
             }
-            let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
-                Box::new(triggers.active_trigger_ids_iter().cloned());
+            let iter: Box<dyn Iterator<Item = TriggerId> + '_> = Box::new(
+                triggers
+                    .active_trigger_ids_iter()
+                    .chain(
+                        c10.iter()
+                            .filter(move |(_, row)| active(row))
+                            .map(|(id, _)| id),
+                    )
+                    .cloned(),
+            );
             if filter.json_payload().is_none() {
                 return Ok(iter);
             }
@@ -1754,6 +2212,131 @@ mod tests {
         .expect("install original trigger component crypto policy");
         parameters.commit();
         world
+    }
+
+    #[test]
+    fn c10_trigger_admission_requires_selection_and_preserves_shared_id_and_scope_rules() {
+        use iroha_data_model::ivm_c10::{
+            ActionC10V1, EventFilterBoxC10V1, RegisterTriggerC10V1, TriggerC10V1,
+        };
+        let world = component_trigger_world();
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let id: TriggerId = "c10_owned_data".parse().unwrap();
+        let assemble = |filter: DataEventFilter| RegisterTriggerC10V1 {
+            object: TriggerC10V1 {
+                id: id.clone(),
+                action: ActionC10V1::new(
+                    vec![InstructionBox::from(Log::new(
+                        iroha_data_model::level::Level::INFO,
+                        "registered".into(),
+                    ))],
+                    Repeats::Exactly(2),
+                    ALICE_ID.clone(),
+                    EventFilterBoxC10V1::Data(filter),
+                )
+                .unwrap(),
+            },
+        };
+        let owned = || {
+            AccountEventFilter::new()
+                .for_account(ALICE_ID.clone())
+                .into()
+        };
+        let header = BlockHeader::new(NonZeroU64::MIN, None, None, 1_000, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            assert!(assemble(owned()).execute(&ALICE_ID, &mut tx).is_err());
+            assert!(tx.world.c10_triggers.get(&id).is_none());
+        }
+        for addition in [
+            crate::runtime::catalog::additions::DEFERRED_CONSENT,
+            crate::runtime::catalog::additions::IVM_C10,
+        ] {
+            crate::runtime::activate_additions_for_testing(&state.world, addition.module).unwrap();
+        }
+        let consent_key =
+            iroha_data_model::runtime::deferred::DeferredConsentKeyV1::Trigger(id.clone());
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        assert!(
+            assemble(DataEventFilter::Any)
+                .execute(&ALICE_ID, &mut tx)
+                .is_err()
+        );
+        assert!(tx.world.c10_trigger_candidates.get(&id).is_none());
+        assemble(owned()).execute(&ALICE_ID, &mut tx).unwrap();
+        assert!(
+            tx.world
+                .runtime_deferred_consents
+                .get(&consent_key)
+                .is_some()
+        );
+        assert!(crate::runtime::deferred_consent::trigger_ready_in_transaction(&tx, &id));
+        let stored = tx.world.c10_triggers.get(&id).unwrap();
+        assert_eq!(stored.trigger().id, id);
+        assert!(!trigger_was_registered_before_block(
+            stored.trigger().action.metadata(),
+            1
+        ));
+        assert!(trigger_was_registered_before_block(
+            stored.trigger().action.metadata(),
+            2
+        ));
+        assert_eq!(
+            tx.world.c10_trigger_candidates.get(&id),
+            Some(&TriggeringEventType::Data)
+        );
+        let baseline = || data_trigger("c10_owned_data", ALICE_ID.clone(), owned());
+        assert!(
+            Register::trigger(baseline())
+                .execute(&ALICE_ID, &mut tx)
+                .is_err()
+        );
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        let scoped: Permission =
+            iroha_executor_data_model::permission::trigger::CanExecuteTrigger {
+                trigger: id.clone(),
+            }
+            .into();
+        Grant::account_permission(scoped.clone(), BOB_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        assert!(tx.can_execute_trigger_for(&BOB_ID, &id));
+        Unregister::trigger(id.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        assert!(!tx.can_execute_trigger_for(&BOB_ID, &id));
+        assert!(
+            tx.world
+                .runtime_deferred_consents
+                .get(&consent_key)
+                .is_none()
+        );
+        assert!(
+            !tx.world
+                .account_permissions
+                .get(&*BOB_ID)
+                .is_some_and(|rows| rows.contains(&scoped))
+        );
+        assert!(
+            Unregister::trigger(id.clone())
+                .execute(&ALICE_ID, &mut tx)
+                .is_err()
+        );
+        assert!(tx.world.c10_trigger_candidates.get(&id).is_none());
+        Register::trigger(baseline())
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        assert!(!tx.can_execute_trigger_for(&BOB_ID, &id));
+        assert!(assemble(owned()).execute(&ALICE_ID, &mut tx).is_err());
+        assert!(tx.world.c10_triggers.get(&id).is_none());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 //! Contracts helpers.
+use ivm_abi::error::VmTrap;
 mod local_debug_attempt;
 mod local_debug_rendering;
 mod manifest_signing;
@@ -1075,14 +1076,22 @@ where
     fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
         self.inner.prepared_entrypoint_arguments()
     }
-    fn prepare_syscall(&self, number: u32, vm: &ivm::IVM) -> Result<u64, ivm::VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, ivm::VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut ivm::IVM) -> Result<u64, ivm::VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, ivm::VMError> {
         let record = LocalContractSyscallTrace {
-            pc: vm.pc(),
+            pc: vm.quote().program_counter(),
             syscall: number,
-            gas_remaining_at_call: vm.remaining_gas(),
+            gas_remaining_at_call: vm.quote().remaining_gas(),
             additional_gas: None,
             error: None,
         };
@@ -1489,7 +1498,7 @@ fn local_debug_execution_failure(
     syscall_trace: &[LocalContractSyscallTrace],
 ) -> String {
     let failure = format!("contract debug {operation} execution failed: {error}");
-    let state_value_undecodable = matches!(error, ivm::VMError::DecodeError)
+    let state_value_undecodable = matches!(error, ivm::VMError::Trap(VmTrap::DecodeError))
         && syscall_trace.last().is_some_and(|entry| {
             entry.syscall == ivm::syscalls::SYSCALL_STATE_VALUE_DECODE && entry.error.is_some()
         });
@@ -1961,6 +1970,7 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
+    use ivm_abi::error::VmTrap;
     use kotodama_lang::session::{CompileRequest, CompilerSession};
     use url::Url;
     #[test]
@@ -2155,7 +2165,7 @@ mod tests {
             .expect("seek to the validated entrypoint");
         assert!(matches!(
             vm.set_program_counter(verified.code_offset as u64 + entrypoint.entry_pc + 2),
-            Err(ivm::VMError::DecodeError)
+            Err(ivm::VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(
             vm.syscall_policy(),
@@ -3175,18 +3185,30 @@ seiyaku DebugResult { permission Admin;
             vec![entry(ivm::syscalls::SYSCALL_STATE_GET, Some("failed"))],
         ] {
             assert_eq!(
-                local_debug_execution_failure("call", &ivm::VMError::DecodeError, &trace),
+                local_debug_execution_failure(
+                    "call",
+                    &ivm::VMError::Trap(VmTrap::DecodeError),
+                    &trace
+                ),
                 plain
             );
         }
         let failed_decode = [entry(decode, Some("failed"))];
         assert!(
-            local_debug_execution_failure("call", &ivm::VMError::DecodeError, &failed_decode)
-                .starts_with(&format!("{plain}: a contract state value"))
+            local_debug_execution_failure(
+                "call",
+                &ivm::VMError::Trap(VmTrap::DecodeError),
+                &failed_decode
+            )
+            .starts_with(&format!("{plain}: a contract state value"))
         );
         assert!(
-            !local_debug_execution_failure("call", &ivm::VMError::NoritoInvalid, &failed_decode)
-                .contains("state value")
+            !local_debug_execution_failure(
+                "call",
+                &ivm::VMError::Trap(VmTrap::NoritoInvalid),
+                &failed_decode
+            )
+            .contains("state value")
         );
     }
 

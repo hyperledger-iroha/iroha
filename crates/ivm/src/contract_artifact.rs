@@ -246,6 +246,7 @@ fn decode_instruction_stream(
 #[cfg(test)]
 mod preparation_deferral_tests {
     use super::*;
+    use crate::error::VmDeferral;
     use crate::{VMError, error::ExecutionDeferral};
     use std::{
         future::Future,
@@ -271,7 +272,7 @@ mod preparation_deferral_tests {
         .expect_err("cold native decode must expose local allocator refusal");
         let error = error.into_vm_error();
         assert!(
-            matches!(error, VMError::ExecutionDeferred(__actual_error_field) if __actual_error_field == (ExecutionDeferral::AllocationUnavailable))
+            matches!(error, VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (ExecutionDeferral::AllocationUnavailable))
         );
         assert_eq!(error.metered_gas(), None);
         let retried =
@@ -294,22 +295,23 @@ mod preparation_deferral_tests {
         assert!(registration.belongs_to(&budget));
         let occupied = budget.try_reserve_bytes(8).unwrap();
         let original = budget.try_reserve_bytes(1).unwrap_err();
-        let deferred = VMError::Metered {
-            gas: 31,
-            source: Box::new(VMError::AllocationDeferred(original.clone())),
-        };
+        let deferred = VMError::metered(
+            31,
+            VMError::Deferred(VmDeferral::AllocationDeferred(original.clone())),
+        );
         let error =
             ContractArtifactError::preparation("prepared instructions", deferred).into_vm_error();
-        assert!(matches!(&error, VMError::AllocationDeferred(actual) if actual == &original));
+        assert!(
+            matches!(&error, VMError::Deferred(VmDeferral::AllocationDeferred(actual)) if actual == &original)
+        );
         assert_eq!(
             error.execution_deferral(),
             Some(ExecutionDeferral::ActiveMemoryCapacity)
         );
         assert_eq!(error.metered_gas(), None);
-        let VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
-            release,
-            ..
-        }) = error
+        let VMError::Deferred(VmDeferral::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::Capacity { release, .. },
+        )) = error
         else {
             panic!("preparation must preserve the capacity owner's observation");
         };
@@ -333,6 +335,7 @@ mod preparation_deferral_tests {
 #[cfg(test)]
 mod koto_test_harness_tests {
     use super::*;
+    use crate::error::VmTrap;
     use crate::{IVM, IVMHost, VMError};
     use kotodama_lang::{
         compiler::{CompilerMode, CompilerOptions},
@@ -343,10 +346,18 @@ mod koto_test_harness_tests {
     /// Host that accepts every syscall, so only the VM capability gate can refuse one.
     struct AcceptAllHost;
     impl IVMHost for AcceptAllHost {
-        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        fn prepare_syscall(
+            &self,
+            _number: u32,
+            _vm: crate::host::SyscallQuote<'_>,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
-        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        fn syscall(
+            &mut self,
+            _number: u32,
+            _vm: &mut dyn crate::host::SyscallContext,
+        ) -> Result<u64, VMError> {
             Ok(0)
         }
         fn allows_syscall(&self, _policy: SyscallPolicy, _number: u32) -> bool {
@@ -396,14 +407,14 @@ mod koto_test_harness_tests {
         vm.load_koto_test_harness(&harness)
             .expect("harness contract loads with the test capability");
         assert!(
-            !matches!(koto_test_syscall_result(&mut vm), Err(VMError::UnknownSyscall(actual)) if actual == number)
+            !matches!(koto_test_syscall_result(&mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(actual))) if actual == number)
         );
 
         let mut vm = IVM::new(u64::MAX);
         vm.load_prepared(harness.prepared())
             .expect("the borrowed prepared contract loads as an ordinary program");
         assert!(
-            matches!(koto_test_syscall_result(&mut vm), Err(VMError::UnknownSyscall(actual)) if actual == number)
+            matches!(koto_test_syscall_result(&mut vm), Err(VMError::Trap(VmTrap::UnknownSyscall(actual))) if actual == number)
         );
 
         let runtime = outputs
@@ -440,11 +451,17 @@ mod koto_test_harness_tests {
             retired[5] = 0;
             assert!(matches!(
                 IVM::validate_program(&retired),
-                Err(VMError::UnsupportedProgramVersion { major: 1, minor: 0 })
+                Err(VMError::Trap(VmTrap::UnsupportedProgramVersion {
+                    major: 1,
+                    minor: 0
+                }))
             ));
             assert!(matches!(
                 vm.load_program(&retired),
-                Err(VMError::UnsupportedProgramVersion { major: 1, minor: 0 })
+                Err(VMError::Trap(VmTrap::UnsupportedProgramVersion {
+                    major: 1,
+                    minor: 0
+                }))
             ));
             assert_eq!(
                 (

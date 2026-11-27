@@ -4,16 +4,13 @@
 use super::internal::InternalInvocation;
 use super::*;
 use crate::smartcontracts::isi::triggers::set::{
-    SetReadOnly, invocation_identity::pipeline_trigger_use_v1, pipeline_trigger_action_matches,
+    SetReadOnly, invocation_identity::pipeline_trigger_use_v1,
 };
+use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait as _;
+use crate::state::c10_trigger_runtime::{CallbackEvent, PipelineSource};
 use iroha_data_model::{
     block::execution_output::{PipelineEventPositionV1, PipelineInvocationV1},
-    events::{
-        EventBox,
-        pipeline::{
-            BlockEvent, BlockStatus, PipelineEventBox, TransactionEvent, TransactionStatus,
-        },
-    },
+    events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
     trigger::TriggerId,
 };
 use mv::storage::StorageReadOnly;
@@ -46,48 +43,80 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                         continue;
                     }
                 };
-                let row = match &self.rows[index] {
-                    ExecutionOutputV1::Network(row)
-                    | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
-                        execution: row,
-                        ..
-                    }) => row,
-                    _ => return Err("Pipeline event lost its Network result".into()),
+                use iroha_data_model::{
+                    block::execution_output::TransactionResultRef,
+                    ivm_c10::{
+                        PipelineEventBoxC10V1, TransactionEventC10V1, TransactionStatusC10V1,
+                    },
                 };
-                if usize::try_from(row.input_index).ok() != Some(index) {
+                let input_index =
+                    u32::try_from(index).map_err(|_| "Pipeline source index exceeds u32")?;
+                let row = self
+                    .rows
+                    .get(index)
+                    .ok_or("Pipeline event lost its Network result")?;
+                if row.network_index() != Some(input_index) {
                     return Err("Pipeline event changed its Network position".into());
                 }
                 let route = self
                     .network_route(index)
                     .ok_or("Pipeline event lacks frozen routing")?;
-                // The retained canonical disposition is the event source. Keeping
-                // a second unbounded rejection solely for this event is forbidden.
-                let status = match row.result.as_ref() {
-                    Ok(_) => TransactionStatus::Approved,
-                    Err(reason) => TransactionStatus::Rejected(Box::new(reason.clone())),
-                };
-                let event = TransactionEvent {
-                    hash: signed.hash(),
-                    block_height: Some(self.source.header().height()),
-                    lane_id: route.lane_id,
-                    dataspace_id: route.dataspace_id,
-                    status,
-                };
-                self.execute_pipeline_event(
-                    PipelineEventPositionV1::Network(
-                        u32::try_from(index).map_err(|_| "Pipeline source index exceeds u32")?,
-                    ),
-                    &(event.into()),
-                    maximum,
-                )?;
+                let position = PipelineEventPositionV1::Network(input_index);
+                let hash = signed.hash();
+                let block_height = Some(self.source.header().height());
+                let lane_id = route.lane_id;
+                let dataspace_id = route.dataspace_id;
+                match row.result() {
+                    TransactionResultRef::Baseline(result) => {
+                        let status = match result.as_ref() {
+                            Ok(_) => TransactionStatus::Approved,
+                            Err(reason) => TransactionStatus::Rejected(Box::new(reason.clone())),
+                        };
+                        let event = TransactionEvent {
+                            hash,
+                            block_height,
+                            lane_id,
+                            dataspace_id,
+                            status,
+                        }
+                        .into();
+                        self.execute_pipeline_event(
+                            position,
+                            PipelineSource::Baseline(&event),
+                            maximum,
+                        )?;
+                    }
+                    TransactionResultRef::C10(result) => {
+                        let status = match &result.0 {
+                            Ok(_) => TransactionStatusC10V1::Approved,
+                            Err(reason) => {
+                                TransactionStatusC10V1::Rejected(Box::new(reason.clone()))
+                            }
+                        };
+                        let event = PipelineEventBoxC10V1::Transaction(TransactionEventC10V1 {
+                            hash,
+                            block_height,
+                            lane_id,
+                            dataspace_id,
+                            status,
+                        });
+                        self.execute_pipeline_event(
+                            position,
+                            PipelineSource::C10(&event),
+                            maximum,
+                        )?;
+                    }
+                }
             }
             self.execute_pipeline_event(
                 PipelineEventPositionV1::BlockApproved,
-                &(BlockEvent {
-                    header: self.source.header(),
-                    status: BlockStatus::Approved,
-                }
-                .into()),
+                PipelineSource::Baseline(
+                    &(BlockEvent {
+                        header: self.source.header(),
+                        status: BlockStatus::Approved,
+                    }
+                    .into()),
+                ),
                 maximum,
             )
         })();
@@ -100,7 +129,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
     fn execute_pipeline_event(
         &mut self,
         position: PipelineEventPositionV1,
-        event: &PipelineEventBox,
+        event: PipelineSource<'_>,
         maximum: u32,
     ) -> Result<(), ExecutionAttemptError<String>> {
         if self.state.gas_limit_per_block != 0
@@ -117,17 +146,47 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
             )
         })?;
-        for id in self
+        let eligible_baseline =
+            |action: &crate::smartcontracts::isi::triggers::specialized::LoadedAction<
+                iroha_data_model::events::pipeline::PipelineEventFilterBox,
+            >| {
+                let metadata = &action.metadata;
+                crate::smartcontracts::isi::triggers::trigger_is_enabled(metadata)
+                    && !action.repeats.is_depleted()
+                    && crate::smartcontracts::isi::triggers::trigger_was_registered_before_block(
+                        metadata, height,
+                    )
+                    && event.matches_baseline(&action.filter)
+            };
+        let baseline = self
             .state
             .world
             .triggers
-            .match_pipeline_event(event, height)
-        {
+            .pipeline_triggers()
+            .iter()
+            .filter(|(_, action)| eligible_baseline(action))
+            .map(|(id, _)| id);
+        let c10 = self
+            .state
+            .world
+            .c10_trigger_candidates
+            .iter()
+            .filter(|(_, kind)| **kind == iroha_data_model::events::TriggeringEventType::Pipeline)
+            .filter_map(|(id, _)| {
+                self.state
+                    .world
+                    .c10_triggers
+                    .get(id)
+                    .filter(|row| event.matches_c10(row, height))
+                    .map(|_| id)
+            });
+        for id in baseline.chain(c10) {
             if matched.len() == limit {
                 return Err("Pipeline matcher exceeded frozen capacity".into());
             }
-            matched.push(id);
+            matched.push(id.clone());
         }
+        matched.sort_unstable();
         self.skip_uninvoked(
             ExecutionOutputPhase::Pipeline,
             maximum - u32::try_from(matched.len()).map_err(|_| "Pipeline count exceeds u32")?,
@@ -139,18 +198,37 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
                 continue;
             }
-            let action = self
-                .state
-                .world
-                .triggers
-                .pipeline_triggers()
-                .get(&id)
-                .filter(|action| pipeline_trigger_action_matches(action, event, height))
-                .cloned();
-            let Some(action) = action else {
-                self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
-                continue;
-            };
+            let (authority, executable, c10_identity) =
+                if let Some(row) = self.state.world.c10_triggers.get(&id) {
+                    if !event.matches_c10(row, height) {
+                        self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
+                        continue;
+                    }
+                    (
+                        row.trigger().action.authority().clone(),
+                        crate::runtime::deferred_consent::trigger_executable_ref(
+                            row.trigger().action.executable(),
+                        )
+                        .map_err(|e| e.to_string())?,
+                        if self.lifecycle {
+                            None
+                        } else {
+                            Some(crate::state::c10_trigger_runtime::identity(row, height)?)
+                        },
+                    )
+                } else if let Some(action) = self
+                    .state
+                    .world
+                    .triggers
+                    .pipeline_triggers()
+                    .get(&id)
+                    .filter(|action| eligible_baseline(action))
+                {
+                    (action.authority.clone(), action.executable().clone(), None)
+                } else {
+                    self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
+                    continue;
+                };
             if !crate::runtime::deferred_consent::trigger_ready(&self.state.world, &id, height) {
                 self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
                 continue;
@@ -167,13 +245,17 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     .map_err(|_| "Pipeline index exceeds u32")?,
                 trigger: match &source {
                     Some(source) => source.identity().clone(),
-                    None => pipeline_trigger_use_v1(&self.state.world.triggers, &id, height)?,
+                    None => match c10_identity {
+                        Some(identity) => identity,
+                        None => pipeline_trigger_use_v1(&self.state.world.triggers, &id, height)?,
+                    },
                 },
             };
-            self.try_apply_internal(
+            self.try_apply_internal_family(
                 InternalInvocation::Pipeline(invocation),
-                EventBox::Pipeline(event.clone()),
-                &action,
+                CallbackEvent::Pipeline(event),
+                &authority,
+                &executable,
                 source,
             )?;
         }

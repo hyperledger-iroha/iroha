@@ -11,6 +11,7 @@ use ivm::{
     pointer_abi::PointerType,
     vrf::{VrfVerifyBatchRequest, VrfVerifyRequest},
 };
+use ivm_abi::error::VmTrap;
 use std::collections::BTreeMap;
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -39,16 +40,28 @@ struct ObservedVrfHost {
     status: Option<[u64; 3]>,
 }
 impl IVMHost for ObservedVrfHost {
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         let result = self.inner.syscall(number, vm);
         if matches!(
             number,
             ivm::syscalls::SYSCALL_VRF_VERIFY | ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH
         ) {
-            self.status = Some([vm.register(10), vm.register(11), vm.register(12)]);
+            self.status = Some([
+                vm.public_register(10)?,
+                vm.public_register(11)?,
+                vm.public_register(12)?,
+            ]);
         }
         result
     }
@@ -166,7 +179,7 @@ seiyaku VrfBatchEntrypointBytes {
         "batch": request_hex,
     }));
     let (vm, outcome, status) = compile_and_run(source, Some(&arguments));
-    assert!(matches!(outcome, Err(VMError::NoritoInvalid)));
+    assert!(matches!(outcome, Err(VMError::Trap(VmTrap::NoritoInvalid))));
     assert!(vm.call_result_word_count().is_err());
     assert_eq!(status, [0, 9, u64::MAX], "empty batch bound status");
 }
@@ -180,7 +193,7 @@ seiyaku MalformedVrfLiteral {
 }
 "#;
     let (vm, outcome, status) = compile_and_run(source, None);
-    assert!(matches!(outcome, Err(VMError::NoritoInvalid)));
+    assert!(matches!(outcome, Err(VMError::Trap(VmTrap::NoritoInvalid))));
     assert!(vm.call_result_word_count().is_err());
     assert_eq!(status[0], 0);
     assert_eq!(status[1], 2, "malformed Norito request status");

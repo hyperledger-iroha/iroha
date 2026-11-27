@@ -53,7 +53,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if Self::contract_state_namespace_access(path.as_ref())
             == ContractStateNamespaceAccess::OpaqueSystem
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(())
     }
@@ -61,7 +61,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         if Self::contract_state_namespace_access(path.as_ref())
             != ContractStateNamespaceAccess::User
         {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::Trap(VmTrap::PermissionDenied));
         }
         Ok(())
     }

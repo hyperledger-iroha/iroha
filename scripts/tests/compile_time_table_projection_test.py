@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "2ae8c34996e1badac157aee8a4d0eeab2b1125c01ba686d196a26f102b2f3e81"
+    "70afb35bbfb24e318f28e0015d7ea2de705aa2e5298190ae6ae5e5b0356bec1e"
 )
 
 
@@ -445,7 +445,7 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             len(rows),
             inventory.count("built_in_wire_id!(") + inventory.count("governance_wire_id!("),
         )
-        self.assertEqual(len(rows), 444)
+        self.assertEqual(len(rows), 449)
         self.assertEqual(len({row[1] for row in rows}), len(rows))
         self.assertEqual(len({row[3] for row in rows}), len(rows))
         self.assertEqual(
@@ -453,8 +453,8 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             {
                 "register_slice": 374,
                 "register": 36,
-                "register_tolerant": 30,
-                "register_slice_tolerant": 4,
+                "register_tolerant": 32,
+                "register_slice_tolerant": 7,
             },
         )
         self.assertIn(

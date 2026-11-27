@@ -1164,6 +1164,27 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "read",
         ),
         (
+            route_catalog::runtime_governance::GOV_ANONYMOUS_PARLIAMENT_ATTEMPT_DRAFT.path(),
+            "post",
+            "GovernanceAnonymousParliamentAttemptDraftRequestV1",
+            "GovernanceAnonymousParliamentAttemptDraftResponseV1",
+            "write",
+        ),
+        (
+            route_catalog::runtime_governance::GOV_ANONYMOUS_PARLIAMENT_TRANSITION_DRAFT.path(),
+            "post",
+            "GovernanceAnonymousParliamentTransitionDraftRequestV1",
+            "GovernanceAnonymousParliamentTransitionDraftResponseV1",
+            "write",
+        ),
+        (
+            route_catalog::runtime_governance::GOV_ANONYMOUS_PARLIAMENT_CREDENTIAL_DRAFT.path(),
+            "post",
+            "GovernanceAnonymousParliamentCredentialDraftRequestV1",
+            "GovernanceAnonymousParliamentCredentialDraftResponseV1",
+            "write",
+        ),
+        (
             route_catalog::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path(),
             "post",
             "GovernanceParliamentTransitionDraftRequestV1",

@@ -4,6 +4,7 @@ use super::{ObserveLog, SERIAL, observe_log_requests, stop_log_requests};
 use iroha_allocation::AllocationBudget;
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use ivm::{IVM, VMError};
+use ivm_abi::error::VmTrap;
 use sha2::{Digest, Sha256};
 use std::num::NonZeroU64;
 
@@ -56,11 +57,11 @@ fn all_register_paths_include_cold_dirty_rebuilds_without_any_heap_request() {
     }
     assert!(matches!(
         vm.registers.merkle_path(256),
-        Err(VMError::RegisterOutOfBounds)
+        Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
     ));
     assert!(matches!(
         vm.registers.merkle_root_and_path(usize::MAX),
-        Err(VMError::RegisterOutOfBounds)
+        Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
     ));
     let requests = stop_log_requests();
     assert_eq!(

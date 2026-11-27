@@ -215,6 +215,7 @@ pub struct GlobalThresholdBeaconSessionBindingV1 {
     JsonSerialize,
     JsonDeserialize,
 )]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 pub struct GlobalThresholdBeaconPulseLinkV1 {
     /// Identifier of the latest admitted pulse or genesis origin.
     pub pulse_id: [u8; 32],
@@ -541,6 +542,7 @@ fn verify_global_threshold_beacon_dkg_share_acceptance_v1_with<
 )]
 #[norito_schema(name = "iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1")]
 #[norito(decode_fields)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 pub struct GlobalThresholdBeaconDkgSnapshotV1 {
     /// Immutable DKG session and consensus-height schedule.
     pub session: GlobalThresholdBeaconDkgSessionV1,
@@ -587,6 +589,7 @@ impl GlobalThresholdBeaconDkgSnapshotV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1")]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 pub struct FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
     /// Canonical finalized threshold-beacon session and full public transcript.
     pub session: GlobalThresholdBeaconKeySessionV1,

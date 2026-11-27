@@ -12,13 +12,21 @@ pub fn rooted_compact_bootstrap() -> RootedBootstrapOmega {
 pub fn rooted_compact_bootstrap_with_identity(
     identity: bootstrap_chain::BootstrapIdentity,
 ) -> RootedBootstrapOmega {
+    rooted_compact_bootstrap_from_source(|digest, profile| {
+        bootstrap_chain::authenticated_bootstrap_with_identity(false, digest, profile, identity)
+    })
+}
+
+/// Derive the source-bound outer identity before rebuilding the authorization
+/// original. Both passes use the same explicit state and signature source.
+pub fn rooted_compact_bootstrap_from_source(
+    mut source: impl FnMut(
+        Fp,
+        bootstrap_chain::SourceProfile,
+    ) -> bootstrap_chain::AuthenticatedBootstrap,
+) -> RootedBootstrapOmega {
     let profile = bootstrap_chain::SourceProfile::Tagged { buses: 3 };
-    let initial = bootstrap_chain::authenticated_bootstrap_with_identity(
-        false,
-        Fp::from(91),
-        profile,
-        identity,
-    );
+    let initial = source(Fp::from(91), profile);
     let (initial_circuit, initial_public, _) = wrapper(&initial);
     let initial_circuit = initial_circuit
         .with_key_catalog(vec![initial.key.clone()])
@@ -83,8 +91,7 @@ pub fn rooted_compact_bootstrap_with_identity(
 
     // The signed credential, receipt, sigma, Q and the unsplit A are rebuilt
     // with the actual digest. No public word is changed after a proof exists.
-    let source =
-        bootstrap_chain::authenticated_bootstrap_with_identity(false, digest, profile, identity);
+    let source = source(digest, profile);
     assert_eq!(source.state.lineage[17], digest);
     assert_eq!(initial.binding, source.binding);
     assert_eq!(initial.key.to_bytes(), source.key.to_bytes());

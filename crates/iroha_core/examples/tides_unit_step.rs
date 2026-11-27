@@ -5,8 +5,14 @@
 
 use std::{error::Error, hint::black_box, time::Instant};
 
-use ivm::game_unit_step::{UnitStepInput, kernel_hash, step_unit};
+use iroha_core::smartcontracts::isi::game_partition::unit_step::{
+    UnitStepInput, kernel_hash, step_unit,
+};
 use norito::{json, json::Value};
+
+fn kernel_hash_hex() -> String {
+    hex::encode(kernel_hash())
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut timings = Vec::with_capacity(100);
@@ -24,14 +30,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         maximum_cycles = maximum_cycles.max(output.cycles);
     }
     timings.sort_unstable();
-    let hash_hex: String = kernel_hash()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
     let report: Value = json!({
         "scope": "fixed existing-ISA movement kernel only; fresh VM/load included; no state I/O, consensus, transfer or proof throughput claim",
         "samples": (timings.len()),
-        "kernel_hash": (hash_hex),
+        "kernel_hash": (kernel_hash_hex()),
         "p50_ns": (timings[50]),
         "p95_ns": (timings[94]),
         "maximum_gas": maximum_gas,
@@ -40,4 +42,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     println!("{}", json::to_json_pretty(&report)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_preserves_the_fixed_kernel_pin() {
+        assert_eq!(
+            kernel_hash_hex(),
+            "948a6cd6ba749249e6406528b90f982a2bcfbbbfdeee9334c4bc42dbf96aaccb"
+        );
+    }
 }

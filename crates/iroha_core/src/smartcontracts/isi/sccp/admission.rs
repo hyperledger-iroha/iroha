@@ -711,6 +711,7 @@ mod tests {
         test_support::{blank_state, header, sample_signed_transaction},
     };
     use iroha_data_model::{account::AccountId, sccp::params::SccpParametersV1};
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn source_rejection_preserves_typed_protocol_blame_and_original_local_refusal() {
@@ -769,7 +770,9 @@ mod tests {
             assert!(!rejection.source_data_rejected);
             let deferred = rejection.deferred.expect("original physical refusal");
             assert!(deferred.allocation_refusal().is_none());
-            let ivm::VMError::AllocatorDeferred(original) = deferred.into_vm_error() else {
+            let ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(original)) =
+                deferred.into_vm_error()
+            else {
                 panic!("original physical allocator error must survive admission");
             };
             if shared {

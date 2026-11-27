@@ -8,10 +8,12 @@ use super::{
     RegisterState,
     trace_storage::{TraceCell, TraceRows, check_scope, next_capacity, overflow},
 };
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan},
     parallel::REGISTER_COUNT,
+    registers::BASELINE_REGISTER_COUNT,
 };
 use iroha_allocation::{AllocationBudget, AllocationScope};
 use iroha_crypto::zeroize_value_for_confidential_discard as erase;
@@ -44,6 +46,24 @@ impl TraceCell for (usize, u64, bool) {
         erase(&mut self.2);
     }
 }
+/// The baseline engine's complete register image at one observation.
+#[derive(Clone)]
+struct BaselineRegisterState {
+    pc: u64,
+    gpr: [u64; BASELINE_REGISTER_COUNT],
+    tags: [bool; BASELINE_REGISTER_COUNT],
+}
+/// The preceding observation's complete image, in the register geometry of the engine that
+/// recorded it: C10's 32 registers or the baseline's 256.
+#[derive(Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline like the image it replaces: boxing would allocate outside the funded trace budget"
+)]
+enum LastImage {
+    C10(RegisterState),
+    Baseline(BaselineRegisterState),
+}
 #[derive(Clone, Copy)]
 struct Pending {
     rows: usize,
@@ -52,10 +72,15 @@ struct Pending {
 }
 
 /// Move-only delta storage. No vector adoption or uncharged clone is provided.
+///
+/// A log records the register geometry of the engine that runs: C10 observations through
+/// [`Self::prepare_batch`] and [`Self::record_reserved`] (32 registers), baseline observations
+/// through [`Self::prepare_baseline_batch`] and [`Self::record_baseline_reserved`] (256). The
+/// first observation of a geometry records the complete image.
 pub struct DeltaTraceLog {
     rows: TraceRows<Row>,
     changes: TraceRows<(usize, u64, bool)>,
-    last: Option<RegisterState>,
+    last: Option<LastImage>,
     pending: Option<Pending>,
     original: Option<AllocationBudget>,
 }
@@ -90,33 +115,54 @@ impl DeltaTraceLog {
         repeated_changes: usize,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
-        self.prepare_register_batch(rows, first_changes, repeated_changes, REGISTER_COUNT, scope)
+        let continues = matches!(self.last, Some(LastImage::C10(_)));
+        self.prepare_geometry(
+            REGISTER_COUNT,
+            continues,
+            rows,
+            first_changes,
+            repeated_changes,
+            scope,
+        )
     }
-
-    /// Reserve rows using the selected engine's architectural register count.
-    pub(crate) fn prepare_register_batch(
+    /// Reserve a batch of baseline observations: [`Self::prepare_batch`] over the baseline
+    /// engine's 256 registers. The first baseline observation needs all 256.
+    pub(crate) fn prepare_baseline_batch(
         &mut self,
         rows: usize,
         first_changes: usize,
         repeated_changes: usize,
-        register_count: usize,
+        scope: Option<&AllocationScope<'_>>,
+    ) -> Result<(), VMError> {
+        let continues = matches!(self.last, Some(LastImage::Baseline(_)));
+        self.prepare_geometry(
+            BASELINE_REGISTER_COUNT,
+            continues,
+            rows,
+            first_changes,
+            repeated_changes,
+            scope,
+        )
+    }
+    /// Reserve `rows` observations of a `width`-register image. `continues` says whether the
+    /// preceding observation has the same geometry; otherwise the first row needs `width`.
+    fn prepare_geometry(
+        &mut self,
+        width: usize,
+        continues: bool,
+        rows: usize,
+        first_changes: usize,
+        repeated_changes: usize,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
         self.validate_scope(scope)?;
-        if self.pending.is_some()
-            || rows == 0
-            || first_changes > register_count
-            || repeated_changes > register_count
+        if self.pending.is_some() || rows == 0 || first_changes > width || repeated_changes > width
         {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-            ));
+            )));
         }
-        let first = if self.is_empty() {
-            register_count
-        } else {
-            first_changes
-        };
+        let first = if continues { first_changes } else { width };
         let slots = (rows - 1)
             .checked_mul(repeated_changes)
             .and_then(|slots| slots.checked_add(first))
@@ -145,16 +191,16 @@ impl DeltaTraceLog {
         if grow_rows {
             plan.include_child(
                 ExecutionMemoryPlan::array::<Row>(row_capacity)
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             )
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         if grow_changes {
             plan.include_child(
                 ExecutionMemoryPlan::array::<(usize, u64, bool)>(change_capacity)
-                    .map_err(VMError::AllocationDeferred)?,
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
             )
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
         if !grow_rows && !grow_changes {
             return Ok(());
@@ -164,7 +210,7 @@ impl DeltaTraceLog {
             .as_ref()
             .map(|original| ExecutionMemoryLease::reserve(original, plan))
             .transpose()
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         // Allocate/copy both replacements before changing either live owner.
         let mut new_rows = if grow_rows {
             Some(TraceRows::allocate(row_capacity, lease.as_mut())?)
@@ -195,37 +241,70 @@ impl DeltaTraceLog {
         gpr: [u64; REGISTER_COUNT],
         tags: [bool; REGISTER_COUNT],
     ) {
-        let previous = self.last.as_ref();
-        append_reserved_row(
+        let pending = self.pending.expect("admitted delta observation batch");
+        let previous = match &self.last {
+            Some(LastImage::C10(last)) => Some((&last.gpr[..], &last.tags[..])),
+            _ => None,
+        };
+        record_changes(
             &mut self.rows,
             &mut self.changes,
-            &mut self.pending,
+            pending,
             pc,
-            (0..REGISTER_COUNT).filter_map(|index| {
-                previous
-                    .is_none_or(|last| {
-                        last.gpr[index] != gpr[index] || last.tags[index] != tags[index]
-                    })
-                    .then_some((index, gpr[index], tags[index]))
-            }),
+            previous,
+            &gpr,
+            &tags,
         );
         self.clear_last();
-        self.last = Some(RegisterState { pc, gpr, tags });
+        self.last = Some(LastImage::C10(RegisterState { pc, gpr, tags }));
+        self.advance(pending);
     }
-
-    /// Publish one prepaid row in ascending architectural order without allocating.
-    pub(crate) fn record_changes(
+    /// Record one baseline observation: [`Self::record_reserved`] over the baseline engine's
+    /// 256 registers, against the preceding baseline image.
+    pub(crate) fn record_baseline_reserved(
         &mut self,
         pc: u64,
-        changes: impl Iterator<Item = (usize, u64, bool)> + Clone,
+        gpr: &[u64; BASELINE_REGISTER_COUNT],
+        tags: &[bool; BASELINE_REGISTER_COUNT],
     ) {
-        append_reserved_row(
+        let pending = self.pending.expect("admitted delta observation batch");
+        let previous = match &self.last {
+            Some(LastImage::Baseline(last)) => Some((&last.gpr[..], &last.tags[..])),
+            _ => None,
+        };
+        record_changes(
             &mut self.rows,
             &mut self.changes,
-            &mut self.pending,
+            pending,
             pc,
-            changes,
+            previous,
+            gpr,
+            tags,
         );
+        match &mut self.last {
+            Some(LastImage::Baseline(last)) => {
+                last.pc = pc;
+                last.gpr = *gpr;
+                last.tags = *tags;
+            }
+            _ => {
+                self.clear_last();
+                self.last = Some(LastImage::Baseline(BaselineRegisterState {
+                    pc,
+                    gpr: *gpr,
+                    tags: *tags,
+                }));
+            }
+        }
+        self.advance(pending);
+    }
+    /// Move to the next observation of the admitted batch.
+    fn advance(&mut self, pending: Pending) {
+        self.pending = (pending.rows > 1).then_some(Pending {
+            rows: pending.rows - 1,
+            next: pending.repeated,
+            repeated: pending.repeated,
+        });
     }
     /// Internal immutable capture inputs, including the full public capacities.
     pub(super) fn capture_storage(
@@ -262,19 +341,27 @@ impl DeltaTraceLog {
     /// Exact retained physical capacities independent of logical change counts.
     pub(crate) fn allocated_bytes(&self) -> Result<usize, VMError> {
         let mut plan = ExecutionMemoryPlan::array::<Row>(self.rows.capacity())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(
             ExecutionMemoryPlan::array::<(usize, u64, bool)>(self.changes.capacity())
-                .map_err(VMError::AllocationDeferred)?,
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?,
         )
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         Ok(plan.requested_bytes())
     }
     fn clear_last(&mut self) {
-        if let Some(last) = &mut self.last {
-            erase(&mut last.pc);
-            erase(&mut last.gpr);
-            erase(&mut last.tags);
+        match &mut self.last {
+            Some(LastImage::C10(last)) => {
+                erase(&mut last.pc);
+                erase(&mut last.gpr);
+                erase(&mut last.tags);
+            }
+            Some(LastImage::Baseline(last)) => {
+                erase(&mut last.pc);
+                erase(&mut last.gpr);
+                erase(&mut last.tags);
+            }
+            None => {}
         }
         self.last = None;
     }
@@ -322,33 +409,37 @@ impl DeltaTraceLog {
         Ok(copy)
     }
 }
-// Check the complete public reservation before mutating either backing array.
-fn append_reserved_row(
+/// Push the changes of one admitted observation against `previous` (every register when absent)
+/// and its row, padding the row's span to the batch's public bound.
+fn record_changes(
     rows: &mut TraceRows<Row>,
-    storage: &mut TraceRows<(usize, u64, bool)>,
-    credit: &mut Option<Pending>,
+    changes: &mut TraceRows<(usize, u64, bool)>,
+    pending: Pending,
     pc: u64,
-    changes: impl Iterator<Item = (usize, u64, bool)> + Clone,
+    previous: Option<(&[u64], &[bool])>,
+    gpr: &[u64],
+    tags: &[bool],
 ) {
-    let pending = credit.expect("admitted delta observation batch");
-    let count = changes.clone().count();
+    let changed = |index: usize| {
+        previous.is_none_or(|(last_gpr, last_tags)| {
+            last_gpr[index] != gpr[index] || last_tags[index] != tags[index]
+        })
+    };
+    let count = (0..gpr.len()).filter(|&index| changed(index)).count();
     assert!(
         count <= pending.next,
         "public delta destination bound underestimated"
     );
-    let start = storage.as_slice().len();
-    for change in changes {
-        storage.push_reserved(change);
+    let start = changes.as_slice().len();
+    for index in 0..gpr.len() {
+        if changed(index) {
+            changes.push_reserved((index, gpr[index], tags[index]));
+        }
     }
     for _ in count..pending.next {
-        storage.push_reserved((0, 0, false));
+        changes.push_reserved((0, 0, false));
     }
     rows.push_reserved(Row { pc, start, count });
-    *credit = (pending.rows > 1).then_some(Pending {
-        rows: pending.rows - 1,
-        next: pending.repeated,
-        repeated: pending.repeated,
-    });
 }
 impl Drop for DeltaTraceLog {
     fn drop(&mut self) {

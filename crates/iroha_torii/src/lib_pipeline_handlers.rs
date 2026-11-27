@@ -790,7 +790,7 @@ enum CanonicalTransactionOutcome {
     },
     Rejected {
         height: NonZeroU64,
-        reason: TransactionRejectionReason,
+        reason: iroha_data_model::block::execution_output::ProfiledTransactionRejection,
     },
 }
 impl CanonicalTransactionOutcome {
@@ -966,14 +966,14 @@ fn canonical_transaction_outcome_from_reader(
     hash: &HashOf<SignedTransaction>,
     anchor: CanonicalTransactionAnchor,
     read: impl FnOnce(
-        &mut dyn FnMut(&TransactionEntrypoint, &iroha_data_model::transaction::TransactionResult),
+        &mut dyn FnMut(&TransactionEntrypoint, iroha_data_model::block::execution_output::TransactionResultRef<'_>),
     ) -> Result<BlockHeader, Error>,
 ) -> Result<CanonicalTransactionOutcome, Error> {
     let mut result = None;
     let mut duplicate = false;
     let header = read(&mut |entrypoint, output| {
         if transaction_entrypoint_matches_indexed_identity(entrypoint, &anchor.entrypoint_hash) {
-            let outcome = output.as_ref().map(|_| ()).map_err(Clone::clone);
+            let outcome = output.as_ref().map(drop).map_err(|r| r.into_owned());
             duplicate |= result.replace(outcome).is_some();
         }
     })?;
@@ -1002,7 +1002,7 @@ fn canonical_transaction_outcome_from_committed(
 fn canonical_transaction_outcome_from_matches(
     hash: &HashOf<SignedTransaction>,
     header: &BlockHeader,
-    result: Option<Result<(), TransactionRejectionReason>>,
+    result: Option<Result<(), iroha_data_model::block::execution_output::ProfiledTransactionRejection>>,
     duplicate: bool,
 ) -> Result<CanonicalTransactionOutcome, Error> {
     if duplicate {

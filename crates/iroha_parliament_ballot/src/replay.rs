@@ -23,17 +23,10 @@
 //! otherwise), not their window or duplicate decisions, which belong to those scopes'
 //! verifications.
 //!
-//! The data model includes `TransactionEntrypoint::AnonymousBallot` and
-//! `TransactionRejectionReason::AnonymousBallot`. TODO: connect an authenticated evidence
-//! reader that (a) verifies the continuity and finality of every block from the opening
-//! height through the closure height
-//! against externally authenticated finality evidence, (b) extracts every anonymous-ballot
-//! input with its global `input_index` from each block and checks the extraction against the
-//! block's input commitment, so that an omitted input is reported as incomplete evidence,
-//! (c) reads each input's recorded result from `NetworkExecutionOutputV1` under
-//! `BlockResult.output_merkle`, and (d) authenticates the seal, casting-clock and closure
-//! outputs from `BlockResult.outputs`, before it feeds [`verify_full_v1`]. Until then the
-//! blocks given here are as authentic as their source.
+//! The finalized reader in [`crate::finalized_interval`] obtains each full certificate
+//! from a caller-supplied source, authenticates it through the independently anchored
+//! Sumeragi verifier, extracts the complete physical Network input/output sequence, and
+//! checks the seal, opening, successor casting clock and closure before a full verdict.
 
 use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 

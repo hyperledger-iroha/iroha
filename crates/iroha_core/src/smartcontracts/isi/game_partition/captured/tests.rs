@@ -40,7 +40,7 @@ fn start(label: &str) -> CertifiedTestChain {
         .into(),
         InstallGamePartitionV1 {
             world_id: world(),
-            kernel_hash: ivm::game_unit_step::kernel_hash(),
+            kernel_hash: unit_step::kernel_hash(),
         }
         .into(),
     ];
@@ -512,7 +512,7 @@ fn captured_game_record_frame_is_canonical_and_charged_to_its_caller() {
         world_id: world(),
         source,
         destination: [0xB2; 32],
-        kernel_hash: ivm::game_unit_step::kernel_hash(),
+        kernel_hash: unit_step::kernel_hash(),
         unit: GameUnitV1 {
             unit_id: game_unit_id(world(), source, 31),
             origin: source,

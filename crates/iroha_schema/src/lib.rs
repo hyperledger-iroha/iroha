@@ -316,6 +316,41 @@ impl IntoSchema for () {
         }
     }
 }
+// Match Norito's supported tuple arities. These are ordered codec fields,
+// including their recursive types, rather than opaque tuple names.
+macro_rules! impl_schema_tuple {
+    ($($t:ident),+) => {
+        impl<$($t: TypeId),+> TypeId for ($($t,)+) {
+            fn id() -> String {
+                format!("({})", [$($t::id()),+].join(", "))
+            }
+        }
+        impl<$($t: IntoSchema),+> IntoSchema for ($($t,)+) {
+            fn type_name() -> String {
+                format!("({})", [$($t::type_name()),+].join(", "))
+            }
+            fn update_schema_map(map: &mut MetaMap) {
+                if !map.contains_key::<Self>() {
+                    map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta {
+                        types: vec![$(core::any::TypeId::of::<$t>()),+],
+                    }));
+                    $($t::update_schema_map(map);)+
+                }
+            }
+        }
+    };
+}
+impl_schema_tuple!(A, B);
+impl_schema_tuple!(A, B, C);
+impl_schema_tuple!(A, B, C, D);
+impl_schema_tuple!(A, B, C, D, E);
+impl_schema_tuple!(A, B, C, D, E, F);
+impl_schema_tuple!(A, B, C, D, E, F, G);
+impl_schema_tuple!(A, B, C, D, E, F, G, H);
+impl_schema_tuple!(A, B, C, D, E, F, G, H, I);
+impl_schema_tuple!(A, B, C, D, E, F, G, H, I, J);
+impl_schema_tuple!(A, B, C, D, E, F, G, H, I, J, K);
+impl_schema_tuple!(A, B, C, D, E, F, G, H, I, J, K, L);
 macro_rules! impl_schema_int {
     ($($t:ty),*) => {$(
         impl TypeId for $t {

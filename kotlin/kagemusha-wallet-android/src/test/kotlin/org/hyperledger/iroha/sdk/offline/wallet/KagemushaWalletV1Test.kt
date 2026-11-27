@@ -96,11 +96,20 @@ class KagemushaWalletV1Test {
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "enrollment", "enrollmentRefusal", "review", "executeReviewed", "discardReview", "beginExchange", "endExchange"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        val nativeMethods = type.methods.filter { it.isNative }
+        assertEquals(setOf(
+            "revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call",
+            "snapshot", "execute", "setup", "enrollment", "enrollmentRefusal", "review",
+            "executeReviewed", "discardReview", "beginExchange", "endExchange",
+            "suffixUnloadStatus", "suffixUnloadPrepare", "suffixUnloadResume", "executeReviewedSuffixUnload",
+            "suffixUnloadInstruction", "suffixUnloadAttemptOutcome", "suffixUnloadIngestFinality", "suffixUnloadSignedWire",
+        ), nativeMethods.map { it.name }.toSet())
         val review = type.methods.single { it.isNative && it.name == "review" }
         val executed = type.methods.single { it.isNative && it.name == "executeReviewed" }
         assertEquals(listOf("J", "J", "[B", "I", "J", "J", "I", "[B", "[B", "[B"), review.parameterTypes)
         assertEquals(listOf("J", "J", "J"), executed.parameterTypes)
+        assertEquals(listOf("J", "J", "J"),
+            nativeMethods.single { it.name == "executeReviewedSuffixUnload" }.parameterTypes)
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
     }
     @Test fun `fresh mutations require a call and retired delivery producers are absent`() {

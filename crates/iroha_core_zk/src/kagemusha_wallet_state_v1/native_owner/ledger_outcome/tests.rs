@@ -24,7 +24,7 @@ use iroha_sumeragi::{
 use std::time::Duration;
 
 /// One explicitly synthetic rejection; the fixture certifies results it never executes.
-pub(in crate::kagemusha_wallet_state_v1::native_owner) fn rejected() -> TransactionResultInner {
+pub(crate) fn rejected() -> TransactionResultInner {
     Err(TransactionRejectionReason::LimitCheck(
         TransactionLimitError {
             reason: "synthetic rejection".into(),
@@ -70,7 +70,7 @@ pub(in crate::kagemusha_wallet_state_v1::native_owner) fn block(
 }
 
 /// Certify the fixture's next block of exactly these signed inputs and synthetic results.
-pub(in crate::kagemusha_wallet_state_v1::native_owner) fn certify(
+pub(crate) fn certify(
     native: &mut NativeFinalityFixture,
     transactions: &[SignedTransaction],
     results: Vec<TransactionResultInner>,
@@ -118,7 +118,7 @@ pub(in crate::kagemusha_wallet_state_v1::native_owner) fn advance(
 }
 
 /// The exact original Torii serves for one Network input of a certified block.
-pub(in crate::kagemusha_wallet_state_v1::native_owner) fn original(
+pub(crate) fn original(
     block: &VerifiedSumeragiBlock,
     input_index: u32,
 ) -> KagemushaWalletLedgerFinalityV1 {

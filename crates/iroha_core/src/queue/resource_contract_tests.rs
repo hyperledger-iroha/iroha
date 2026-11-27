@@ -700,7 +700,7 @@ impl QueueAdmissionStateAccess for DeferredInclusionAccess {
     fn first_inactive_envelope(
         &mut self,
         _transaction: &AcceptedTransaction<'_>,
-    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+    ) -> Result<Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>, Error> {
         panic!("admission continued after a deferred includable assessment")
     }
     fn sccp_exempt_admission(

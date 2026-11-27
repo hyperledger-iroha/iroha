@@ -1184,7 +1184,7 @@ fn ledger_snapshot(
         );
         ensure!(
             matching[0].entrypoint() == &TransactionEntrypoint::External(transaction.clone())
-                && matching[0].result().0.is_ok(),
+                && matching[0].result().is_ok(),
             "committed transaction bytes/result mismatch"
         );
     }

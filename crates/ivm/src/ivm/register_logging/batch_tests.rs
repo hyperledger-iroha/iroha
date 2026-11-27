@@ -1,6 +1,7 @@
 //! Real execution-boundary admission, nested calls and native finish observations.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     PreparedArgumentRecord, PreparedContract, ProgramMetadata, Registers,
     argument_record::prepare_argument_record_with_gas_limit,
@@ -16,13 +17,7 @@ use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use iroha_primitives::json::Json;
 use ivm_abi::arguments::encode_argument_record_from_json;
 use kotodama_lang::compiler::{Compiler, CompilerOptions};
-use std::{
-    any::Any,
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-    mem::size_of,
-    sync::Arc,
-};
+use std::{any::Any, cell::Cell, collections::BTreeMap, mem::size_of, sync::Arc};
 
 const LIMIT: usize = 128 * 1024 * 1024;
 const GAS: u64 = 1_000_000;
@@ -73,10 +68,18 @@ impl IVMHost for InputHost {
         self.probes.set(self.probes.get() + 1);
         self.prepared.clone()
     }
-    fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        vm: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         self.inner.syscall(number, vm)
     }
     fn as_any(&mut self) -> &mut dyn Any {
@@ -158,11 +161,11 @@ fn actual_empty_prepared_and_default_roots_refuse_before_gas_heap_or_register_ef
         let baseline = original.reserved_bytes();
         let rows = event_counts::root(route, false);
         original.set_limit_bytes(baseline + rows * ROW - 1);
-        let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+        let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
             requested_bytes,
             release,
             ..
-        })) = vm.begin_root_call(host.as_mut())
+        }))) = vm.begin_root_call(host.as_mut())
         else {
             panic!("entire root subtree must be admitted before argument effects");
         };
@@ -236,6 +239,7 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_and_registers() {
     let mut vm = generic(&original, &[word, encode_halt()], 2);
     vm.set_register(7, 41);
     let old_log = vm.proof_register_log_handle().unwrap();
+    vm.memory.ensure_merkle_storage().unwrap();
     let baseline = original.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
     let steps = 4 * size_of::<zk::StepEntry>();
@@ -243,7 +247,7 @@ fn ordinary_instruction_shortage_precedes_gas_cycles_and_registers() {
     original.set_limit_bytes(baseline + shell + steps + deltas + 4 * ROW - 1);
     let start = vm.pc;
     assert!(
-        matches!(vm.run_with_host(&mut DefaultHost::default()), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == 4 * ROW)
+        matches!(vm.run_with_host(&mut DefaultHost::default()), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == 4 * ROW)
     );
     assert_eq!(
         (vm.pc, vm.cycles, vm.remaining_gas(), vm.register(7)),
@@ -323,18 +327,21 @@ struct AllRegisters {
     calls: usize,
 }
 impl IVMHost for AllRegisters {
-    fn prepare_syscall(&self, _: u32, _: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(&self, _: u32, _: crate::host::SyscallQuote<'_>) -> Result<u64, VMError> {
         if self.reject_prepare {
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         } else {
             Ok(0)
         }
     }
-    fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        _: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         self.calls += 1;
         for index in 1..crate::parallel::REGISTER_COUNT {
-            vm.set_register(index, index as u64 + 100);
-            vm.registers.set_tag(index, false);
+            vm.write_register(index, index as u64 + 100)?;
         }
         Ok(0)
     }
@@ -367,7 +374,7 @@ fn actual_reserved_syscalls_prepay_restore_and_all_host_net_writes() {
         original.set_limit_bytes(baseline + rows * ROW - 1);
         assert!(matches!(
             vm.execute_syscall(&mut host, syscalls::SYSCALL_ABORT),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(
             (
@@ -386,7 +393,10 @@ fn actual_reserved_syscalls_prepay_restore_and_all_host_net_writes() {
             .unwrap();
         let result = vm.execute_syscall(&mut host, syscalls::SYSCALL_ABORT);
         if reject_prepare {
-            assert!(matches!(result, Err(VMError::AssertionFailed)));
+            assert!(matches!(
+                result,
+                Err(VMError::Trap(VmTrap::AssertionFailed))
+            ));
             assert_eq!(vm.registers.snapshot()[10], 7);
             assert!(vm.registers.tag(10));
             assert_eq!(log.lock().as_slice().len(), 5);
@@ -525,11 +535,11 @@ fn syscall_shell_refusal_precedes_reserved_output_and_staged_entry_effects() {
             reject_prepare: false,
             calls: 0,
         };
-        let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+        let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
             requested_bytes,
             release,
             ..
-        })) = vm.execute_syscall(&mut host, number)
+        }))) = vm.execute_syscall(&mut host, number)
         else {
             panic!("detached shell must precede output clearing and staged entry gas");
         };
@@ -576,6 +586,7 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycles() {
         vm.registers.snapshot(),
         vm.registers.snapshot_tags(),
     );
+    vm.memory.ensure_merkle_storage().unwrap();
     let baseline = original.reserved_bytes();
     let shell = zk::SharedRegLog::allocation_layout().size();
     let rows = event_counts::instruction(word, false, false).unwrap() * ROW;
@@ -587,7 +598,7 @@ fn syscall_instruction_shell_refusal_precedes_base_gas_and_cycles() {
         calls: 0,
     };
     assert!(matches!(vm.run_with_host(&mut host),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == shell));
     assert_eq!(
         (
@@ -639,7 +650,7 @@ fn default_root_shell_refusal_precedes_argument_gas_heap_and_descriptors() {
     let shell = zk::SharedRegLog::allocation_layout().size();
     original.set_limit_bytes(baseline + shell - 1);
     assert!(matches!(vm.begin_root_call(&mut host),
-        Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })))
         if requested_bytes == shell));
     assert_eq!(
         (
@@ -661,18 +672,17 @@ fn default_root_shell_refusal_precedes_argument_gas_heap_and_descriptors() {
 
 struct ShrinkingShellHost {
     original: AllocationBudget,
-    shell: RefCell<Option<zk::SharedRegLog>>,
     calls: usize,
     panic_in_body: bool,
     expected_peak: usize,
 }
 impl IVMHost for ShrinkingShellHost {
-    fn prepare_syscall(&self, _: u32, vm: &IVM) -> Result<u64, VMError> {
-        let detached = vm.reg_log.as_ref().unwrap();
-        assert!(detached.belongs_to(&self.original));
-        assert!(vm.host_trace_log_detached);
+    fn prepare_syscall(
+        &self,
+        _: u32,
+        _quote: crate::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         assert_eq!(self.original.reserved_bytes(), self.expected_peak);
-        *self.shell.borrow_mut() = Some(detached.clone());
         self.original.set_limit_bytes(0);
         assert!(matches!(
             self.original
@@ -682,16 +692,17 @@ impl IVMHost for ShrinkingShellHost {
         ));
         Ok(7)
     }
-    fn syscall(&mut self, _: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        assert!(zk::SharedRegLog::ptr_eq(
-            vm.reg_log.as_ref().unwrap(),
-            self.shell.borrow().as_ref().unwrap()
-        ));
-        assert!(vm.host_trace_log_detached);
+    fn syscall(
+        &mut self,
+        _: u32,
+        vm: &mut dyn crate::host::SyscallContext,
+    ) -> Result<u64, VMError> {
+        // Preparation emptied the pool. The callback can finish using the shell
+        // charged to the original owner before output preparation.
+        assert_eq!(self.original.reserved_bytes(), self.expected_peak);
         self.calls += 1;
         for index in 1..crate::parallel::REGISTER_COUNT {
-            vm.set_register(index, index as u64 + 100);
-            vm.registers.set_tag(index, false);
+            vm.write_register(index, index as u64 + 100)?;
         }
         if self.panic_in_body {
             panic!("host body after original pool shrink");
@@ -717,7 +728,6 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
         let scope = zk::RegLoggerGuard::install(Some(log.clone()));
         let mut host = ShrinkingShellHost {
             original: original.clone(),
-            shell: RefCell::new(None),
             calls: 0,
             panic_in_body,
             expected_peak: baseline + zk::SharedRegLog::allocation_layout().size(),
@@ -749,13 +759,6 @@ fn reserved_callbacks_reuse_one_shell_after_pool_shrink_and_release_on_unwind() 
         assert!(!vm.host_trace_log_detached);
         assert!(vm.host_trace_invocation_log.is_none());
         assert!(zk::SharedRegLog::ptr_eq(&log, vm.reg_log.as_ref().unwrap()));
-        assert_eq!(
-            original.reserved_bytes(),
-            baseline + zk::SharedRegLog::allocation_layout().size()
-        );
-        let shell = host.shell.get_mut().take().unwrap();
-        assert!(shell.lock().as_slice().is_empty());
-        drop(shell);
         assert_eq!(original.reserved_bytes(), baseline);
         if panic_in_body {
             original.set_limit_bytes(LIMIT);

@@ -1,12 +1,14 @@
+use ivm_abi::error::VmTrap;
 #[test]
 fn map_overlay_error_labels_amx_budget() {
-    let err =
-        crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::AmxBudgetExceeded {
+    let err = crate::pipeline::overlay::OverlayBuildError::IvmRun(ivm::VMError::Trap(
+        VmTrap::AmxBudgetExceeded {
             dataspace: DataSpaceId::new(5),
             stage: AmxStage::Commit,
             elapsed_ms: 42,
             budget_ms: 30,
-        });
+        },
+    ));
     match super::map_overlay_error(&err) {
         TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
             message,

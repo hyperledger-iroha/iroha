@@ -1439,8 +1439,8 @@ impl CertifiedTestChain {
             .map(|index| {
                 stored
                     .block()
-                    .network_output_at(u32::try_from(index).expect("index fits"))
-                    .is_some_and(|(_, output)| output.result.is_ok())
+                    .network_execution_output_at(u32::try_from(index).expect("index fits"))
+                    .is_some_and(|(_, output)| output.result().is_ok())
             })
             .collect()
     }

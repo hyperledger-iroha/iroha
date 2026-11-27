@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::executor::attachment_custody::{ContractCustody, CustodyError, Invocation};
+use ivm_abi::error::VmTrap;
 
 const _: () = assert!(MAX_NESTED_CONTRACT_CALL_DEPTH == iroha_data_model::transaction::signed_attachments::ACTION_INVOCATION_MAX_CALL_PATH_DEPTH_V1);
 
@@ -33,14 +34,14 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
         if let Some(owner) = &mut self.attachment_custody {
             owner
                 .enter_child()
-                .map_err(|_| ivm::VMError::PermissionDenied)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         }
         Ok(())
     }
     pub(super) fn finish_attachment_child(&mut self, rollback: bool) -> Result<(), ivm::VMError> {
         let authority = if self.attachment_custody.is_some() {
             self.with_attachment_invocation::<_, CustodyError>(|_| Ok(()))
-                .map_err(|_| ivm::VMError::PermissionDenied)
+                .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))
         } else {
             Ok(())
         };
@@ -48,7 +49,7 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
         let exit = self.attachment_custody.as_mut().map_or(Ok(()), |owner| {
             owner
                 .exit_child(rollback)
-                .map_err(|_| ivm::VMError::PermissionDenied)
+                .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))
         });
         authority.and(exit)
     }
@@ -61,7 +62,7 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
         if let Some(owner) = &mut self.attachment_custody {
             owner
                 .require_rollback_unchanged()
-                .map_err(|_| ivm::VMError::PermissionDenied)?;
+                .map_err(|_| ivm::VMError::Trap(VmTrap::PermissionDenied))?;
         }
         Ok(())
     }

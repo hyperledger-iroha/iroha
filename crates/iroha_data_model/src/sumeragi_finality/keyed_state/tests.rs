@@ -13,6 +13,71 @@ fn make() -> KeyedStateTreeV1 {
 }
 
 #[test]
+fn borrowed_table_visit_is_complete_bounded_and_keeps_original_refusal() {
+    let budget = AllocationBudget::new(4 << 20);
+    let mut tree = KeyedStateTreeV1::new([9; 32], &budget);
+    assert_eq!(
+        tree.visit_table::<()>("world.a", 0, |_, _| unreachable!())
+            .unwrap(),
+        0
+    );
+    for (table, key, value) in [
+        ("world.a", b"".as_slice(), b"zero".as_slice()),
+        ("world.a", b"a", b"one"),
+        ("world.a", b"z", b"two"),
+        ("world.aa", b"a", b"other"),
+        ("world.z", b"a", b"last"),
+    ] {
+        tree.replace(&k(table, key), Some(value)).unwrap();
+    }
+    let root = tree.root();
+    let reserved = budget.reserved_bytes();
+    let remaining = budget.limit_bytes() - reserved;
+    let _blocked = budget.try_reserve_bytes(remaining).unwrap();
+    let mut index = 0;
+    let expected = [
+        (b"".as_slice(), b"zero".as_slice()),
+        (b"a", b"one"),
+        (b"z", b"two"),
+    ];
+    assert_eq!(
+        tree.visit_table::<()>("world.a", 3, |key, value| {
+            assert_eq!((key, value), expected[index]);
+            index += 1;
+            Ok(())
+        })
+        .unwrap(),
+        3
+    );
+    assert_eq!(index, 3);
+    assert_eq!(
+        tree.visit_table::<()>("world.ab", 0, |_, _| unreachable!())
+            .unwrap(),
+        0
+    );
+    assert!(matches!(
+        tree.visit_table::<()>("world.a", 2, |_, _| unreachable!()),
+        Err(StateTableVisitError::Tree(KeyedStateError::Capacity))
+    ));
+    assert!(matches!(
+        tree.visit_table::<()>("world/a", 10, |_, _| unreachable!()),
+        Err(StateTableVisitError::Tree(KeyedStateError::InvalidKey))
+    ));
+    let original = std::io::Error::from_raw_os_error(12);
+    let mut owner = Some(original);
+    let error = tree
+        .visit_table("world.a", 3, |_, _| Err(owner.take().unwrap()))
+        .unwrap_err();
+    let StateTableVisitError::Consumer(original) = error else {
+        panic!("consumer owner changed")
+    };
+    assert_eq!(original.raw_os_error(), Some(12));
+    assert!(owner.is_none());
+    assert_eq!(tree.root(), root);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+}
+
+#[test]
 fn point_proofs_bind_schema_key_presence_and_every_bit_of_the_value() {
     let mut tree = make();
     let a = k("world.assets", &[3]);

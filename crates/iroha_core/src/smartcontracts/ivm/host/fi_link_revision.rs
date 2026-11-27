@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::state::asset_fi::AssetFiLinkRevisionError;
+use ivm_abi::error::VmTrap;
 
 fn map_revision_error(error: AssetFiLinkRevisionError) -> ivm::VMError {
     match error {
@@ -12,7 +13,7 @@ fn map_revision_error(error: AssetFiLinkRevisionError) -> ivm::VMError {
         ) => map_query_execution_error(crate::execution_attempt::ExecutionAttemptError::Rejected(
             error,
         )),
-        AssetFiLinkRevisionError::Execution(_) => ivm::VMError::DecodeError,
+        AssetFiLinkRevisionError::Execution(_) => ivm::VMError::Trap(VmTrap::DecodeError),
     }
 }
 
@@ -52,29 +53,29 @@ impl QueryStateRef<'_, '_, '_> {
 impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn execute_fi_link_revision(
         &mut self,
-        vm: &mut IVM,
+        vm: &mut dyn ivm::host::SyscallContext,
         syscall: u32,
     ) -> Result<u64, ivm::VMError> {
         let context = self
             .current_contract_runtime_context
             .as_ref()
-            .ok_or(ivm::VMError::PermissionDenied)?;
-        vm.ensure_public_register(10)?;
-        vm.ensure_public_register(11)?;
-        vm.ensure_public_register(12)?;
+            .ok_or(ivm::VMError::Trap(VmTrap::PermissionDenied))?;
+        vm.quote().ensure_public_register(10)?;
+        vm.quote().ensure_public_register(11)?;
+        vm.quote().ensure_public_register(12)?;
         let definition: AssetDefinitionId =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(10)?, PointerType::AssetDefinitionId)?;
         let account: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+            Self::decode_tlv_typed(vm, vm.public_register(11)?, PointerType::AccountId)?;
         let expected_fi: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(12), PointerType::AccountId)?;
-        let remaining = vm.remaining_gas();
+            Self::decode_tlv_typed(vm, vm.public_register(12)?, PointerType::AccountId)?;
+        let remaining = vm.quote().remaining_gas();
         let gas_context = QueryGasContext::singular();
         let budget = Self::query_execution_budget(&gas_context, remaining)?;
         let state = self
             .query_state
             .get()
-            .ok_or(ivm::VMError::NotImplemented { syscall })?;
+            .ok_or(ivm::VMError::Trap(VmTrap::NotImplemented { syscall }))?;
         let (revision, execution_stats) = state.fi_link_revision(
             &self.effect_authority(),
             context,
@@ -84,7 +85,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             budget,
         )?;
         let encoded = ivm_abi::numeric_tlv::encode_int(&BigInt::from(revision))?;
-        let length = u64::try_from(encoded.len()).map_err(|_| ivm::VMError::GasCostOverflow)?;
+        let length = u64::try_from(encoded.len())
+            .map_err(|_| ivm::VMError::Trap(VmTrap::GasCostOverflow))?;
         let gas = Self::finish_core_query_encoded_bytes_gas(
             vm,
             remaining,
@@ -94,8 +96,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             length,
         )?;
         vm.preflight_host_tlv_allocations_with_reserved_heap(&[encoded.len()], 0)?;
-        let pointer = vm.alloc_host_tlv(&encoded)?;
-        vm.set_register(10, pointer);
+        let pointer = vm.alloc_encoded_host_tlv(&encoded)?;
+        vm.write_register(10, pointer)?;
         Ok(gas)
     }
 }
@@ -107,6 +109,7 @@ mod tests {
     use crate::state::asset_fi::FiLinkReaderFixture as Fixture;
     use iroha_data_model::prelude::BlockHeader;
     use ivm::host::IVMHost;
+    use ivm_abi::error::{VmDeferral, VmErrorRef, VmTrap};
     use std::num::NonZeroU64;
 
     fn header() -> BlockHeader {
@@ -247,7 +250,7 @@ mod tests {
         let mut vm = arguments(&f, 50_000_000);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION, &mut vm),
-            Err(ivm::VMError::NotImplemented { .. })
+            Err(ivm::VMError::Trap(VmTrap::NotImplemented { .. }))
         ));
     }
 
@@ -273,7 +276,7 @@ mod tests {
         let before = vm.register(10);
         assert!(matches!(
             host.syscall(ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION, &mut vm),
-            Err(ivm::VMError::OutOfMemory)
+            Err(ivm::VMError::Trap(VmTrap::OutOfMemory))
         ));
         assert_eq!(vm.register(10), before);
         assert_eq!(
@@ -295,14 +298,16 @@ mod tests {
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let expected = refusal.clone();
         let mapped = map_revision_error(AssetFiLinkRevisionError::Local(refusal.into()));
-        assert!(matches!(mapped,ivm::VMError::AllocationDeferred(actual) if actual == expected));
+        assert!(
+            matches!(mapped,ivm::VMError::Deferred(VmDeferral::AllocationDeferred(actual)) if actual == expected)
+        );
         drop(retained);
         assert!(budget.try_reserve_bytes(1).is_ok());
         assert!(matches!(
             map_revision_error(AssetFiLinkRevisionError::Query(
                 QueryExecutionFail::GasBudgetExceeded
             )),
-            ivm::VMError::OutOfGas
+            ivm::VMError::Trap(VmTrap::OutOfGas)
         ));
     }
 
@@ -328,19 +333,27 @@ mod tests {
         fn allows_syscall(&self, policy: ivm::SyscallPolicy, number: u32) -> bool {
             self.inner.allows_syscall(policy, number)
         }
-        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
+        fn prepare_syscall(
+            &self,
+            number: u32,
+            vm: ivm::host::SyscallQuote<'_>,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION {
                 assert!(self.before.replace(Some(vm.remaining_gas())).is_none());
             }
             self.inner.prepare_syscall(number, vm)
         }
-        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        fn syscall(
+            &mut self,
+            number: u32,
+            vm: &mut dyn ivm::host::SyscallContext,
+        ) -> Result<u64, ivm::VMError> {
             if number == ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION {
                 assert!(self.reserve.replace(vm.syscall_reserved_gas()).is_none());
                 assert!(vm.syscall_reserved_gas() > 0);
-                self.input_before = Some(vm.alloc_input_tlv(&[]).unwrap());
+                self.input_before = Some(crate::ivm_test_support::next_host_input_address(vm));
                 self.heap_before = Some(vm.alloc_heap(0).unwrap() - ivm::Memory::HEAP_START);
-                self.register_before = Some(vm.register(10));
+                self.register_before = Some(vm.public_register(10)?);
             }
             let result = self.inner.syscall(number, vm);
             if number == ivm::syscalls::SYSCALL_ASSET_FI_LINK_REVISION {
@@ -409,7 +422,7 @@ mod tests {
         } else {
             assert!(matches!(
                 result.unwrap_err().as_unmetered(),
-                ivm::VMError::OutOfGas
+                VmErrorRef::Trap(VmTrap::OutOfGas)
             ));
             assert!(host.actual.is_none());
             assert!(vm.call_result_word_count().is_err());

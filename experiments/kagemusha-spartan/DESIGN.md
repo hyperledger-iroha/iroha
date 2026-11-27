@@ -22,6 +22,25 @@ file explains how the design works and where each part stands.
 
 ## 0. Status at iroha `optimizations` 79d42d60da (2026-11-15)
 
+**Control decision, 2026-11-18 (`1e2afdc338`).** The next experimental catalog keeps four P/S pairs. Bootstrap remains in the recurring matrix polynomial. The standalone relation in `dd38d1348c` shares the recovery insertion across Load, RefreshTimeAnchor and Unload. Recursive integration still needs one shared Control pair. The two mode bits are authenticated ordinary inputs. The standalone Refresh relation hard-checks its anchor signature, with a fixed public dummy signer for the other modes. Qualification still requires a combined build, all eight exact program comparisons, native recovery, signed device measurements and the owner decisions. [Integration decision and gates](research/E4-REWEIGH.md)
+
+**Update 2026-11-18** (HEAD 60309bba27; supersedes the Payment-size and Burn bullets below):
+
+- **Complete chain on the Mac, 11-17** (`output/s2/chain-20261117T051751Z.log`, HEAD 1def5379c7 plus the then
+  uncommitted device-fixture work, layout p18-s17). Programs reported stable by digest from generation 2-4 on. Final
+  generation, linked pairs verified: Receive 29.35 s, Send 10.75 s, Load 10.99 s, Bootstrap 9.96 s, every pair
+  4,832 + 4,704 B. **Complete IPM1 Payment 11,597 B** (pair 9,610, envelope 10,748, companion 749): 403 B under the
+  12,000 B experimental budget. A malformed-R Receive burned under the same program. The process ended during the
+  native containment stage without an exit line, so the run has no peak-RSS line; its bundle
+  (`output/full-backend-run-20261117T051751Z/native-device`) is complete.
+- **Native Burn, end to end** (`output/r26/containment-20261117T175154Z.log`, from that bundle, 1,669 s wall,
+  5.67 GB peak RSS): `authenticated_native_containment_from_bundle` passed. Fifteen independently corrupted Payments
+  (P and S matrix claims, own and inherited generator claims, group and scalar equations, malformed proof words, the
+  link R, a Request signature with corrupted bindings, an isolated bad Request signature with a valid Send proof) each
+  burned 10, kept the unrelated 100, and let the next Send10 spend, leaving 90. A valid Payment could not be forced to
+  burn and credited without burn. TODO G4 is done.
+- **Library suite** at 1def5379c7: 196 passed, 0 failed, 11 ignored.
+
 This section supersedes the dated status statements later in this file (§1 "Where it stands", and the notes on the
 128 MiB stop, native rejection of invalid Payments, the unmeasured Payment and "uncommitted" work). The rest of the
 design text is unchanged. Everything below was read from committed source and the run logs in `output/`.
@@ -58,8 +77,9 @@ design text is unchanged. Everything below was read from committed source and th
   (`bootstrap::tests::recursive_natural_layout_profiles`, `full::tests::bootstrap_pair_carries_the_empty_claim`,
   `points::tests::points_side_holds_proves_and_refuses`), 10 ignored.
 - **Absent:** Unload and RefreshTimeAnchor have statement tags only (`statement.rs`), with no recursive kind and no
-  native transition. The fee-schedule signer is assumed checked "when installed" (`fee_schedule.rs`), and no check
-  exists. The written recursive soundness argument and an independent review are still open.
+  native transition. The fee-schedule signer check now exists natively (RegulatoryPolicy role, 2026-11-18), but no
+  transition installs a schedule yet. The written recursive soundness argument now exists (research/SOUNDNESS.md);
+  its independent review is open.
 - **Devices.** Hardware probes only (11-13): Android StrongBox key and iOS Secure Enclave key, neither requiring user
   confirmation. Five Swift SDK tests passed on an iPhone 17 Pro Max. The iOS runtime fixture installed but did not
   launch (phone locked); Android only built. No device proving or payment run exists. The planned confirmation prompts
@@ -90,6 +110,18 @@ as one QR code of at most 12,000 bytes. Every proof is checked natively before v
    commitment the issuer certifies in the credential.
 5. Acceptance is always native: both proofs verify, the pair is linked, and the accumulated matrix claims and the
    generator claims hold.
+
+**What the proofs do not guarantee.** Read this before relying on them (§11 has the detail):
+
+- **No protection against double spending across forks.** Each proof shows that an operation follows the rules from
+  the wallet's previous state. Two Sends made from the same funded state each follow the rules, so the proofs alone
+  accept both. Only hardware custody, protected state and trusted wallet execution prevent this. They have to hold
+  through concurrency, restart, rollback and backup recovery on both phones; that qualification is open (TODO G7).
+- **Load finality is checked by native code**, not inside the relation.
+- **Payments are linkable.** Balances and witness values stay hidden, but a wallet's key-table commitment is not
+  blinded and ties all of its proofs together, and with generator claims folded in clear (§7.4) a Payment also links
+  to the payments that funded it. The owner accepted this for the research design on 2026-11-08. Production needs the
+  owner's confirmation, and the apps' privacy text has to say it (TODO G9).
 
 **Where it stands.**
 
@@ -171,11 +203,13 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
 - **The verdict comes from the bytes.** Within an admitted transport profile, the receiver's Receive relation derives
   its verdict from the exact Payment bytes. A valid payment credits. An invalid one takes the burn branch: the Core
   balance is credited and the same amount is added to the adjusted burned value, so spendable value does not grow,
-  and the credit id stays consumed. Neither the receiver nor the host chooses the branch (spec
-  `kagemusha_lambda_omega_v1.md` §2.7, OQ-3).
-- **At HEAD, native admission still rejects an invalid incoming Payment** (`engine.rs` requires `valid == 1`). The
-  relation keeps the burn branch for an already selected historical Receive. Turning invalid candidates into a native
-  burn is in progress (uncommitted).
+  and the credit id stays consumed. Neither the receiver nor the host is meant to choose the branch (spec
+  `kagemusha_lambda_omega_v1.md` §2.7, OQ-3). Review finding 4 identified unconstrained leaves in the fold of
+  verifier public inputs. Commit `6c345ed8d0` pinned those leaves in both proof halves. The regression exercises
+  both recursive verifiers. [Regression test](src/io_binding_tests.rs) · [Review status](TODO.md)
+- **Native admission derives the verdict from the bytes** (`engine.rs`, `valid` from parsing plus the exact full
+  verifier; resource and availability errors still return). Fifteen independently corrupted Payments each burn on
+  the Mac (2026-11-18, §0), and natively a valid Payment can neither be forced to burn nor fail to credit.
 - **Acceptance is native.** Before any pair's bytes are released, native code verifies both proofs, the link, both
   accumulated matrix claims and the own and inherited generator claims. A Spartan verifier accepting a proof is not,
   by itself, acceptance.
@@ -184,7 +218,7 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
 |---|---|
 | Transport, framing or reconstruction fails (length, header, profile) | Rejected before any verdict |
 | Incoming pair, claims and Request signature valid | Accept: credit; the credit id is inserted |
-| Incoming proof, claims or signature invalid, within the admitted profile | The relation derives burn. At HEAD, native admission rejects instead; native burn is in progress |
+| Incoming proof, claims or signature invalid, within the admitted profile | Burn: the relation and native admission both derive it; unrelated value is kept and the next operation proceeds |
 | A produced pair fails native verification, or its accumulators are false | Not released |
 
 ## 5. One proof
@@ -216,6 +250,13 @@ Sources: [research/DESIGN-100X.md](research/DESIGN-100X.md) and the reports besi
   - Every P circuit uses one label (`P-uniform`) and every S circuit another (`S-uniform`), so a circuit's key does not
     depend on which kind of proof it verifies. The kind stays bound through the io.
 - **Endoscalars:** challenges that multiply points are Halo endoscalars.
+- **Challenge distributions:** the v4 candidate draws LogUp α and β from two successive full-width squeezes. Each
+  uses the first word of a fresh permutation. τ and the pair-link ρ also consume full words. Other squeezes can supply
+  two 126-bit raw or endoscalar challenges. The transcript domain is `kagemusha-spartan/full-logup/v1`. Transcript
+  tags are ignored, so domain separation is the fixed positional schedule. Soundness bounds are taken over these
+  distributions, including the correlation between the two halves of one squeeze, not over `|F|`
+  ([research/SOUNDNESS.md](research/SOUNDNESS.md) §5). The local lemmas alone do not give prefix knowledge or
+  recursive Fiat-Shamir security (§11).
 - **Sizes:** a proof is its row commitments, round commitments, masked evaluations, IPA L/R pairs, folded generator,
   Schnorr final and late io.
 
@@ -312,9 +353,12 @@ The pair link makes P and S two halves of one statement.
    that does not end at the link's R fails its own circuit.
 4. Each verifier circuit ties every verified proof's link io to the pair's shared values.
 
-μ is committed before ρ, so if P's and S's vectors `(μ, v)` differ, the two chains agree with probability at most
-about `n/2^126`, since ρ is a 126-bit challenge. The native engine draws μ from fresh OS entropy; the research fixtures derive it deterministically. A
-swapped partner (P-recv linked with S-send) is refused.
+μ and the shared values are committed before ρ, so if P's and S's vectors `(μ, v)` differ, the two chains agree with
+probability at most about `n/p`: ρ is the whole canonical Fp word squeezed by S's transcript (`spartan.rs`
+`link_word`), embedded injectively into Fq, not a 126-bit challenge ([research/SOUNDNESS.md](research/SOUNDNESS.md)
+§6.7). n is 783 shared words for Send and Load and 1,539 for Receive. The native engine draws μ from fresh OS entropy
+(Bootstrap's mask is deterministic); the research fixtures derive it deterministically. A swapped partner (P-recv
+linked with S-send) is refused.
 
 ### 7.3 Deferred matrix claims
 
@@ -333,14 +377,18 @@ swapped partner (P-recv linked with S-send) is refused.
 **The fold.** A step folds four claims (two incoming accumulators and two fresh claims) into its own accumulator.
 
 1. Take the cubic curve γ through the four points at t = 0..3.
-2. Commit `q = P∘γ` in the first phase. Its degree is `3·(selector bits + X + Y) + 9 + 3·(challenge degrees)`, 165
-   for P in the 64-row layout.
+2. Commit `q = P∘γ` in the first phase. Its degree is `3·(selector bits + X + Y) + 9 + 3·(challenge degrees)`: 186
+   for P and 174 for S at the 11-17 complete p18-s17 layout (SOUNDNESS.md §7.3); 165 belonged to the 64-row research
+   layout.
 3. Check `q(t) = v_t` at t = 0..3.
 4. The new claim is `(γ(β), q(β))`, with β the second-phase challenge. It is published as late io.
 
-A step with one input proof (Send, Load) repeats its two claims, which is sound. A false input claim makes the
-folded claim false, except with probability about `deg q/2^126`: β is a raw 126-bit challenge. That is before
-Fiat-Shamir, grinding and composition losses.
+A step with one input proof (Send, Load) repeats its two claims, which is sound. `q` is committed before β, and the
+four input equalities make any false input imply a nonzero `q − P∘γ`, so one fold fails with probability at most
+`deg q · λ_β`. In the v4 candidate β is a fresh field word with maximum atom 2/q on P and 1/p on S. The v3 estimate
+used the second 126-bit half of a shared word. [Three-mode soundness review](research/CONTROL-SOUNDNESS.md). The bound
+is before Fiat-Shamir, grinding and composition losses. Declared challenge degrees are program metadata: native
+import has to verify them or rely on authenticated compiler output (TODO G5).
 
 **Native decision.** An accumulated claim is checked by running each kind's matrix program once at its point: about
 0.2 ms per uniform kind on the Mac.
@@ -550,7 +598,11 @@ credit-digest records are preserved.
 ## 9. The native side
 
 - **Programs:** eight public verifier programs, one per kind and side, holding instructions, constants and geometry
-  and no witness data (`program_artifact.rs`). A root-signed manifest pins them (`engine.rs`).
+  and no witness data (`program_artifact.rs`). A manifest (v2) signed by a root-certified Artifact-role key pins the
+  eight canonical program digests, the accumulator dimensions and the generator/table profile (namespace,
+  hash-to-curve suite, capacities, derived-set digests, table construction and its known answer). Installation
+  recomputes each and derives every program's matrix-tape challenge degrees instead of trusting the declared ones
+  (`engine.rs`).
 - **The engine** verifies every output against its program, checks both matrix accumulators and the generator claims,
   and takes fresh OS entropy for every proof's masks and the pair's μ.
 - **Custody:**
@@ -628,8 +680,13 @@ the IPA and the inner sumcheck.
 
 - **The prover's native q:** see §7.3.
 - **The final decisions:** about 0.2 ms per kind per accumulated claim, and one MSM per generator claim.
-- **Memory:** a stage A pair peaked at about 1 GB on the Pixel. The complete-chain driver peaked at 3.1 GB RSS on the
-  Mac (compiler and prover together). The complete backend's per-operation memory on a phone is unmeasured.
+- **Memory (2026-11-18, iroha 2b3671cae3, p18-s17, Mac):** the prover reads its caller's witness rows in place and
+  copies only the rows it writes; the first outer round streams Az, Bz, Cz; `M(r_x, ·)` uses a split equality table,
+  plans built one group at a time and pages written on demand; the matrix value comes from the folded table, so no
+  tape runs in the prover. Proofs are byte-identical. Accounted peaks: S 105-216 MB; P 345-432 MB for Bootstrap,
+  Load and Send; P-Receive 869 MB, 139 MB over the 0.68 GiB admission. The native operation's process peak fell
+  from 5.26 to 2.94 GB RSS and is now set by the engine (its program-digest compile and preparation check). Phone
+  memory is unmeasured.
 
 None of these has been timed on a phone.
 
@@ -639,16 +696,34 @@ None of these has been timed on a phone.
 
 - discrete log on Pallas and Vesta;
 - Fiat-Shamir with the Poseidon sponge as a random oracle;
-- for unbounded recursion, a PCD composition theorem checked against this construction, or an explicitly stated
-  recursive Fiat-Shamir assumption, as today's spec has.
+- for the recursion, the explicit assumption **P2-RKFS** ([research/SOUNDNESS.md](research/SOUNDNESS.md) §4.2,
+  revision 2): (A) the adversary is algebraic on Pallas and Vesta, with representations recorded when each point
+  first enters a transcript, and (B) the RP57 Poseidon transcript used inside the recursion is an ideal oracle. No PCD
+  composition theorem is imported, and nothing here is a DL-only theorem.
+
+**The written argument (TODO G1/G2, 2026-11-18, Codex astra, revision 2 after the independent review):**
+SOUNDNESS.md defines the security experiment with honest wallets, argues by closure over the finite set of
+extracted operation nodes (a Receive joins its own history and the payer's; no global rank is needed, and own chains
+are rooted at Bootstrap by the sequence counter), and states a monetary conservation corollary under custody
+hypotheses that bind every wallet in the history: no forks, no second Bootstrap per credential or wallet id, and
+native Load finality. It gives written local lemmas, a round-by-round lemma for query accounting, and bounds over
+the real challenge distributions (raw 126-bit
+words, endoscalars from 126 bits, full-width words). At the 11-17 complete layout the conservative local algebraic
+bound per operation is about **104.0 bits for Bootstrap, 101.6 for Load, 101.4 for Send and 100.7 for Receive**,
+dominated by the compiler's LogUp terms; without LogUp the main proofs, folds and link give about 115.3 bits. These
+numbers are conditional on P2-RKFS and the compiler's phase invariants, and they have to be multiplied by a finite
+history and query budget: with an illustrative `Q ≤ 2^40` adversary queries and `N ≤ 2^36` extracted nodes the
+algebraic term is about `2^-60.6`. **None of this is an overall 128-bit claim**; a production target needs chosen
+budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 
 **Arguments by mechanism:**
 
 | Mechanism | Argument |
 |---|---|
-| γ separation | A rewinding argument over a Laurent polynomial in γ: off-slot terms land on nonzero exponents, so a forgery needs γ to hit one of `2m+1` roots. γ is an endoscalar from 126 challenge bits, so the bound must be taken over that distribution, not `|F|`. Written proof pending. |
-| Deferred matrix claims | A false input claim survives the fold with probability about `deg q/2^126` (β is a raw 126-bit challenge), and native decision is mandatory. |
-| Pair link | μ is committed before ρ, so two different chains agree with probability about `n/2^126`. |
+| γ separation | Under the P2-RKFS representation assumption the extracted coefficients are fixed before the fresh γ reply. Multiplying the nonzero Laurent discrepancy by γᵐ gives a polynomial of degree at most `2m`. The probability of a root is bounded using the endoscalar distribution. α batches `m + 2` equations with degree at most `m + 1` (SOUNDNESS.md §6.1). |
+| Committed sumcheck rounds | Each block has individual degree at most two; with the three-variable Kronecker schedule its univariate error polynomial has degree at most 26; the initial equality test has degree at most `2^sx − 1`; the matrix combination is a degree-3 test (SOUNDNESS.md §6.2-§6.4). |
+| Deferred matrix claims | The first phase commits `q` before β. The survival bound for a nonzero discrepancy is `deg(q − P∘Γ) · λ_β` under the stated degree and reply-distribution hypotheses. Native decides both final claims (§7.3). |
+| Pair link | μ and the shared values are committed before ρ, the whole squeezed Fp word; two different chains agree with probability about `n/p`, n = 783 (Send, Load) or 1,539 (Receive) (§7.2). |
 | Curve arithmetic | Exception-free: complete additions wherever inputs may coincide. |
 | Encodings | Canonical: byte ranges, and comparisons against the modulus. |
 
@@ -663,8 +738,8 @@ None of these has been timed on a phone.
 - high-S signatures;
 - a wrong scheme, issuer or digest;
 - tampered state, statement or receipt;
-- malformed incoming proofs and signatures, which derive an invalid verdict inside the relation; at HEAD, native
-  admission then rejects the Payment.
+- malformed incoming proofs and signatures, which derive an invalid verdict inside the relation and burn natively
+  (15 independent cases, 2026-11-18, §0).
 
 **Trust assumptions that proofs do not cover:**
 
@@ -675,17 +750,28 @@ None of these has been timed on a phone.
 - **Load finality.** Native code verifies Load's finality; the relation does not prove BLS finality.
 - **Issuance.** The issuer derives the certified table commitment, and the wallet recomputes it at intake. The
   recursion relies on that for every earlier counterparty. Generator namespace, capacity, column order and table
-  construction have to be pinned in authenticated parameters.
+  construction are pinned in the authenticated parameters; credential intake recomputes the table commitment under
+  them, and a correctly signed credential with a wrong commitment is refused (2026-11-18).
 
 **Known gaps:**
 
-- the recursive soundness theorem for Path 2 is not stated or proved: extraction through joined histories (a Receive
-  has two parents), accumulated claims, and recursive Fiat-Shamir;
-
-- an independent soundness review ([research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md) is the
-  checklist);
-- written proofs for γ separation and the deferral;
-- secret MSMs are not constant-time, as in today's prover;
+- the recursion rests on the explicit P2-RKFS assumption, not a proved theorem; the independent reviewer accepts it
+  as minimal, well defined and sufficient, but adopting it is an owner decision (SOUNDNESS-REVIEW.md, re-check);
+- the conservation corollary holds only under the custody hypotheses above, for every wallet whose history joins;
+- open code findings from the review: unbound io-fold leaves (4), the LogUp phase invariant not enforced at build
+  time (5), cross-field limb canonicality (7) and forgery refusals through the complete builders (9);
+- no finite lifetime or query budget is enforced (the sequence counter is unsigned 128-bit), so the bounds above
+  hold only under chosen budgets;
+- an independent soundness review of SOUNDNESS.md (G3; [research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md)
+  is the checklist), and the open items in SOUNDNESS.md §9 and §11 (imported degree declarations, generator-profile
+  binding, LogUp phase invariants, a frozen candidate equal to HEAD);
+- side channels: private commitments use constant-time secret MSMs without tables, and the inner sumcheck's
+  support reads only public structure (rows the build never wrote, the io, the public `M(r_x, ·)`), never a
+  private zero. LogUp multiplicity counting and link-table recount use data-oblivious lookup schedules.
+  The installed prover's row hooks take rows by position; only the non-uniform benchmark and test circuits'
+  default hooks compare rows by value. The build's copy and absent-instance checks use constant-time field
+  equality and branch only on a malformed witness, whose refusal still stops at the first failing slot. Witness
+  construction has value-dependent paths, and the constant-time kernels still need physical measurements (TODO G8);
 - the deterministic `SpikeRng` is for tests only.
 
 ## 12. Status
@@ -703,7 +789,7 @@ None of these has been timed on a phone.
 | Exact Bootstrap | Validated | [BOOTSTRAP.md](BOOTSTRAP.md) |
 | Monetary components (state, Request, statement, fee, arithmetic, controls, indexed map) | Validated as components | [MONETARY_COMPONENTS.md](MONETARY_COMPONENTS.md), [INDEXED_MAP.md](INDEXED_MAP.md) |
 | Complete Send, Receive (total verdict) and Load inside the recursion | In code. The first full-chain run verified a generation-0 Receive pair, then stopped at the 128 MiB program-serialization bound (11-13) | `send.rs`, `receive*.rs`, `load.rs`, `backend_chain_tests.rs`; `codex-20261113/PROOF_VALIDATION.md` |
-| Native burn of invalid incoming Payments | In progress; HEAD rejects them natively | `engine.rs` (working tree) |
+| Native burn of invalid incoming Payments | In code; 15 corrupted cases burn, valid Payments credit (Mac, 11-18) | `engine.rs`, `engine_adversarial_tests.rs`; `output/r26/containment-20261117T175154Z.log` |
 | Private generator-claim restructuring | In code; decision to confirm | `generator_claim*.rs` |
 | Payment commitment, IPM1 wire, proof-byte binding | In code | `payment.rs`, `payment_wire.rs`, `proof_bytes.rs` |
 | Native engine, program artifacts, custody contracts | In code | `engine.rs`, `native.rs`, `program_artifact.rs` |

@@ -12,8 +12,10 @@ use iroha_data_model::{
         SignedBlock,
         consensus::SumeragiRootScope,
         execution_output::{
-            ExecutionOutputV1, NetworkExecutionOutputV2, PipelineExecutionOutputV2,
-            TimeExecutionOutputV2, TriggerFailureRootV1,
+            ExecutionOutputC10V1, ExecutionOutputV1, ExecutionSourceC10V1,
+            NetworkExecutionOutputV1, NetworkExecutionOutputV2, PipelineExecutionOutputV1,
+            PipelineExecutionOutputV2, TimeExecutionOutputV1, TimeExecutionOutputV2,
+            TransactionResultRef, TriggerFailureRootV1,
         },
     },
     isi::{
@@ -172,7 +174,7 @@ impl Projection {
         block: &SignedBlock,
         source: &str,
         index: usize,
-        result: Option<&iroha_data_model::transaction::signed::TransactionResult>,
+        result: Option<TransactionResultRef<'_>>,
     ) -> Result<()> {
         self.count(source);
         let tx = match entrypoint {
@@ -203,7 +205,7 @@ impl Projection {
     // not encode which dispatch mechanism selected each step; do not invent it.
     fn recorded_steps(
         &mut self,
-        result: &iroha_data_model::transaction::signed::TransactionResult,
+        result: TransactionResultRef<'_>,
         occurrence: &Value,
         path: &str,
     ) -> Result<()> {
@@ -223,13 +225,18 @@ impl Projection {
         index: usize,
         output: &ExecutionOutputV1,
     ) -> Result<()> {
-        let (source, invocation, result, failure_root, completions) = match output {
-            ExecutionOutputV1::Network(row)
+        let result = output.result();
+        let (source, invocation, failure_root) = match output {
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 { input_index, .. })
             | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
-                execution: row,
+                execution: NetworkExecutionOutputV1 { input_index, .. },
+                ..
+            })
+            | ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                source: ExecutionSourceC10V1::Network(input_index),
                 ..
             }) => {
-                let input_index = usize::try_from(row.input_index)?;
+                let input_index = usize::try_from(*input_index)?;
                 let entrypoint = block
                     .network_entrypoint_at(input_index)
                     .ok_or_else(|| eyre!("Network output lacks its exact input"))?;
@@ -242,29 +249,56 @@ impl Projection {
                 } else {
                     "block_network_execution"
                 };
-                return self.entrypoint(entrypoint, block, source, input_index, Some(&row.result));
+                return self.entrypoint(entrypoint, block, source, input_index, Some(result));
             }
-            ExecutionOutputV1::Pipeline(row)
+            ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+                invocation,
+                failure_root,
+                ..
+            })
             | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
-                execution: row,
+                execution:
+                    PipelineExecutionOutputV1 {
+                        invocation,
+                        failure_root,
+                        ..
+                    },
+                ..
+            })
+            | ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                source:
+                    ExecutionSourceC10V1::Pipeline {
+                        invocation,
+                        failure_root,
+                    },
                 ..
             }) => (
                 "pipeline_execution",
-                json::to_value(&row.invocation)?,
-                &row.result,
-                &row.failure_root,
-                &row.completions,
+                json::to_value(invocation)?,
+                failure_root,
             ),
-            ExecutionOutputV1::Time(row)
+            ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+                invocation,
+                failure_root,
+                ..
+            })
             | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
-                execution: row, ..
-            }) => (
-                "time_execution",
-                json::to_value(&row.invocation)?,
-                &row.result,
-                &row.failure_root,
-                &row.completions,
-            ),
+                execution:
+                    TimeExecutionOutputV1 {
+                        invocation,
+                        failure_root,
+                        ..
+                    },
+                ..
+            })
+            | ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                source:
+                    ExecutionSourceC10V1::Time {
+                        invocation,
+                        failure_root,
+                    },
+                ..
+            }) => ("time_execution", json::to_value(invocation)?, failure_root),
             // A governance block-start row runs no trigger and carries no beacon input.
             ExecutionOutputV1::GovernanceBlockStart(_) => {
                 self.count("governance_block_start");
@@ -275,7 +309,7 @@ impl Projection {
         let occurrence = norito::json!({
             "carrier_height": (block.header().height().get()), "carrier_hash": (block.hash().to_string()),
             "source": source, "output_index": index, "output_hash": (iroha_crypto::HashOf::new(output).to_string()),
-            "invocation": invocation, "completion_count": (completions.len()),
+            "invocation": invocation, "completion_count": (output.completions().len()),
             "stored_outcome": (outcome(Some(result))), "authenticated_execution_verified": false
         });
         self.recorded_steps(result, &occurrence, "recorded_trigger")?;
@@ -308,10 +342,8 @@ impl Projection {
     }
 }
 
-fn outcome(
-    result: Option<&iroha_data_model::transaction::signed::TransactionResult>,
-) -> &'static str {
-    match result.map(|result| result.as_ref()) {
+fn outcome(result: Option<TransactionResultRef<'_>>) -> &'static str {
+    match result.map(TransactionResultRef::as_ref) {
         Some(Ok(_)) => "recorded_success_unverified",
         Some(Err(_)) => "recorded_rejection_unverified",
         None => "not_an_execution_result",
@@ -525,8 +557,7 @@ mod tests {
         block::{
             BlockHeader,
             execution_output::{
-                InvocationCompletionV1, NetworkExecutionOutputV1, PipelineEventPositionV1,
-                PipelineExecutionOutputV1, PipelineInvocationV1, TimeExecutionOutputV1,
+                InvocationCompletionV1, PipelineEventPositionV1, PipelineInvocationV1,
                 TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
             },
             output_budget::ExecutionOutputLimits,
@@ -701,7 +732,7 @@ mod tests {
                 &block,
                 "native_lane_merge_execution",
                 0,
-                Some(&result),
+                Some((&result).into()),
             )
             .expect("execution");
         assert_eq!(
@@ -738,7 +769,7 @@ mod tests {
                 &block,
                 "block_entrypoint_execution",
                 0,
-                Some(&trigger_result),
+                Some((&trigger_result).into()),
             )
             .expect("recorded trigger");
         assert!(
@@ -890,6 +921,153 @@ mod tests {
     }
 
     #[test]
+    fn beacon_history_projects_c10_network_pipeline_and_rolled_back_time_from_their_own_rows() {
+        use iroha_data_model::ivm_c10::{
+            TransactionRejectionReasonC10V1, TransactionResultC10V1, ValidationFailC10V1,
+        };
+
+        let mut block = (*block(vec![
+            Log::new(iroha_data_model::Level::INFO, "unrelated".to_owned()).into(),
+        ]))
+        .clone();
+        let pipeline = PipelineInvocationV1 {
+            event: PipelineEventPositionV1::Network(0),
+            candidate_index: 0,
+            trigger: trigger_use(&block, "pipeline_root"),
+        };
+        let time = time_invocation(&block);
+        let completion = InvocationCompletionV1 {
+            callback_index: 0,
+            trigger_id: time.trigger.trigger_id.clone(),
+            outcome: TriggerCompletedOutcome::Failure("fixture rejection".to_owned()),
+        };
+        let success = |source, steps| {
+            ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                source,
+                result: TransactionResultC10V1(Ok(steps), Vec::new(), None, Default::default()),
+                completions: Vec::new(),
+                trigger_lifecycle: None,
+            })
+        };
+        let outputs = vec![
+            success(
+                ExecutionSourceC10V1::Network(0),
+                vec![trigger_step("nested_data")],
+            ),
+            success(
+                ExecutionSourceC10V1::Pipeline {
+                    invocation: pipeline.clone(),
+                    failure_root: None,
+                },
+                vec![
+                    trigger_step("pipeline_root"),
+                    trigger_step("nested_by_call"),
+                ],
+            ),
+            ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                source: ExecutionSourceC10V1::Time {
+                    invocation: time.clone(),
+                    failure_root: Some(TriggerFailureRootV1::ReturnedBeforeRollback(
+                        ExecutionStep(vec![lifecycle()].into()),
+                    )),
+                },
+                result: TransactionResultC10V1(
+                    Err(TransactionRejectionReasonC10V1::Validation(
+                        ValidationFailC10V1::NotPermitted("fixture rejection".to_owned()),
+                    )),
+                    Vec::new(),
+                    None,
+                    Default::default(),
+                ),
+                completions: vec![completion],
+                trigger_lifecycle: None,
+            }),
+        ];
+        attach_outputs(&mut block, outputs);
+        let mut projection = Projection::default();
+        project_block(&block, &mut projection, None).expect("coherent C10 projection");
+        let rows = &projection.records;
+        assert_eq!(rows.len(), 4);
+        let inputs = &rows[0]["occurrence"];
+        assert_eq!(inputs["source"].as_str(), Some("block_network_execution"));
+        assert_eq!(inputs["entrypoint_index"].as_u64(), Some(0));
+        assert_eq!(
+            inputs["entrypoint_hash"].as_str(),
+            Some(
+                block
+                    .network_entrypoint_at(0)
+                    .unwrap()
+                    .hash()
+                    .to_string()
+                    .as_str()
+            )
+        );
+        for (index, path) in [
+            "recorded_trigger/0/0",
+            "recorded_trigger/0/0",
+            "recorded_trigger/1/0",
+            "rolled_back_trigger/0",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(rows[index]["instruction_path"].as_str(), Some(path));
+            let occurrence = &rows[index]["occurrence"];
+            assert_eq!(
+                occurrence["authenticated_execution_verified"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                occurrence["stored_outcome"].as_str(),
+                Some(if index == 3 {
+                    "recorded_rejection_unverified"
+                } else {
+                    "recorded_success_unverified"
+                })
+            );
+        }
+        for (entry, position, source, invocation, completions) in [
+            (
+                1,
+                1,
+                "pipeline_execution",
+                json::to_value(&pipeline).unwrap(),
+                0,
+            ),
+            (
+                2,
+                1,
+                "pipeline_execution",
+                json::to_value(&pipeline).unwrap(),
+                0,
+            ),
+            (3, 2, "time_execution", json::to_value(&time).unwrap(), 1),
+        ] {
+            let occurrence = &rows[entry]["occurrence"];
+            assert_eq!(occurrence["source"].as_str(), Some(source));
+            assert_eq!(occurrence["invocation"], invocation);
+            assert_eq!(occurrence["output_index"].as_u64(), Some(position as u64));
+            assert_eq!(
+                occurrence["output_hash"].as_str(),
+                Some(
+                    HashOf::new(&block.execution_outputs()[position])
+                        .to_string()
+                        .as_str()
+                )
+            );
+            assert_eq!(occurrence["completion_count"].as_u64(), Some(completions));
+        }
+        let missing = success(ExecutionSourceC10V1::Network(1), Vec::new());
+        assert!(
+            projection
+                .output(&block, 0, &missing)
+                .unwrap_err()
+                .to_string()
+                .contains("lacks its exact input")
+        );
+    }
+
+    #[test]
     fn beacon_history_projects_nested_callbacks_once_and_distinguishes_rejected_roots() {
         let original = block(vec![
             Log::new(iroha_data_model::Level::INFO, "unrelated".to_owned()).into(),
@@ -1011,8 +1189,9 @@ mod tests {
                         ExecutionOutputV1::NetworkWithLifecycle(_)
                         | ExecutionOutputV1::PipelineWithLifecycle(_)
                         | ExecutionOutputV1::TimeWithLifecycle(_)
-                        | ExecutionOutputV1::GovernanceBlockStart(_) => {
-                            panic!("fixture starts with non-lifecycle rows")
+                        | ExecutionOutputV1::GovernanceBlockStart(_)
+                        | ExecutionOutputV1::C10(_) => {
+                            panic!("fixture starts with plain baseline execution rows")
                         }
                     }
                 })

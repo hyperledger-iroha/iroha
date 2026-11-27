@@ -387,8 +387,17 @@ impl Client {
         else {
             return error;
         };
-        match self.inner.get_transaction_rejection_reason(transaction) {
-            Ok(reason) => eyre::Report::new(reason).wrap_err(failure),
+        use iroha_data_model::block::execution_output::ProfiledTransactionRejection;
+        match self
+            .inner
+            .get_profiled_transaction_rejection_reason(transaction)
+        {
+            Ok(ProfiledTransactionRejection::Baseline(reason)) => {
+                eyre::Report::new(reason).wrap_err(failure)
+            }
+            Ok(ProfiledTransactionRejection::C10(reason)) => {
+                eyre::Report::new(reason).wrap_err(failure)
+            }
             Err(lookup) => {
                 tracing::warn!(?lookup, "could not read the transaction rejection reason");
                 error

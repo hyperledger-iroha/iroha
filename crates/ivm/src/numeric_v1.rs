@@ -1,4 +1,5 @@
 //! Kotodama V1 exact numeric syscall implementation.
+use crate::error::VmTrap;
 use crate::{
     IVM, VMError,
     numeric::{
@@ -26,21 +27,23 @@ enum FailureMode {
 }
 fn failure_mode(vm: &IVM, reserved: &[usize]) -> Result<FailureMode, VMError> {
     if reserved.iter().any(|&register| vm.register(register) != 0) {
-        return Err(VMError::NumericFault(
+        return Err(VMError::Trap(VmTrap::NumericFault(
             NumericFaultV1::ReservedRegisterNonZero,
-        ));
+        )));
     }
     match vm.register(NUMERIC_FAILURE_MODE_REGISTER) {
         NUMERIC_FAILURE_TRAP => Ok(FailureMode::Trap),
         NUMERIC_FAILURE_STATUS => Ok(FailureMode::Status),
-        _ => Err(VMError::NumericFault(NumericFaultV1::InvalidFailureMode)),
+        _ => Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::InvalidFailureMode,
+        ))),
     }
 }
 fn require_zero_registers(vm: &IVM, reserved: &[usize]) -> Result<(), VMError> {
     if reserved.iter().any(|&register| vm.register(register) != 0) {
-        Err(VMError::NumericFault(
+        Err(VMError::Trap(VmTrap::NumericFault(
             NumericFaultV1::ReservedRegisterNonZero,
-        ))
+        )))
     } else {
         Ok(())
     }
@@ -49,8 +52,9 @@ fn rounding_mode(vm: &IVM) -> Result<RoundingMode, VMError> {
     rounding_mode_at(vm, NUMERIC_ROUNDING_REGISTER)
 }
 fn rounding_mode_at(vm: &IVM, register: usize) -> Result<RoundingMode, VMError> {
-    let mode = RoundingModeV1::from_tag(vm.register(register))
-        .ok_or(VMError::NumericFault(NumericFaultV1::InvalidRoundingMode))?;
+    let mode = RoundingModeV1::from_tag(vm.register(register)).ok_or(VMError::Trap(
+        VmTrap::NumericFault(NumericFaultV1::InvalidRoundingMode),
+    ))?;
     Ok(match mode {
         RoundingModeV1::TowardZero => RoundingMode::TowardZero,
         RoundingModeV1::AwayFromZero => RoundingMode::AwayFromZero,
@@ -76,7 +80,9 @@ fn numeric_fault(error: NumericOperationError) -> Result<NumericFaultV1, VMError
         NumericOperationError::QuantityUnderflow => NumericFaultV1::QuantityUnderflow,
         NumericOperationError::NegativeSquareRoot => NumericFaultV1::NegativeSquareRoot,
         NumericOperationError::NonCanonical => {
-            return Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical));
+            return Err(VMError::Trap(VmTrap::PointerAbiFault(
+                PointerAbiFaultV1::NonCanonical,
+            )));
         }
     })
 }
@@ -84,7 +90,9 @@ fn bigint_fault(error: BigIntError) -> Result<NumericFaultV1, VMError> {
     match error {
         BigIntError::Overflow => Ok(NumericFaultV1::MantissaOverflow),
         BigIntError::DivisionByZero => Ok(NumericFaultV1::DivisionByZero),
-        BigIntError::NonCanonical => Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical)),
+        BigIntError::NonCanonical => Err(VMError::Trap(VmTrap::PointerAbiFault(
+            PointerAbiFaultV1::NonCanonical,
+        ))),
     }
 }
 fn enforce_int_domain(value: BigInt) -> Result<BigInt, BigIntError> {
@@ -131,7 +139,7 @@ fn resolve_failure<T>(
         Err(error) => {
             let fault = numeric_fault(error)?;
             match mode {
-                FailureMode::Trap => Err(VMError::NumericFault(fault)),
+                FailureMode::Trap => Err(VMError::Trap(VmTrap::NumericFault(fault))),
                 FailureMode::Status => {
                     recover(vm, fault)?;
                     Ok(None)
@@ -150,7 +158,7 @@ fn resolve_bigint_failure<T>(
         Err(error) => {
             let fault = bigint_fault(error)?;
             match mode {
-                FailureMode::Trap => Err(VMError::NumericFault(fault)),
+                FailureMode::Trap => Err(VMError::Trap(VmTrap::NumericFault(fault))),
                 FailureMode::Status => {
                     recover(vm, fault)?;
                     Ok(None)
@@ -193,10 +201,11 @@ fn limb_count(value: &BigInt) -> u64 {
     numeric_gas::limbs_for_bits(u64::try_from(value.bit_len()).unwrap_or(u64::MAX))
 }
 fn twos_limb_count(value: &BigInt) -> Result<u64, VMError> {
-    let magnitude_bits = u64::try_from(value.bit_len()).map_err(|_| VMError::GasCostOverflow)?;
+    let magnitude_bits =
+        u64::try_from(value.bit_len()).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
     let conservative_signed_bits = magnitude_bits
         .checked_add(1)
-        .ok_or(VMError::GasCostOverflow)?;
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))?;
     Ok(numeric_gas::limbs_for_bits(conservative_signed_bits))
 }
 fn charge_limb_work(vm: &mut IVM, work: u64) -> Result<(), VMError> {
@@ -255,10 +264,14 @@ fn charge_wrapping_reduction(vm: &mut IVM, value: &BigInt) -> Result<(), VMError
 }
 fn charge_decimal_comparison(vm: &mut IVM, lhs: &Numeric, rhs: &Numeric) -> Result<(), VMError> {
     let target = lhs.scale().max(rhs.scale());
-    let lhs_delta = u8::try_from(target - lhs.scale()).map_err(|_| VMError::GasCostOverflow)?;
-    let rhs_delta = u8::try_from(target - rhs.scale()).map_err(|_| VMError::GasCostOverflow)?;
-    let lhs_bits = u64::try_from(lhs.mantissa().bit_len()).map_err(|_| VMError::GasCostOverflow)?;
-    let rhs_bits = u64::try_from(rhs.mantissa().bit_len()).map_err(|_| VMError::GasCostOverflow)?;
+    let lhs_delta =
+        u8::try_from(target - lhs.scale()).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
+    let rhs_delta =
+        u8::try_from(target - rhs.scale()).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
+    let lhs_bits = u64::try_from(lhs.mantissa().bit_len())
+        .map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
+    let rhs_bits = u64::try_from(rhs.mantissa().bit_len())
+        .map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))?;
     let lhs_aligned = numeric_gas::scaled_limbs(lhs_bits, lhs_delta)?;
     let rhs_aligned = numeric_gas::scaled_limbs(rhs_bits, rhs_delta)?;
     let work = numeric_gas::aligned_work(
@@ -341,8 +354,9 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             let scale = decode_int_register(vm, 13)?
                 .try_to_u64()
                 .filter(|scale| *scale <= u64::from(numeric_gas::MAX_DECIMAL_SCALE))
-                .ok_or(VMError::NumericFault(NumericFaultV1::InvalidScale))?
-                as u32;
+                .ok_or(VMError::Trap(VmTrap::NumericFault(
+                    NumericFaultV1::InvalidScale,
+                )))? as u32;
             let rounding = rounding_mode_at(vm, 14)?;
             let observed = value.try_decimal_mul_div_round_observed(
                 &multiplier,
@@ -355,7 +369,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 if quantity {
                     let value = Quantity::from_canonical_numeric(value).map_err(|error| {
                         numeric_fault(error)
-                            .map(VMError::NumericFault)
+                            .map(|cause| VMError::Trap(VmTrap::NumericFault(cause)))
                             .unwrap_or_else(|error| error)
                     })?;
                     publish_quantity(vm, &value)?;
@@ -771,7 +785,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             charge_decimal_comparison(vm, lhs.as_numeric(), rhs.as_numeric())?;
             publish_bool(vm, comparison(number, lhs.cmp(&rhs)));
         }
-        _ => return Err(VMError::UnknownSyscall(number)),
+        _ => return Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
     }
     Ok(0)
 }

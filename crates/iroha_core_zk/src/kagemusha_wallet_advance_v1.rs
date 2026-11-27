@@ -148,6 +148,7 @@ pub(crate) use enrollment_phase::{
     kagemusha_wallet_prekey_permit_digest_v1,
 };
 pub(crate) use prekey_custody::{PreKeyPublicationV1, PreKeyRecordV1, PreKeySlotSelectionV1};
+pub(crate) use provider::OutputSourceV1;
 mod reconcile;
 mod retained;
 mod setup;
@@ -171,8 +172,10 @@ pub use self::{
     },
     anchor::KAGEMUSHA_WALLET_ANCHOR_MAX_BYTES_V1,
     archive::{
-        KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, KagemushaWalletArchiveAccessV1,
+        KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1,
+        KAGEMUSHA_WALLET_ENROLLMENT_RESULT_MAX_BYTES_V1, KagemushaWalletArchiveAccessV1,
         kagemusha_wallet_archive_checkpoint_digest_v1, kagemusha_wallet_archive_object_digest_v1,
+        kagemusha_wallet_enrollment_result_key_v1,
     },
     capsule::{KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1, KagemushaWalletFrozenFrameV1},
     completion::KagemushaWalletCompletionFrameV1,

@@ -144,7 +144,7 @@ fn anonymous_ballot_outputs_roundtrip_all_three_canonical_outcomes() {
             norito::json::from_str::<ExecutionOutputV1>(&json).unwrap(),
             row
         );
-        assert!(hashes.insert(row.result().hash()));
+        assert!(hashes.insert(row.network().unwrap().result.hash()));
         assert!(row.completions().is_empty());
         assert!(row.result().batch_transfer_outcomes().is_empty());
         assert!(row.result().nexus_fee_receipt().is_none());
@@ -213,7 +213,7 @@ fn identical_anonymous_inputs_keep_distinct_results_and_canonical_source_positio
         let (output_index, row) = decoded.network_output_at(index).unwrap();
         assert_eq!(output_index, index);
         assert_eq!(row.input_index, index);
-        assert_eq!(&row.result, rows[index as usize].result());
+        assert_eq!(row.result, rows[index as usize].network().unwrap().result);
     }
 
     // Hash repetition does not authorize duplicated, reordered, missing or foreign
@@ -370,6 +370,7 @@ fn ordinary_network_and_internal_outputs_refuse_ballot_rejection_reasons() {
                 ExecutionOutputV1::NetworkWithLifecycle(_)
                 | ExecutionOutputV1::PipelineWithLifecycle(_)
                 | ExecutionOutputV1::TimeWithLifecycle(_)
+                | ExecutionOutputV1::C10(_)
                 | ExecutionOutputV1::GovernanceBlockStart(_) => {
                     unreachable!("legacy V1 fixture unexpectedly contains a lifecycle carrier")
                 }

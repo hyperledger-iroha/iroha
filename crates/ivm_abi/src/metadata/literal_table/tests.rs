@@ -1,6 +1,7 @@
 //! Descriptor, envelope and borrowed-index parity at the single literal boundary.
 
 use super::*;
+use crate::error::VmTrap;
 use crate::metadata::{LITERAL_SECTION_MAGIC, ProgramMetadata, encode_literal_descriptor};
 
 fn pointer(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -115,14 +116,17 @@ fn malformed_directory_and_payloads_never_expose_an_index() {
             _ => unreachable!(),
         }
         assert!(
-            matches!(directory(&bytes), Err(VMError::InvalidMetadata)),
+            matches!(
+                directory(&bytes),
+                Err(VMError::Trap(VmTrap::InvalidMetadata))
+            ),
             "mutation {mutation}"
         );
     }
     for width in [0, 7, 9] {
         assert!(matches!(
             directory(&program(&[(LiteralKindV1::I64, vec![0; width])])),
-            Err(VMError::InvalidMetadata)
+            Err(VMError::Trap(VmTrap::InvalidMetadata))
         ));
     }
 }
@@ -140,10 +144,10 @@ fn absent_and_empty_directories_have_no_values_and_policy_errors_stay_typed() {
             LiteralKindV1::PointerTlv,
             pointer(PointerType::TestOnly, b"")
         )])),
-        Err(VMError::AbiTypeNotAllowed {
+        Err(VMError::Trap(VmTrap::AbiTypeNotAllowed {
             abi: 1,
             type_id: 0x0ffe
-        })
+        }))
     ));
     let bytes = program(&[]);
     let mut section = ProgramMetadata::parse(&bytes)
@@ -158,6 +162,6 @@ fn absent_and_empty_directories_have_no_values_and_policy_errors_stay_typed() {
             Some(section),
             SyscallPolicy::AbiV1
         ),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
 }

@@ -182,10 +182,12 @@ impl<V: StateReadOnly> NativeAmxBeginRelayReadV1<'_, V> {
         for input_index in 0..block.external_entrypoint_count() {
             let index = u32::try_from(input_index)
                 .map_err(|_| Error::Source("input index exceeds native bound"))?;
-            let (_, output) = block.network_output_at(index).ok_or(Error::Source(
-                "original signed input has no explicit execution outcome",
-            ))?;
-            if output.result.as_ref().is_err() {
+            let (_, output) = block
+                .network_execution_output_at(index)
+                .ok_or(Error::Source(
+                    "original signed input has no explicit execution outcome",
+                ))?;
+            if output.result().as_ref().is_err() {
                 continue;
             }
             let Some(signed) = block.external_signed_transaction_ref_at(input_index) else {
@@ -220,9 +222,9 @@ impl<V: StateReadOnly> NativeAmxBeginRelayReadV1<'_, V> {
         let index =
             u32::try_from(input).map_err(|_| Error::Source("input index exceeds native bound"))?;
         let (_, output) = block
-            .network_output_at(index)
+            .network_execution_output_at(index)
             .ok_or(Error::Source("original Begin outcome missing"))?;
-        if output.result.as_ref().is_err() {
+        if output.result().as_ref().is_err() {
             return Err(Error::Source("original Begin execution rejected"));
         }
         let signed = block

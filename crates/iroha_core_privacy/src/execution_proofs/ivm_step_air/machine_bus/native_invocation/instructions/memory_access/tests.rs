@@ -6,6 +6,7 @@ use super::super::{
 };
 use super::*;
 use ivm::{encoding::wide as enc, instruction::wide};
+use ivm_abi::error::VmTrap;
 use packet::{
     AFTER, BEFORE, BEFORE_TAG, CLOCK, ENABLED, GENERATION, INDEX, KEY, SPACE, Space, WRITE,
 };
@@ -256,8 +257,9 @@ fn uninitialized_or_disallowed_native_loads_publish_no_original_owner() {
             &budget,
         );
         assert!(match result {
-            Err(CaptureError::Execution(ivm::VMError::MemoryAccessViolation { .. })) =>
-                uninitialized,
+            Err(CaptureError::Execution(ivm::VMError::Trap(VmTrap::MemoryAccessViolation {
+                ..
+            }))) => uninitialized,
             Err(CaptureError::Unsupported) => !uninitialized,
             _ => false,
         });

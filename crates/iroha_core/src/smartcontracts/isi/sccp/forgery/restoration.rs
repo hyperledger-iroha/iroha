@@ -320,9 +320,9 @@ impl SccpRestore {
                             u32::try_from(index).map_err(|_| invalid("Network index overflows"))?;
                         let (_, output) = source
                             .block()
-                            .network_output_at(output_index)
+                            .network_execution_output_at(output_index)
                             .ok_or_else(|| invalid("Submit lacks exact Network output"))?;
-                        if output.result.is_ok() {
+                        if output.result().is_ok() {
                             transaction
                                 .verify_signature()
                                 .map_err(|_| invalid("Submit signature differs"))?;

@@ -196,7 +196,10 @@ mod tests {
         let plain = row(None, None);
         let charged = row(Some(receipt), None);
         charged.validate_structure(42, &[input]).unwrap();
-        assert_ne!(plain.result().hash(), charged.result().hash());
+        assert_ne!(
+            plain.network().unwrap().result.hash(),
+            charged.network().unwrap().result.hash()
+        );
         assert_ne!(
             norito::encode_canonical(&plain).unwrap(),
             norito::encode_canonical(&charged).unwrap()
@@ -207,10 +210,10 @@ mod tests {
                 norito::decode_canonical::<ExecutionOutputV1>(&bytes).unwrap(),
                 row
             );
-            let value = norito::json::to_value(row.result()).unwrap();
+            let value = norito::json::to_value(&row.network().unwrap().result).unwrap();
             assert_eq!(
                 norito::json::from_value::<TransactionResult>(value.clone()).unwrap(),
-                *row.result()
+                row.network().unwrap().result
             );
             let mut omitted = value;
             omitted.as_object_mut().unwrap().remove("nexus_fee_receipt");
@@ -244,7 +247,7 @@ mod tests {
         // neither a root-frame identity nor a checksum can explain rejection.
         let (_, receipt) = fixture(false);
         for output in [row(None, None), row(Some(receipt), None)] {
-            let result = output.result();
+            let result = &output.network().unwrap().result;
             let flags = norito::core::default_encode_flags();
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
             let mut payload = Vec::new();

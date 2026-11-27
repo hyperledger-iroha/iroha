@@ -38,6 +38,8 @@ mod world_payout_export;
 pub use world_payout_export::run_world_payout_export;
 mod runtime_checkpoint_receive;
 pub(crate) use runtime_checkpoint_receive::run_runtime_checkpoint_receive;
+mod runtime_floor_attestation;
+pub(crate) use runtime_floor_attestation::run_runtime_floor_attestation;
 
 /// `start.source` of a replay that re-executed signed genesis first.
 pub const START_GENESIS: &str = "genesis";
@@ -818,6 +820,19 @@ fn empty_state(
         &config.nexus.configured_lane_catalog,
     )
     .change_context(MainError::CheckReplay)?;
+    state_configuration_template(config, kura, budget, genesis, network_id)
+}
+
+/// Allocate only the configuration source used by exact checkpoint restoration.
+/// This template never executes genesis or becomes a replay destination. An ordinary empty
+/// startup must first pass `empty_state`'s durable-boundary preflight above.
+fn state_configuration_template(
+    config: &Config,
+    kura: &Arc<Kura>,
+    budget: &AllocationBudget,
+    genesis: &SignedBlock,
+    network_id: NetworkId,
+) -> ReportResult<Box<State>, MainError> {
     let key = config.genesis.public_key.clone();
     let mut world = World::try_with_execution_budget(
         [genesis_domain(key.clone())],
@@ -919,6 +934,14 @@ fn configure_state(
     }
     apply_state_runtime_config_before_snapshot_auth(state, config)
         .map_err(|error| Report::new(error).change_context(MainError::CheckReplay))?;
+    if from_snapshot {
+        let compliance = load_lane_compliance_for_startup_replay(&config.nexus)
+            .change_context(MainError::CheckReplay)?;
+        state
+            .prepare_restored_replay_configuration(config.nexus.clone(), lane_manifests, compliance)
+            .map_err(|error| Report::new(error).change_context(MainError::CheckReplay))?;
+        return Ok(());
+    }
     let policies =
         install_lane_policies_for_startup_replay(state, config.nexus.clone(), lane_manifests)
             .change_context(MainError::CheckReplay)?;

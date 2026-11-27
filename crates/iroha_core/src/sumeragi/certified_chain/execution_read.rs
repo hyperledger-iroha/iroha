@@ -773,6 +773,7 @@ mod tests {
         state::World,
         sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn native_storage_mapper_retains_actual_scoped_and_physical_causes_without_allocating() {
@@ -806,7 +807,8 @@ mod tests {
         assert_eq!(owner.decode_refusal(), Some(&original));
         assert!(owner.allocation_refusal().is_none());
         assert!(owner.allocator_refusal().is_none());
-        let ivm::VMError::DecodeDeferred(exported) = owner.into_vm_error() else {
+        let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(exported)) = owner.into_vm_error()
+        else {
             panic!("same original decoder owner");
         };
         assert_eq!(exported, original);
@@ -841,7 +843,8 @@ mod tests {
             ivm::error::ExecutionDeferral::AllocationUnavailable
         );
         assert!(owner.allocation_refusal().is_none());
-        let ivm::VMError::AllocatorDeferred(original) = owner.into_vm_error() else {
+        let ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(original)) = owner.into_vm_error()
+        else {
             panic!("typed original allocator refusal");
         };
         assert!(

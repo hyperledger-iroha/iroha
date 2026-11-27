@@ -1537,7 +1537,7 @@ where
     ) -> Result<Option<KagemushaWalletIntentV1>, KagemushaWalletProviderErrorV1> {
         let intent = self.read_intent_structure(slot)?;
         if let Some(intent) = &intent {
-            self.require_enrollment_search_intent(slot, intent)?;
+            self.require_enrollment_intent_originals(slot, intent, None)?;
             if self.read_intent_structure(slot)?.as_ref() != Some(intent) {
                 return Err(KagemushaWalletProviderErrorV1::Unavailable(
                     KagemushaWalletUnavailableV1::Busy,

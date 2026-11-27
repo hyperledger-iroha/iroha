@@ -1,5 +1,6 @@
 //! Exact utility values, gas/refusal ordering and original allocation ownership.
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::host::{DefaultHost, IVMHost};
 
 fn input(vm: &mut IVM, kind: PointerType, bytes: &[u8]) -> u64 {
@@ -62,7 +63,7 @@ fn unaffordable_concat_precedes_digest_validation_and_output_allocation() {
         execute(syscalls::SYSCALL_BLOB_CONCAT, &mut vm)
             .unwrap_err()
             .into_unmetered(),
-        VMError::OutOfGas
+        VMError::Trap(VmTrap::OutOfGas)
     ));
     assert_eq!(vm.register(10), pointer);
 }
@@ -139,7 +140,7 @@ fn funded_refusal_preserves_original_pool_and_retries() {
     pool.set_limit_bytes(baseline);
     assert!(matches!(
         execute(syscalls::SYSCALL_VALUE_ENCODE, &mut vm),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(vm.register(10), before);
     assert_eq!(pool.reserved_bytes(), baseline);

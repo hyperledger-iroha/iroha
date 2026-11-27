@@ -4746,9 +4746,9 @@ def test_checkpoint_status_preserves_g1_h2_and_internal_full_prefix_boundaries()
     source = (ROOT / "crates/iroha_torii/src/lib_pipeline_handlers.rs").read_text()
     selected = source.split("fn read_pipeline_transaction_carrier(", 1)[1].split("\nfn ", 1)[0]
     assert "read_pipeline_execution_carrier(app, anchor.height)" in selected
-    wrapper = named_rust_function(source, "read_pipeline_execution_carrier")
-    assert "read_pipeline_execution_carrier_within(app, height, work, bytes)" in wrapper
-    http = named_rust_function(source, "read_pipeline_execution_carrier_within")
+    http = named_rust_function(source, "read_pipeline_execution_carrier")
+    assert "let work = routing::app_query_limits().max_fetch_size;" in http
+    assert "let bytes = iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work);" in http
     assert "HistoryProducerOwner::authentication_read(app)?" in http
     assert "read_execution_carrier_under_owner(app, owner, height, work, bytes)" in http
     assert "or_else" not in http and "unwrap_or" not in http
@@ -8796,7 +8796,10 @@ def test_native_append_physical_state_refusal_keeps_actual_driver_release_owner(
                        "scheduler.next(u64::MAX - 1)", "Arc::ptr_eq(&original, &append)",
                        "drop(state.crypto.read())", "drop(blocker)", "worker.join()"):
         assert re.sub(r"\s+", "", obligation) in re.sub(r"\s+", "", controls)
-    assert "if !self.appended" in fixture and "self.appended = true" in fixture
+    publish = fixture.split("pub fn publish(&mut self, signers: Signers)", 1)[1]
+    retry = publish.index("while !self.appended {")
+    assert retry < publish.index("match self.append_prepared()", retry) < publish.index("self.chain.executor.commit", retry)
+    assert "self.chain.blocks.append(&self.block, qc)?;\n        self.appended = true;" in fixture
     assert "super::driver::run_original_append_for_test" in fixture
     assert "AllocationBudget::new" not in controls and "set_limit_bytes" not in controls
     rows = re.findall(r"^\| HC275 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)

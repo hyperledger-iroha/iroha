@@ -448,7 +448,8 @@ impl CompilerSession {
         ]);
         let policy = match self.options.host_policy {
             crate::SyscallPolicy::AbiV1 => baseline,
-            crate::SyscallPolicy::AbiV1RuntimeLifecycle => iroha_crypto::Hash::new_from_chunks(&[
+            crate::SyscallPolicy::AbiV1RuntimeLifecycle
+            | crate::SyscallPolicy::AbiV1GenericCarrier => iroha_crypto::Hash::new_from_chunks(&[
                 b"kotodama-compiler-named-host-policy-v1\0",
                 baseline.as_ref(),
                 &crate::syscalls::compute_abi_hash(self.options.host_policy),

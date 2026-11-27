@@ -114,7 +114,10 @@ async fn transaction_details_http_reads_past_fetch_budget_and_retains_response_o
                 norito::json::from_slice(&bytes).unwrap()
             };
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
-        assert_eq!(details.transaction.result(), &original_result);
+        assert_eq!(
+            details.transaction.result().baseline(),
+            Some(&original_result)
+        );
         let wire = norito::to_bytes(&details).unwrap();
         if let Some(expected) = &original_response {
             assert_eq!(

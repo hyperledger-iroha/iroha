@@ -69,6 +69,7 @@ fn hash_cell<T: Encode + NoritoSchema>(
     let Role::Canonical(Canonical::Cell(Schema::Norito {
         nominal_name,
         layout,
+        ..
     })) = field.role
     else {
         return Err(format!("State cell {id} has no native Norito schema"));

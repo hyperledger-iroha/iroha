@@ -9,6 +9,7 @@ use ivm::{
     numeric::NumericFaultV1,
     parallel::StateAccessSet,
 };
+use ivm_abi::error::{VmErrorRef, VmTrap};
 #[path = "../../kotodama_lang/src/compiler/numeric_zero/cases.rs"]
 mod cases;
 
@@ -142,14 +143,14 @@ fn assert_outcome(case: &cases::Case, program: &[u8], vm: &IVM, result: &Result<
                 "complete original declared and builtin error descriptors"
             );
             assert_eq!(descriptor.variant(code).unwrap().name, name);
-            let VMError::ContractAbort {
+            let VmErrorRef::Trap(VmTrap::ContractAbort {
                 contract,
                 name: actual_name,
                 error_type,
                 schema_hash,
                 code: actual_code,
                 message,
-            } = result.as_ref().unwrap_err().as_unmetered()
+            }) = result.as_ref().unwrap_err().as_unmetered()
             else {
                 panic!(
                     "expected original nominal failure for {}: {result:?}",
@@ -180,19 +181,19 @@ fn assert_outcome(case: &cases::Case, program: &[u8], vm: &IVM, result: &Result<
         }
         cases::Outcome::DivisionByZero => {
             assert!(
-                matches!((&(result.as_ref().unwrap_err().as_unmetered()), &(&VMError::NumericFault(NumericFaultV1::DivisionByZero))), (VMError::NumericFault(__actual_value), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+                matches!((&(result.as_ref().unwrap_err().as_unmetered()), &(&VMError::Trap(VmTrap::NumericFault(NumericFaultV1::DivisionByZero)))), (VmErrorRef::Trap(VmTrap::NumericFault(__actual_value)), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
             );
             assert!(vm.public_call_result_word(0).is_err());
         }
         cases::Outcome::InvalidScale => {
             assert!(
-                matches!((&(result.as_ref().unwrap_err().as_unmetered()), &(&VMError::NumericFault(NumericFaultV1::InvalidScale))), (VMError::NumericFault(__actual_value), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+                matches!((&(result.as_ref().unwrap_err().as_unmetered()), &(&VMError::Trap(VmTrap::NumericFault(NumericFaultV1::InvalidScale)))), (VmErrorRef::Trap(VmTrap::NumericFault(__actual_value)), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
             );
             assert!(vm.public_call_result_word(0).is_err());
         }
         cases::Outcome::QuantityUnderflow => {
             assert!(
-                matches!((&(result.as_ref().unwrap_err().as_unmetered()), &(&VMError::NumericFault(NumericFaultV1::QuantityUnderflow))), (VMError::NumericFault(__actual_value), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value)
+                matches!((&(result.as_ref().unwrap_err().as_unmetered()), &(&VMError::Trap(VmTrap::NumericFault(NumericFaultV1::QuantityUnderflow)))), (VmErrorRef::Trap(VmTrap::NumericFault(__actual_value)), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value)
             );
             assert!(vm.public_call_result_word(0).is_err());
         }
@@ -305,9 +306,12 @@ fn actual_numeric_zero_pairs_reject_unfunded_execution_before_any_complete_sourc
             assert!(matches!(
                 (
                     &(result.as_ref().unwrap_err().as_unmetered()),
-                    &(&VMError::OutOfGas)
+                    &(&VMError::Trap(VmTrap::OutOfGas))
                 ),
-                (VMError::OutOfGas, VMError::OutOfGas)
+                (
+                    VmErrorRef::Trap(VmTrap::OutOfGas),
+                    VMError::Trap(VmTrap::OutOfGas)
+                )
             ));
             assert_eq!(state(&host), initial);
             assert!(vm.public_call_result_word(0).is_err());
@@ -356,9 +360,12 @@ fn actual_numeric_zero_pairs_preserve_permission_authorization_and_denial_before
                 assert!(matches!(
                     (
                         &(result.as_ref().unwrap_err().as_unmetered()),
-                        &(&VMError::PermissionDenied)
+                        &(&VMError::Trap(VmTrap::PermissionDenied))
                     ),
-                    (VMError::PermissionDenied, VMError::PermissionDenied)
+                    (
+                        VmErrorRef::Trap(VmTrap::PermissionDenied),
+                        VMError::Trap(VmTrap::PermissionDenied)
+                    )
                 ));
                 assert!(vm.public_call_result_word(0).is_err());
             }
@@ -560,7 +567,10 @@ fn private_tagged_scalar_zero_requires_the_original_public_zero_assignment() {
         if cleared {
             assert!(matches!(result, Ok(())));
         } else {
-            assert!(matches!(result, Err(VMError::PrivacyViolation)));
+            assert!(matches!(
+                result,
+                Err(VMError::Trap(VmTrap::PrivacyViolation))
+            ));
         }
         assert!(vm.remaining_gas() < 10_000);
     }

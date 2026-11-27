@@ -41,11 +41,11 @@ fn state_set_budget_exhaustion_traps_without_staging_a_write() {
     vm.set_register(10, path_ptr);
     vm.set_register(11, value_ptr);
     assert!(
-        matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm)), &(ivm::VMError::HostOutputBudgetExceeded {
+        matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm)), &(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded {
             resource: ivm::HostOutputResource::Items,
             attempted: 1,
             limit: 0,
-        })), (Err(ivm::VMError::HostOutputBudgetExceeded{resource:__actual_0, attempted:__actual_1, limit:__actual_2}), ivm::VMError::HostOutputBudgetExceeded{resource:__expected_0, attempted:__expected_1, limit:__expected_2}) if __actual_0 == __expected_0 && __actual_1 == __expected_1 && __actual_2 == __expected_2)
+        }))), (Err(ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded{resource:__actual_0, attempted:__actual_1, limit:__actual_2})), ivm::VMError::Trap(VmTrap::HostOutputBudgetExceeded{resource:__expected_0, attempted:__expected_1, limit:__expected_2})) if __actual_0 == __expected_0 && __actual_1 == __expected_1 && __actual_2 == __expected_2)
     );
     assert!(
         host.durable_state_overlay.is_empty(),
@@ -81,11 +81,11 @@ fn reserve_namespace_syscalls_preserve_reads_but_refuse_raw_mutations() {
                 matches!(
                     (
                         &(host.syscall(syscall, &mut vm)),
-                        &(ivm::VMError::PermissionDenied)
+                        &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                     ),
                     (
-                        Err(ivm::VMError::PermissionDenied),
-                        ivm::VMError::PermissionDenied
+                        Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                        ivm::VMError::Trap(VmTrap::PermissionDenied)
                     )
                 ),
                 "{text} syscall {syscall}"
@@ -156,6 +156,7 @@ fn reserve_namespace_retained_host_artifacts_refuse_before_any_effect() {
                 (path.clone(), replacement),
             ]);
             let artifacts = HostExecutionArtifacts {
+                carrier_queue_backing: None,
                 x509_queue_backing: None,
                 queued: vec![QueuedEffect {
                     payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
@@ -202,6 +203,7 @@ fn reserve_namespace_retained_host_artifacts_refuse_before_any_effect() {
         tx.world.smart_contract_state.insert(path.clone(), vec![7]);
         bind_artifact_test_signed_root(&mut tx, &authority);
         let artifacts = HostExecutionArtifacts {
+            carrier_queue_backing: None,
             x509_queue_backing: None,
             queued: Vec::new(),
             entrypoint_authorization: None,
@@ -327,11 +329,11 @@ fn retail_daily_state_paths_reject_generic_read_write_and_delete_admission() {
             matches!(
                 (
                     &(CoreHost::ensure_contract_state_read_allowed(&path)),
-                    &(ivm::VMError::PermissionDenied)
+                    &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 (
-                    Err(ivm::VMError::PermissionDenied),
-                    ivm::VMError::PermissionDenied
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ),
             "raw and contract-scoped STATE_GET/SCAN must hide {path}"
@@ -340,11 +342,11 @@ fn retail_daily_state_paths_reject_generic_read_write_and_delete_admission() {
             matches!(
                 (
                     &(CoreHost::ensure_contract_state_write_allowed(&path)),
-                    &(ivm::VMError::PermissionDenied)
+                    &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 (
-                    Err(ivm::VMError::PermissionDenied),
-                    ivm::VMError::PermissionDenied
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ),
             "raw and contract-scoped STATE_SET/DEL must reject {path}"
@@ -405,11 +407,11 @@ fn verified_fee_sponsor_state_is_readable_but_not_generically_mutable() {
             matches!(
                 (
                     &(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm)),
-                    &(ivm::VMError::PermissionDenied)
+                    &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 (
-                    Err(ivm::VMError::PermissionDenied),
-                    ivm::VMError::PermissionDenied
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ),
             "{path} must be native-authored"
@@ -419,11 +421,11 @@ fn verified_fee_sponsor_state_is_readable_but_not_generically_mutable() {
             matches!(
                 (
                     &(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm)),
-                    &(ivm::VMError::PermissionDenied)
+                    &(ivm::VMError::Trap(VmTrap::PermissionDenied))
                 ),
                 (
-                    Err(ivm::VMError::PermissionDenied),
-                    ivm::VMError::PermissionDenied
+                    Err(ivm::VMError::Trap(VmTrap::PermissionDenied)),
+                    ivm::VMError::Trap(VmTrap::PermissionDenied)
                 )
             ),
             "{path} must not be deleted generically"
@@ -563,24 +565,24 @@ fn generic_ivm_host_rejects_all_durable_state_access() {
         vm.set_register(10, path_ptr);
         vm.set_register(11, value_ptr);
         assert!(
-            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm)), &(ivm::VMError::GenericSyscallNotAllowed {
+            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_STATE_SET,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed{syscall:__actual_0}), ivm::VMError::GenericSyscallNotAllowed{syscall:__expected_0}) if __actual_0 == __expected_0),
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__actual_0})), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__expected_0})) if __actual_0 == __expected_0),
             "generic IVM must not write `{prefix}`"
         );
         assert!(host.durable_state_overlay.is_empty());
         vm.set_register(10, path_ptr);
         assert!(
-            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)), &(ivm::VMError::GenericSyscallNotAllowed {
+            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_STATE_GET,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed{syscall:__actual_0}), ivm::VMError::GenericSyscallNotAllowed{syscall:__expected_0}) if __actual_0 == __expected_0),
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__actual_0})), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__expected_0})) if __actual_0 == __expected_0),
             "generic IVM must not read `{prefix}`"
         );
         vm.set_register(10, path_ptr);
         assert!(
-            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm)), &(ivm::VMError::GenericSyscallNotAllowed {
+            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_STATE_DEL,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed{syscall:__actual_0}), ivm::VMError::GenericSyscallNotAllowed{syscall:__expected_0}) if __actual_0 == __expected_0),
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__actual_0})), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__expected_0})) if __actual_0 == __expected_0),
             "generic IVM must not tombstone `{prefix}`"
         );
         let reserved_prefix: StatePath = prefix.parse().expect("valid reserved state prefix");
@@ -589,9 +591,9 @@ fn generic_ivm_host_rejects_all_durable_state_access() {
         vm.set_register(11, 0);
         vm.set_register(12, ivm_sys::STATE_SCAN_MAX_ITEMS_V1);
         assert!(
-            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_SCAN, &mut vm)), &(ivm::VMError::GenericSyscallNotAllowed {
+            matches!((&(host.syscall(ivm_sys::SYSCALL_STATE_SCAN, &mut vm)), &(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed {
                 syscall: ivm_sys::SYSCALL_STATE_SCAN,
-            })), (Err(ivm::VMError::GenericSyscallNotAllowed{syscall:__actual_0}), ivm::VMError::GenericSyscallNotAllowed{syscall:__expected_0}) if __actual_0 == __expected_0),
+            }))), (Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__actual_0})), ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed{syscall:__expected_0})) if __actual_0 == __expected_0),
             "generic IVM must not enumerate `{prefix}`"
         );
     }
@@ -690,8 +692,11 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
                 }
             } else {
                 assert!(matches!(
-                    (&(result), &(ivm::VMError::OutOfGas)),
-                    (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
+                    (&(result), &(ivm::VMError::Trap(VmTrap::OutOfGas))),
+                    (
+                        Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+                        ivm::VMError::Trap(VmTrap::OutOfGas)
+                    )
                 ));
                 assert_eq!(vm.register(10), path_ptr);
                 assert_eq!(vm.register(11), 0xfeed);
@@ -780,7 +785,7 @@ fn native_multisig_state_is_opaque_and_cannot_be_replaced_by_durable_artifacts()
             vm.set_register(11, value_ptr);
             assert!(matches!(
                 host.syscall(syscall, &mut vm),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
             assert!(host.durable_state_overlay.is_empty());
         }
@@ -812,7 +817,7 @@ fn fi_receipt_physical_namespace_is_opaque_without_reserving_old_logical_keys() 
             vm.set_register(11, value_ptr);
             assert!(matches!(
                 host.syscall(syscall, &mut vm),
-                Err(ivm::VMError::PermissionDenied)
+                Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
             ));
         }
         assert!(host.durable_state_overlay.is_empty());

@@ -1,5 +1,6 @@
 //! Pointer-ABI provenance and canonical quantity admission tests for the default IVM host.
 use super::*;
+use crate::error::VmTrap;
 #[test]
 fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
     let blob = test_tlv(PointerType::Blob, b"owned-heap-input");
@@ -31,7 +32,7 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
         assert!(
             matches!(
                 DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "{label} bytes must not acquire pointer provenance"
         );
@@ -51,7 +52,7 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
     partial_vm.set_register(10, partial_pointer);
     assert!(matches!(
         DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut partial_vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     for malformed in [test_tlv(PointerType::Name, b"wrong-type"), {
         let mut corrupted = blob.clone();
@@ -66,7 +67,7 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
         vm.set_register(10, pointer);
         assert!(matches!(
             DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     let mut code_vm = IVM::new(u64::MAX);
@@ -77,7 +78,7 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
     code_vm.set_register(10, code_pointer);
     assert!(matches!(
         DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut code_vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
 }
 #[test]
@@ -100,7 +101,7 @@ fn expect_tlv_enforces_pointer_policy() {
     let err = DefaultHost::expect_tlv(&vm, 10, PointerType::AccountId).unwrap_err();
     assert!(matches!(
         err,
-        VMError::AbiTypeNotAllowed { abi: 2, type_id } if type_id == PointerType::AccountId as u16
+        VMError::Trap(VmTrap::AbiTypeNotAllowed { abi: 2, type_id }) if type_id == PointerType::AccountId as u16
     ));
 }
 #[test]
@@ -135,7 +136,7 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
     let expected_gas = DefaultHost::mutation_gas(canonical_payload.len());
     let mut scoped_host = DefaultHost::new();
     assert_eq!(
-        (scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm))
+        (scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()))
             .expect("expected successful fixture result"),
         expected_gas
     );
@@ -164,7 +165,7 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
     vm.set_register(13, legacy_ptr);
     assert!(matches!(
         DefaultHost::expect_quantity(&vm, 13),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     let noncanonical = Numeric::new(1_250_u32, 3);
     let noncanonical_ptr = vm
@@ -176,7 +177,7 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
     vm.set_register(13, noncanonical_ptr);
     assert!(matches!(
         DefaultHost::expect_quantity(&vm, 13),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
 }
 #[test]
@@ -232,7 +233,7 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
     assert!(
         matches!(
             DefaultHost::expect_quantity(&vm, 13),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ),
         "size admission must not replace canonical frame validation"
     );
@@ -246,7 +247,7 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         assert!(
             matches!(
                 DefaultHost::expect_quantity(&vm, 13),
-                Err(VMError::NoritoInvalid)
+                Err(VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "{label}"
         );
@@ -283,8 +284,8 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
     let mut scoped_host = DefaultHost::new();
     vm.memory.clear_tracking();
     assert!(matches!(
-        scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
-        Err(VMError::NoritoInvalid)
+        scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, vm.syscall_quote()),
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert!(
         vm.memory
@@ -302,7 +303,7 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
     vm.memory.clear_tracking();
     assert!(matches!(
         scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(
         vm.memory
@@ -339,7 +340,7 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
     vm.memory.clear_tracking();
     assert!(matches!(
         batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(
         vm.memory

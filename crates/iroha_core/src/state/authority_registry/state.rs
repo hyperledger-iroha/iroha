@@ -93,6 +93,8 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Node-local runtime explicitly excluded from production replay"));
     stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache> => ("state.stateless_validation_cache",
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
+    c10_event_blocks: OnceLock<tokio::sync::broadcast::Sender<iroha_data_model::block::SharedSignedBlock>> => ("state.c10_event_blocks",
+        Role::Local("Optional bounded notification of published execution to authenticated local C10 stream readers"));
     trigger_ivm_cache: parking_lot::Mutex<IvmCache> => ("state.trigger_ivm_cache",
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
     contract_query_ivm_cache: parking_lot::Mutex<IvmCache> => ("state.contract_query_ivm_cache",

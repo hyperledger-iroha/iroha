@@ -349,7 +349,7 @@ EXPECTED_TEST_INVENTORY = (
     (('#[test]',), 'soracloud_uploaded_model_register_rejects_zero_storage_metadata'),
     (('#[test]',), 'soracloud_uploaded_model_register_rejects_malformed_bundle_manifest_fields'),
     (('#[test]',), 'soracloud_uploaded_model_register_rejects_disallowed_service_plane'),
-    (('#[test]',), 'soracloud_uploaded_model_register_rejects_nexus_limit_overrides'),
+    (('#[test]',), 'soracloud_uploaded_model_register_applies_committed_quotas'),
     (('#[test]',), 'soracloud_uploaded_model_register_rejects_tampered_signed_bundle'),
     (('#[test]',), 'soracloud_uploaded_model_register_rejects_tampered_signed_storage_reference'),
     (('#[test]',), 'soracloud_uploaded_model_register_rejects_provenance_signer_mismatch'),

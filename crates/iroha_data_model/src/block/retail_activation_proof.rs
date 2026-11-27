@@ -108,10 +108,10 @@ pub fn verify_finalized_retail_activation_v1(
     else {
         return Err(RetailActivationProofError::MissingSuccessfulDirectInput);
     };
-    let Some((output_index, output)) = block.network_output_at(anchor.entry_index()) else {
+    let Some((_, output)) = block.network_execution_output_at(anchor.entry_index()) else {
         return Err(RetailActivationProofError::MissingSuccessfulDirectInput);
     };
-    if output_index != anchor.entry_index() || output.result.as_ref().is_err() {
+    if output.result().is_err() {
         return Err(RetailActivationProofError::MissingSuccessfulDirectInput);
     }
     if transaction.authority() != expected_owner {

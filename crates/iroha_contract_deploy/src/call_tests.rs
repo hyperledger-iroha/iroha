@@ -888,6 +888,18 @@ fn applied_charge_projects_the_committed_fee_receipt() -> Result<()> {
         },
     }));
     let charge = AppliedCharge::from_result(&result).expect("committed charge");
+    let c10 = iroha::data_model::ivm_c10::TransactionResultC10V1(
+        Ok(Vec::new()),
+        Vec::new(),
+        result.nexus_fee_receipt().cloned(),
+        Default::default(),
+    );
+    assert_eq!(
+        AppliedCharge::from_profiled_result(
+            iroha::data_model::block::execution_output::TransactionResultRef::C10(&c10),
+        ),
+        Some(charge.clone())
+    );
     assert_eq!(charge.gas_used, 4_321);
     assert_eq!(charge.fee_asset, asset);
     assert_eq!(charge.fee_amount, Quantity::from(3_u32));

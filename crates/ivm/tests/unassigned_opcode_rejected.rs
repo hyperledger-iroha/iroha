@@ -2,6 +2,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 
 /// Reject `word` at artifact admission and again after loading it past the loader.
 fn admission_and_runtime_rejections(word: u32) -> (VMError, VMError) {
@@ -26,8 +27,14 @@ fn zero_opcode_byte_is_rejected_whatever_the_operand_bits_hold() {
     let word = 0x0000_0033u32;
     assert_eq!(instruction::wide::opcode(word), 0x00);
     let (admission, runtime) = admission_and_runtime_rejections(word);
-    assert!(matches!(admission, VMError::InvalidOpcode(0x00)));
-    assert!(matches!(runtime, VMError::InvalidOpcode(0x00)));
+    assert!(matches!(
+        admission,
+        VMError::Trap(VmTrap::InvalidOpcode(0x00))
+    ));
+    assert!(matches!(
+        runtime,
+        VMError::Trap(VmTrap::InvalidOpcode(0x00))
+    ));
 }
 
 #[test]
@@ -37,11 +44,11 @@ fn unassigned_crypto_slots_report_their_opcode_byte_on_both_paths() {
         let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
         let (admission, runtime) = admission_and_runtime_rejections(word);
         assert!(
-            matches!(admission, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
+            matches!(admission, VMError::Trap(VmTrap::InvalidOpcode(actual)) if actual == u16::from(opcode)),
             "admission reported {admission:?} for unassigned opcode 0x{opcode:02x}"
         );
         assert!(
-            matches!(runtime, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
+            matches!(runtime, VMError::Trap(VmTrap::InvalidOpcode(actual)) if actual == u16::from(opcode)),
             "execution reported {runtime:?} for unassigned opcode 0x{opcode:02x}"
         );
     }
@@ -62,11 +69,11 @@ fn removed_opcode_bytes_are_rejected_on_both_paths() {
         let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
         let (admission, runtime) = admission_and_runtime_rejections(word);
         assert!(
-            matches!(admission, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
+            matches!(admission, VMError::Trap(VmTrap::InvalidOpcode(actual)) if actual == u16::from(opcode)),
             "admission reported {admission:?} for removed opcode 0x{opcode:02x}"
         );
         assert!(
-            matches!(runtime, VMError::InvalidOpcode(actual) if actual == u16::from(opcode)),
+            matches!(runtime, VMError::Trap(VmTrap::InvalidOpcode(actual)) if actual == u16::from(opcode)),
             "execution reported {runtime:?} for removed opcode 0x{opcode:02x}"
         );
     }
@@ -75,7 +82,7 @@ fn removed_opcode_bytes_are_rejected_on_both_paths() {
 #[test]
 fn invalid_opcode_message_names_the_opcode_byte() {
     assert_eq!(
-        VMError::InvalidOpcode(0x8b).to_string(),
+        VMError::Trap(VmTrap::InvalidOpcode(0x8b)).to_string(),
         "invalid or unknown opcode 0x8b"
     );
 }

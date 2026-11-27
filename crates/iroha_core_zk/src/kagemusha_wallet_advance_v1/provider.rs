@@ -100,6 +100,20 @@ impl KagemushaWalletSlotStatusV1 {
     }
 }
 
+/// Account admission may expose exact historical outputs after a Released completion was lost.
+pub(crate) enum OutputSourceV1 {
+    Reconciled(KagemushaWalletSlotStatusV1),
+    ReleasedWithoutCompletion(KagemushaWalletMarkerRecordV1),
+}
+impl OutputSourceV1 {
+    pub(crate) fn marker(&self) -> Option<&KagemushaWalletMarkerRecordV1> {
+        match self {
+            Self::Reconciled(status) => status.marker(),
+            Self::ReleasedWithoutCompletion(record) => Some(record),
+        }
+    }
+}
+
 /// Verified durable marker of one slot and the status it produced.
 #[derive(Debug, Clone)]
 pub(super) struct CachedSlotV1 {
@@ -450,6 +464,45 @@ where
         self.probe_key(slot)
     }
 
+    /// Find a source for account-authenticated output reads. Only positive loss of the
+    /// Released completion can admit a restricted session. R4–R6 already verified the
+    /// key, phase, journal and selected capsule. Require the exact protected anchor and
+    /// archive checkpoint that ordinary reconciliation otherwise checks before returning.
+    pub(crate) fn output_source(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<OutputSourceV1, KagemushaWalletProviderErrorV1> {
+        use super::anchor::{KagemushaWalletAnchorCheckV1, kagemusha_wallet_check_anchor_v1};
+        use super::marker::{
+            KagemushaWalletMarkerPhaseV1, kagemusha_wallet_load_current_marker_v1,
+        };
+        match self.status(slot) {
+            Ok(status) => Ok(OutputSourceV1::Reconciled(status)),
+            Err(KagemushaWalletProviderErrorV1::LostCustody(
+                super::KagemushaWalletLostCustodyV1::CompletionLost,
+            )) => {
+                let current =
+                    kagemusha_wallet_load_current_marker_v1(&self.store, slot, &self.scheme_id)?
+                        .ok_or(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                            object: "output recovery marker",
+                        })?;
+                let record = current.record();
+                if record.phase() != KagemushaWalletMarkerPhaseV1::Released
+                    || kagemusha_wallet_check_anchor_v1(&self.platform, record)?
+                        == KagemushaWalletAnchorCheckV1::Lagging
+                {
+                    return Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                        object: "output recovery anchor",
+                    });
+                }
+                self.require_archive_checkpoint(record)?;
+                self.require_storage()?;
+                Ok(OutputSourceV1::ReleasedWithoutCompletion(record.clone()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Read the exact capsule selected by the reconciled current source marker.
     /// This read capability creates no Selected marker or monetary proof verdict.
     /// # Errors
@@ -472,6 +525,45 @@ where
                 });
             }
         };
+        self.capsule_at_output_marker(slot, &record).map(Some)
+    }
+
+    /// Recover a released operation's original capsule alongside its independently retained
+    /// completion. This read never obtains a receipt signature or advances a pending operation.
+    pub(crate) fn retained_transition(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        operation: &[u8; 32],
+    ) -> Result<(C, super::KagemushaWalletRetainedV1<R>), KagemushaWalletProviderErrorV1> {
+        let status = self.status(slot)?;
+        let record = status
+            .marker()
+            .ok_or(KagemushaWalletProviderErrorV1::Invalid {
+                field: "archive historical slot",
+            })?;
+        let super::KagemushaWalletLookupV1::Retained(retained) = self.lookup(slot, operation)?
+        else {
+            return Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                object: "released historical transition",
+            });
+        };
+        let original = super::capsule::kagemusha_wallet_load_capsule_v1::<F, C>(
+            &self.store,
+            slot,
+            retained.selected_generation,
+            &retained.capsule_digest,
+            &C::marker_binding(record.marker()),
+        );
+        self.require_storage()?;
+        Ok((original?.into_value(), *retained))
+    }
+
+    /// Read the exact capsule bound by the marker returned by `output_source`.
+    pub(crate) fn capsule_at_output_marker(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+        record: &KagemushaWalletMarkerRecordV1,
+    ) -> Result<C, KagemushaWalletProviderErrorV1> {
         self.require_storage()?;
         let answer = (|| {
             let selected = record.selected_generation().ok_or(
@@ -492,7 +584,7 @@ where
                 &digest,
                 &C::marker_binding(record.marker()),
             )?;
-            Ok(Some(capsule.into_value()))
+            Ok(capsule.into_value())
         })();
         self.require_storage().and(answer)
     }

@@ -16,6 +16,7 @@ mod tests {
     use iroha_data_model::sumeragi_lanes::{
         CustodySignersAdmissionError, LaneSamplesAdmissionError, LaneStateAdmissionError,
     };
+    use ivm::error::VmDeferral;
     use std::{
         future::Future,
         pin::pin,
@@ -60,11 +61,11 @@ mod tests {
             TryReadSnapshotError::PayloadAllocatorFailure { requested_bytes: 1 },
             TryReadSnapshotError::StateRead(iroha_core::state::StateViewError::Changed),
             TryReadSnapshotError::StateRead(iroha_core::state::StateViewError::Poisoned),
-            TryReadSnapshotError::StateVmInitialization(ivm::VMError::AllocationDeferred(
-                refusal.clone(),
+            TryReadSnapshotError::StateVmInitialization(ivm::VMError::Deferred(
+                VmDeferral::AllocationDeferred(refusal.clone()),
             )),
-            TryReadSnapshotError::StateVmInitialization(ivm::VMError::ExecutionDeferred(
-                ivm::error::ExecutionDeferral::AllocationUnavailable,
+            TryReadSnapshotError::StateVmInitialization(ivm::VMError::Deferred(
+                VmDeferral::ExecutionDeferred(ivm::error::ExecutionDeferral::AllocationUnavailable),
             )),
             TryReadSnapshotError::StateAdmission(iroha_core::state::StateAdmissionError::History(
                 iroha_core::state::BlockHashAdmissionError::Capacity(refusal.clone()),
@@ -128,8 +129,8 @@ mod tests {
             let refusal = budget.try_reserve_bytes(1).unwrap_err();
             let error = match kind {
                 0 => TryReadSnapshotError::PayloadAllocation(refusal),
-                1 => TryReadSnapshotError::StateVmInitialization(ivm::VMError::AllocationDeferred(
-                    refusal,
+                1 => TryReadSnapshotError::StateVmInitialization(ivm::VMError::Deferred(
+                    VmDeferral::AllocationDeferred(refusal),
                 )),
                 2 => TryReadSnapshotError::StateAdmission(
                     iroha_core::state::StateAdmissionError::History(
@@ -167,8 +168,8 @@ mod tests {
                 | TryReadSnapshotError::StateNativeSchedule(
                     iroha_core::sumeragi::schedule::ScheduleError::Admission(refusal),
                 )
-                | TryReadSnapshotError::StateVmInitialization(ivm::VMError::AllocationDeferred(
-                    refusal,
+                | TryReadSnapshotError::StateVmInitialization(ivm::VMError::Deferred(
+                    VmDeferral::AllocationDeferred(refusal),
                 ))
                 | TryReadSnapshotError::StateAdmission(
                     iroha_core::state::StateAdmissionError::History(

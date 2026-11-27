@@ -53,7 +53,7 @@ impl InstalledOriginals {
 
 struct Entry<T> {
     review: T,
-    terminal: Option<Response>,
+    terminal: Option<Result<Response>>,
 }
 pub(super) struct ReviewCache<T> {
     next: u64,
@@ -108,29 +108,38 @@ impl<T> ReviewCache<T> {
         self.next = token;
         Ok(token)
     }
+    pub(super) fn active(&mut self, token: u64) -> Result<&mut T> {
+        self.entries
+            .get_mut(&token)
+            .filter(|entry| entry.terminal.is_none())
+            .map(|entry| &mut entry.review)
+            .ok_or(Failure::code(INVALID))
+    }
     pub(super) fn execute(
         &mut self,
         token: u64,
         action: impl FnOnce(&T) -> Result<Response>,
     ) -> Result<Response> {
         let entry = self.entries.get_mut(&token).ok_or(Failure::code(INVALID))?;
-        if let Some(reply) = &entry.terminal {
-            return Ok(copy_reply(reply));
+        if let Some(result) = &entry.terminal {
+            return result.as_ref().map(copy_reply).map_err(|error| *error);
         }
-        let reply = action(&entry.review)?;
-        match reply.kind {
-            // Retain before C allocation/JNI delivery. A retry cannot re-enter Advance,
-            // including after a definite NotPerformed that later could have succeeded.
-            1 | 3 | 4 | 5 => {
-                entry.terminal = Some(reply);
-                Ok(copy_reply(entry.terminal.as_ref().expect("just retained")))
-            }
-            2 => Ok(reply),
-            _ => Err(Failure::code(INTERNAL)),
-        }
+        // A definite refusal belongs to this token even when the caller loses the reply
+        // or a later regulatory update would permit a newly reviewed transfer.
+        let terminal = match action(&entry.review) {
+            Ok(reply) if matches!(reply.kind, 1 | 3 | 4 | 5) => Ok(reply),
+            Ok(reply) if reply.kind == 2 => return Ok(reply),
+            Ok(_) => return Err(Failure::code(INTERNAL)),
+            Err(error) if error.status == BLOCKED => Err(error),
+            Err(error) => return Err(error),
+        };
+        let reply = terminal.as_ref().map(copy_reply).map_err(|error| *error);
+        entry.terminal = Some(terminal);
+        reply
     }
-    pub(super) fn discard(&mut self, token: u64) {
-        self.entries.remove(&token);
+    pub(super) fn discard(&mut self, token: u64) -> Option<T> {
+        let entry = self.entries.remove(&token)?;
+        entry.terminal.is_none().then_some(entry.review)
     }
 }
 

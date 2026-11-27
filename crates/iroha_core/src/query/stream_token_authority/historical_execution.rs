@@ -224,9 +224,9 @@ fn authenticate_target(
         )
         .ok_or(Error::Execution)?;
     let (_, output) = block
-        .network_output_at(execution.entry_index)
+        .network_execution_output_at(execution.entry_index)
         .ok_or(Error::Execution)?;
-    if !output.result.is_ok() {
+    if !output.result().is_ok() {
         return Err(Error::Execution.into());
     }
     signed_source_matches(

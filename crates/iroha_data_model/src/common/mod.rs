@@ -31,6 +31,27 @@ pub fn split_nonempty<'a>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Owned<T>(pub T);
+impl<T: iroha_schema::TypeId> iroha_schema::TypeId for Owned<T> {
+    fn id() -> String {
+        format!("Owned<{}>", T::id())
+    }
+}
+impl<T: iroha_schema::IntoSchema> iroha_schema::IntoSchema for Owned<T> {
+    fn type_name() -> String {
+        T::type_name()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        // The storage wrapper forwards the complete payload to T. It must not
+        // invent an additional tuple field absent from the actual codec.
+        if !map.contains_key::<Self>() {
+            T::update_schema_map(map);
+            if let Some(schema) = map.get::<T>() {
+                map.insert::<Self>(schema.clone());
+            }
+        }
+    }
+}
 impl<T: norito::NoritoSchema> norito::NoritoSchema for Owned<T> {
     fn nominal_name() -> String {
         norito::schema::identity::generic_name(

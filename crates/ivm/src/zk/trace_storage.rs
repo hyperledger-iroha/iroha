@@ -3,6 +3,7 @@
 //! An absent original budget retains the existing fallible standalone owner;
 //! neither construction nor reset creates a substitute State allocation pool.
 
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::{OwnedVec, OwnedVecGrowthError},
@@ -124,9 +125,9 @@ pub(super) fn check_scope(
     match (original, scope) {
         (Some(original), Some(scope)) if scope.belongs_to(original) => Ok(()),
         (None, None) => Ok(()),
-        _ => Err(VMError::ExecutionDeferred(
+        _ => Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             crate::error::ExecutionDeferral::TraceOwnerUnavailable,
-        )),
+        ))),
     }
 }
 pub(super) fn next_capacity(capacity: usize, needed: usize) -> Result<usize, VMError> {
@@ -140,10 +141,14 @@ pub(super) fn next_capacity(capacity: usize, needed: usize) -> Result<usize, VME
         .max(4))
 }
 pub(super) fn overflow() -> VMError {
-    VMError::AllocationDeferred(AllocationRefusal::DemandOverflow)
+    VMError::Deferred(VmDeferral::AllocationDeferred(
+        AllocationRefusal::DemandOverflow,
+    ))
 }
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn local_error(error: OwnedVecGrowthError) -> VMError {
     match error {
@@ -154,7 +159,7 @@ fn local_error(error: OwnedVecGrowthError) -> VMError {
 fn prepaid_error(error: PrepaidBufferError) -> VMError {
     match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(refusal)) => {
-            VMError::AllocationDeferred(refusal)
+            VMError::Deferred(VmDeferral::AllocationDeferred(refusal))
         }
         PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. })
         | PrepaidBufferError::Reservation(_) => unavailable(),
@@ -197,14 +202,14 @@ impl PcTraceLog {
         if capacity == self.rows.capacity() {
             return Ok(());
         }
-        let plan =
-            ExecutionMemoryPlan::array::<u64>(capacity).map_err(VMError::AllocationDeferred)?;
+        let plan = ExecutionMemoryPlan::array::<u64>(capacity)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut lease = self
             .original
             .as_ref()
             .map(|original| ExecutionMemoryLease::reserve(original, plan))
             .transpose()
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut replacement = TraceRows::allocate(capacity, lease.as_mut())?;
         replacement.copy_from(self.as_slice());
         let retired = std::mem::replace(&mut self.rows, replacement);
@@ -227,7 +232,7 @@ impl PcTraceLog {
     pub(crate) fn allocated_bytes(&self) -> Result<usize, VMError> {
         ExecutionMemoryPlan::array::<u64>(self.rows.capacity())
             .map(|plan| plan.requested_bytes())
-            .map_err(VMError::AllocationDeferred)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
     }
     /// Erase observations while retaining the same backing.
     pub(crate) fn clear(&mut self) {

@@ -58,6 +58,15 @@ pub enum StateRestoreError {
     /// Original execution resources refused this local restore attempt.
     #[error("snapshot State execution deferred: {0}")]
     ExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// This release does not implement or qualify the restored selected definition.
+    #[error("snapshot runtime selection requires unsupported definition {0}")]
+    RuntimeUnsupported(iroha_data_model::runtime::definition::DefinitionId),
+    /// The original selected runtime support observation rejected its descriptor language.
+    #[error(transparent)]
+    RuntimeSupport(crate::runtime::attestation::ReleaseSupportError),
+    /// The release catalog could not establish its immutable support inventory.
+    #[error(transparent)]
+    RuntimeCatalog(crate::runtime::CatalogError),
     /// Kura holds no certified successor of the snapshot tip; under the keyed profile
     /// that successor's certified parent root binds the complete published State.
     #[error("snapshot State at height {height} has no certified successor block in Kura")]
@@ -241,6 +250,24 @@ enum SnapshotJsonField<'a> {
     Owned(json::Value),
 }
 impl<'a> SnapshotJsonField<'a> {
+    /// Restore a retained carrier store directly from its original canonical envelope.
+    fn decode_carrier_store<T>(
+        self,
+        budget: &iroha_allocation::AllocationBudget,
+        restore: impl FnOnce(&str, &iroha_allocation::AllocationBudget) -> Result<T, StateRestoreError>,
+    ) -> Result<T, StateRestoreError> {
+        match self {
+            Self::Borrowed { raw } => restore(raw, budget),
+            #[cfg(test)]
+            Self::Owned(value) => {
+                // Test DOM inputs have discarded object member order. Recover the one typed
+                // envelope only for this fixture adapter; production always borrows exact bytes.
+                let envelope: snapshot_storage::SnapshotStorage = json::value::from_value(value)?;
+                restore(&json::to_json(&envelope)?, budget)
+            }
+        }
+    }
+
     fn decode_canonical_value<T>(self) -> Result<T, json::Error>
     where
         T: JsonDeserialize + JsonSerialize,

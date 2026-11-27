@@ -26,8 +26,12 @@
 //! until a governed change set ([`ReleaseCatalog::activation`]) moves the root to them.
 
 pub(crate) mod additions;
+mod child_admin;
 mod contract_lifecycle;
 mod deferred_consent;
+pub(crate) mod generic_carriers;
+pub(crate) mod ivm_c10;
+mod kagemusha_spartan;
 mod kernel_lifecycle;
 pub mod migrations;
 mod native_amx_capture;
@@ -35,6 +39,7 @@ mod native_escrow_capture;
 mod native_game_capture;
 pub(crate) mod parameters;
 mod retirement;
+mod service_addition;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -145,6 +150,8 @@ pub struct ReleaseCatalog {
     migrations: BTreeMap<DefinitionId, MigrationAddition>,
     /// Exact compiled predecessor implementations and their restricted-read successors.
     pub(super) restricted_read_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
+    /// Reviewed predecessor ledger owner to its unique compiled Spartan composition.
+    pub(crate) spartan_predecessors: BTreeMap<DefinitionId, DefinitionId>,
     /// The kernel lifecycle addition composed over each compiled predecessor family, by the
     /// family's services profile (`kernel_lifecycle`).
     pub(super) runtime_lifecycle_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
@@ -154,7 +161,16 @@ pub struct ReleaseCatalog {
     native_escrow_capture_compositions: BTreeMap<DefinitionId, native_escrow_capture::Composition>,
     native_amx_capture_compositions: BTreeMap<DefinitionId, native_amx_capture::Composition>,
     native_game_capture_compositions: BTreeMap<DefinitionId, native_game_capture::Composition>,
-    retirement_compositions: BTreeMap<DefinitionId, retirement::Composition>,
+    retirement_compositions: BTreeMap<DefinitionId, service_addition::Composition>,
+    c10_compositions: BTreeMap<DefinitionId, service_addition::Composition>,
+    child_admin_compositions: BTreeMap<DefinitionId, service_addition::Composition>,
+    /// Fixed signed-genesis child recipe, compiled once with the immutable catalog.
+    child_foundation: Option<(
+        RootSelectionV1,
+        BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    )>,
+    /// Dormant descriptor contracts; not advertised executable before the host/storage vertical.
+    pub(crate) generic_carriers: Option<generic_carriers::ProfileDefinitions>,
     /// The typed committed parameters this release adds after the baseline, by Parameter
     /// definition ([`parameters`]); a root recognizes one only while its selection activates it.
     parameter_additions: parameters::ParameterAdditions,
@@ -399,6 +415,7 @@ fn codec(schema: Schema, field: &'static str) -> Result<SchemaV1, CatalogError> 
         Schema::Norito {
             nominal_name,
             layout,
+            ..
         } => Ok(SchemaV1::Codec(format!(
             "norito:{}@{}",
             nominal_name(),
@@ -489,7 +506,9 @@ impl Claimed {
         let mut modules = BTreeSet::new();
         let mut claimed = Self {
             instructions: BTreeSet::new(),
-            fields: BTreeSet::new(),
+            // A profile-owned backing table is not a native instruction addition. It must
+            // nevertheless stay outside the immutable baseline on every catalog build.
+            fields: BTreeSet::from([generic_carriers::STORAGE_OWNER]),
         };
         for addition in additions {
             let fail = |reason: String| CatalogError::Addition {
@@ -584,6 +603,7 @@ impl ReleaseCatalog {
             cell_installers: BTreeMap::new(),
             migrations: BTreeMap::new(),
             restricted_read_compositions: BTreeMap::new(),
+            spartan_predecessors: BTreeMap::new(),
             runtime_lifecycle_compositions: BTreeMap::new(),
             deferred_consent_compositions: BTreeMap::new(),
             contract_lifecycle_compositions: BTreeMap::new(),
@@ -591,6 +611,10 @@ impl ReleaseCatalog {
             native_amx_capture_compositions: BTreeMap::new(),
             native_game_capture_compositions: BTreeMap::new(),
             retirement_compositions: BTreeMap::new(),
+            c10_compositions: BTreeMap::new(),
+            child_admin_compositions: BTreeMap::new(),
+            child_foundation: None,
+            generic_carriers: None,
             parameter_additions: BTreeMap::new(),
             ironwood: None,
         };
@@ -785,6 +809,10 @@ impl ReleaseCatalog {
                 || addition.module == additions::NATIVE_AMX_CAPTURE.module
                 || addition.module == additions::NATIVE_GAME_CAPTURE.module
                 || addition.module == additions::RUNTIME_RETIREMENT.module
+                || addition.module == additions::IVM_C10.module
+                || addition.module == additions::KAGEMUSHA_SPARTAN.module
+                || addition.module == additions::CHILD_ADMIN.module
+                || addition.module == additions::GENERIC_CARRIER_ARTIFACTS.module
                 || addition.module == additions::CONTRACT_LIFECYCLE.module;
             let (storage_dependencies, interface_dependencies) = if addition.module
                 == additions::NATIVE_GAME_CAPTURE.module
@@ -891,6 +919,10 @@ impl ReleaseCatalog {
         catalog.compile_runtime_lifecycle_after_native_game()?;
         catalog.compile_contract_lifecycle()?;
         catalog.compile_retirement()?;
+        catalog.compile_ivm_c10()?;
+        catalog.compile_kagemusha_spartan()?;
+        catalog.compile_child_admin()?;
+        catalog.compile_generic_carriers()?;
         catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
@@ -950,12 +982,23 @@ impl ReleaseCatalog {
             if migration.rows_per_stage == 0 {
                 return Err(fail("a stage must move at least one row".to_owned()));
             }
+            if !migration.code.matches_storage(migration.from, migration.to) {
+                return Err(fail(
+                    "the declared storage differs from the registered typed migration adapter"
+                        .to_owned(),
+                ));
+            }
             for services_profile in &services {
                 let id =
                     self.publish(DefinitionDescriptorV1::Migration(MigrationDescriptorV1 {
                         code: ImplementationCodeV1::Native {
                             module: module.into(),
-                            reference_closure: addition_digest(module, &[b"migration"]),
+                            // This first access contract belongs to new native migration
+                            // definitions only; no production migration is installed or compiled.
+                            reference_closure: addition_digest(
+                                module,
+                                &[b"migration", migration.code.access_contract()],
+                            ),
                         },
                         from: from.clone(),
                         to: to.clone(),
@@ -1298,6 +1341,32 @@ impl ReleaseCatalog {
         effective_height: u64,
         qualification: [u8; 32],
     ) -> Result<ChangeSetV1, CatalogError> {
+        if module == additions::CHILD_ADMIN.module {
+            return self.draft_child_admin(
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
+        if module == additions::IVM_C10.module {
+            let composition = self
+                .c10_compositions
+                .get(&current.services_profile)
+                .ok_or_else(|| CatalogError::Addition {
+                    module: module.into(),
+                    reason: "no compiled C10 successor for the selected services".into(),
+                })?;
+            return self.draft_service_addition(
+                composition,
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
         if module == additions::NATIVE_GAME_CAPTURE.module {
             return self.draft_native_game_capture(
                 current,
@@ -1372,7 +1441,10 @@ impl ReleaseCatalog {
             .iter()
             .find(|addition| addition.module == module)
             .ok_or_else(|| fail("not an addition of this release".to_owned()))?;
-        let addition = if module == additions::RESTRICTED_DATASPACE_READ.module {
+        let addition = if module == additions::KAGEMUSHA_SPARTAN.module {
+            selected_addition = self.spartan_for_selection(addition, current)?;
+            &selected_addition
+        } else if module == additions::RESTRICTED_DATASPACE_READ.module {
             selected_addition = super::restricted_dataspace_read::for_selection(self, current)?;
             &selected_addition
         } else if module == additions::RUNTIME_LIFECYCLE.module {
@@ -1436,9 +1508,20 @@ impl ReleaseCatalog {
             .bindings
             .sort_by(|left, right| left.wire_id.cmp(&right.wire_id));
 
-        if module == additions::RESTRICTED_DATASPACE_READ.module
-            && let Some(restriction) =
-                super::restricted_dataspace_read::inherited_restriction(current, effective_height)?
+        let predecessor_wire = if module == additions::RESTRICTED_DATASPACE_READ.module {
+            Some("iroha.grant")
+        } else if module == additions::KAGEMUSHA_SPARTAN.module {
+            Some(iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1::WIRE_ID)
+        } else {
+            None
+        };
+        if let Some(wire) = predecessor_wire
+            && let Some(restriction) = super::restricted_dataspace_read::inherited_restriction(
+                current,
+                effective_height,
+                wire,
+                module,
+            )?
         {
             transitions.push(SelectionTransitionV1::Restrict {
                 definition: addition.implementation,
@@ -1663,8 +1746,9 @@ impl ReleaseCatalog {
 
     /// The first definition `selection` relies on that this release cannot execute, if any.
     ///
-    /// Definitions are content-addressed, so a release executes a definition exactly when its
-    /// catalog holds that identity. A node whose release does not support the selection at a
+    /// Definitions are content-addressed. Compiled execution support additionally excludes
+    /// explicitly dormant profile contracts whose execution owners are incomplete. A node whose
+    /// release does not support the selection at a
     /// height stops before that height instead of executing it (§6, "Stop the unsupported").
     #[must_use]
     pub fn unsupported(&self, selection: &RootSelectionV1) -> Option<DefinitionId> {
@@ -1676,7 +1760,7 @@ impl ReleaseCatalog {
         .into_iter()
         .chain(selection.installed_storage.iter().copied())
         .chain(selection.active.iter().copied())
-        .find(|id| !self.definitions.contains_key(id))
+        .find(|id| !self.executes_definition(id))
     }
 }
 

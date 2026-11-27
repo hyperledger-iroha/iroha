@@ -14,6 +14,7 @@ pub mod anchor;
 pub mod anonymous_ballot;
 /// Exact frozen economics for the existing public standalone conviction ballot.
 pub mod conviction;
+pub use crate::governance_fingerprint::{PARLIAMENT_EXPECTED_HEAD_ROOT_V1, checked_fingerprint};
 pub use anchor::GovernanceAnchorV1;
 /// Maximum encoded length of a canonical V1 governance selector.
 pub const GOVERNANCE_SELECTOR_V1_MAX_BYTES: usize = 128;

@@ -362,7 +362,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     diagnostics: DiagnosticLog = DiagnosticLog(),
     appAttest: FakeWalletAppAttest = FakeWalletAppAttest(), secureEnclave: Bool = true,
     passcode: Bool? = true, dataProtection: Bool = true, base: URL? = nil,
-    prepared: Bool = true, liveProbe: Bool = false,
+    prepared: Bool = true, liveProbe: Bool = false, keychainNamespace: SHA256.Digest? = nil,
     sysctl: @escaping @Sendable (String) -> Result<[UInt8], KagemushaWalletAppleUnavailableV1> = {
       _ in .failure(.io(ENOENT))
     }
@@ -382,7 +382,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       fileProtection: { protection.read($0) }, setFileProtection: { protection.set($0, $1) },
       sysctl: sysctl, diagnostic: { diagnostics.record($0) })
     let platform = KagemushaWalletApplePlatformV1(
-      appAttest: appAttest, accessGroup: Self.accessGroup, system: system)
+      appAttest: appAttest, accessGroup: Self.accessGroup, system: system, keychainNamespace: keychainNamespace)
     if prepared {
       _ = try platform.custodyRootPath().get()
     }
@@ -762,6 +762,37 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       diagnostics.all.last,
       KagemushaWalletAppleDiagnosticV1(
         event: "ambiguous payment key", slot: slot.keychainName, detail: "2 items"))
+  }
+
+  func testManifestNamespacesIsolatePaymentKeysAndRollbackAnchorsInTheSameAccessGroup() throws {
+    let keychain = FakeWalletKeychain()
+    let original = try makePlatform(keychain: keychain)
+    let v3 = SHA256.hash(data: Data("fixture-v3".utf8))
+    let v4 = SHA256.hash(data: Data("fixture-v4".utf8))
+    let third = try makePlatform(keychain: keychain, keychainNamespace: v3)
+    let fourth = try makePlatform(keychain: keychain, keychainNamespace: v4)
+    let originalKey = try generatedKey(original)
+    XCTAssertEqual(try third.keyEnumerate().get(), [])
+    let thirdKey = try generatedKey(third)
+    XCTAssertEqual(try fourth.keyEnumerate().get(), [])
+    XCTAssertEqual(try original.keyEnumerate().get(), [slot])
+    let fourthKey = try generatedKey(fourth)
+    XCTAssertNotEqual(originalKey, thirdKey)
+    XCTAssertNotEqual(thirdKey, fourthKey)
+    for (index, platform) in [original, third, fourth].enumerated() {
+      XCTAssertEqual(platform.anchorCreate(slot, value: Data([UInt8(index)])), .published)
+    }
+
+    let recovered = try makePlatform(keychain: keychain, keychainNamespace: v4)
+    XCTAssertEqual(recovered.keyProbe(slot), .present(fourthKey))
+    XCTAssertEqual(recovered.anchorRead(slot), .present(Data([2])))
+    XCTAssertEqual(recovered.anchorUpdate(slot, value: Data([3])), .published)
+    XCTAssertEqual(recovered.keyDelete(slot), .removed)
+    XCTAssertEqual(try recovered.keyEnumerate().get(), [])
+    XCTAssertEqual(original.keyProbe(slot), .present(originalKey))
+    XCTAssertEqual(original.anchorRead(slot), .present(Data([0])))
+    XCTAssertEqual(third.keyProbe(slot), .present(thirdKey))
+    XCTAssertEqual(third.anchorRead(slot), .present(Data([1])))
   }
 
   func testPaymentKeyQueriesArePinnedToTheSecureEnclaveAndTheAppsGroup() throws {

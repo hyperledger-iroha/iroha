@@ -26,10 +26,15 @@ use mv::storage::StorageReadOnly;
 
 use super::{
     CatalogError, ReleaseCatalog,
-    change_set::{PublishedDefinitions, successor},
+    change_set::{PublishedDefinitions, SuccessorProjection, successor_with_definitions},
     release_catalog,
 };
+use crate::execution_attempt::ExecutionAttemptError;
 use crate::state::WorldReadOnly;
+mod support;
+pub use support::{
+    ReleaseSupportError, committed_release_support, release_support_with_definitions,
+};
 
 /// Domain separator of [`release_digest`].
 pub const RELEASE_DOMAIN: &[u8] = b"iroha:runtime:release:v1\0";
@@ -59,7 +64,7 @@ pub fn release_digest(
 }
 
 /// Why this node does not attest a change set, or cannot tell whether it supports it.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum NodeAttestationError {
     /// The change set is not recorded.
     #[error("change set {0} is not recorded")]
@@ -91,6 +96,9 @@ pub enum NodeAttestationError {
         /// The missing release prerequisite.
         reason: &'static str,
     },
+    /// The original selected carrier capability check failed.
+    #[error(transparent)]
+    Support(#[from] ReleaseSupportError),
     /// The release catalog cannot be built (a build defect).
     #[error(transparent)]
     Catalog(#[from] CatalogError),
@@ -145,6 +153,7 @@ pub fn release_host_profiles(catalog: &ReleaseCatalog) -> Vec<DefinitionId> {
         .definitions
         .iter()
         .filter(|(_, descriptor)| matches!(descriptor, DefinitionDescriptorV1::HostProfile(_)))
+        .filter(|(id, _)| catalog.executes_definition(id))
         .map(|(id, _)| *id)
         .collect()
 }
@@ -167,6 +176,13 @@ pub fn successor_selection(
     world: &impl WorldReadOnly,
     id: ChangeSetId,
 ) -> Result<(ChangeSetRecordV1, RootSelectionV1), NodeAttestationError> {
+    successor_projection(world, id).map(|(record, projection)| (record, projection.selection))
+}
+
+fn successor_projection(
+    world: &impl WorldReadOnly,
+    id: ChangeSetId,
+) -> Result<(ChangeSetRecordV1, SuccessorProjection), NodeAttestationError> {
     let change_sets = world.runtime_change_sets();
     let record = change_sets
         .get(&id)
@@ -180,7 +196,7 @@ pub fn successor_selection(
         .filter(|(_, record)| record.status == ChangeSetStatusV1::Scheduled)
         .map(|(id, record)| (*id, record.clone()))
         .collect();
-    let selection = successor(
+    let projection = successor_with_definitions(
         &record.change_set,
         id,
         world.runtime_selection(),
@@ -190,7 +206,7 @@ pub fn successor_selection(
     .map_err(|error| NodeAttestationError::NoLongerApplies(error.to_string()))?;
     if let Some(definition) = super::catalog::unqualified_native_activation(
         world.runtime_selection(),
-        &selection,
+        &projection.selection,
         &release_catalog()?.definitions,
     ) {
         return Err(NodeAttestationError::Unqualified {
@@ -198,7 +214,34 @@ pub fn successor_selection(
             reason: super::catalog::UNQUALIFIED_NATIVE_REASON,
         });
     }
-    Ok((record, selection))
+    Ok((record, projection))
+}
+
+/// Resolve and check a scheduled successor against its original projected publications.
+///
+/// # Errors
+/// Original projection/qualification failure, capability rejection, or an unchanged local
+/// codec refusal. A local refusal is never an unresolved or missing-definition verdict.
+pub fn successor_release_support(
+    world: &impl WorldReadOnly,
+    id: ChangeSetId,
+) -> Result<
+    (ChangeSetRecordV1, RootSelectionV1, ReleaseSupport),
+    ExecutionAttemptError<NodeAttestationError>,
+> {
+    let (record, projection) = successor_projection(world, id)?;
+    let catalog = release_catalog().map_err(NodeAttestationError::from)?;
+    let support = release_support_with_definitions(
+        catalog,
+        &projection.selection,
+        &projection.definitions(&PublishedDefinitions(world.runtime_definitions())),
+    )
+    .map_err(|original| {
+        original
+            .into_attempt()
+            .map_rejection(NodeAttestationError::Support)
+    })?;
+    Ok((record, projection.selection, support))
 }
 
 /// Sign this node's support for the scheduled change set `id` (§6, "Attest").
@@ -217,18 +260,30 @@ pub fn sign_support(
     id: ChangeSetId,
     key_pair: &KeyPair,
     release: [u8; 32],
-) -> Result<SignedSupportAttestationV1, NodeAttestationError> {
-    let (record, successor) = successor_selection(world, id)?;
+) -> Result<SignedSupportAttestationV1, ExecutionAttemptError<NodeAttestationError>> {
+    let (record, projection) = successor_projection(world, id)?;
     let validator = key_pair.public_key().clone();
     if !committee.contains(&validator) {
-        return Err(NodeAttestationError::NotInCommittee);
+        return Err(NodeAttestationError::NotInCommittee.into());
     }
     let change_set = &record.change_set;
-    if let ReleaseSupport::Missing(definition) = release_support(release_catalog()?, &successor) {
+    let catalog = release_catalog().map_err(NodeAttestationError::from)?;
+    let support = release_support_with_definitions(
+        catalog,
+        &projection.selection,
+        &projection.definitions(&PublishedDefinitions(world.runtime_definitions())),
+    )
+    .map_err(|original| {
+        original
+            .into_attempt()
+            .map_rejection(NodeAttestationError::Support)
+    })?;
+    if let ReleaseSupport::Missing(definition) = support {
         return Err(NodeAttestationError::Unsupported {
             selection: change_set.successor,
             definition,
-        });
+        }
+        .into());
     }
     let effective_height = change_set.effective_height;
     SupportAttestationV1 {
@@ -237,7 +292,7 @@ pub fn sign_support(
         change_set: id,
         predecessor: change_set.predecessor,
         successor: change_set.successor,
-        committee: committee_digest(committee)?,
+        committee: committee_digest(committee).map_err(NodeAttestationError::from)?,
         // TODO(live_runtime_upgrades.md §7.3): name the checkpoint the release was qualified on
         // once checkpoints exist; until then, the committed height whose State the node resolved
         // the successor against.
@@ -248,7 +303,8 @@ pub fn sign_support(
         validator,
     }
     .sign(key_pair.private_key())
-    .map_err(Into::into)
+    .map_err(NodeAttestationError::from)
+    .map_err(ExecutionAttemptError::Rejected)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ impl Registers {
     /// Return the five canonical siblings for register `idx` without allocating.
     ///
     /// # Errors
-    /// Returns [`VMError::RegisterOutOfBounds`] for an invalid register index.
+    /// Returns [`crate::error::VmTrap::RegisterOutOfBounds`] for an invalid register index.
     pub fn merkle_path(
         &self,
         idx: usize,
@@ -24,7 +24,7 @@ impl Registers {
     /// the root and path are copied under the same original tree guard.
     ///
     /// # Errors
-    /// Returns [`VMError::RegisterOutOfBounds`] for an invalid register index.
+    /// Returns [`crate::error::VmTrap::RegisterOutOfBounds`] for an invalid register index.
     pub fn merkle_root_and_path(
         &self,
         idx: usize,

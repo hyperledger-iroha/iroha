@@ -114,6 +114,37 @@ pub struct AdminConfig {
     public: Column<Instance>,
 }
 
+fn configure_head(meta: &mut ConstraintSystem<Fp>, head_words: usize) -> AdminConfig {
+    let lane = Pow5Columns::allocate(meta);
+    let constants = meta.fixed_column();
+    let glue = GlueConfig::configure(
+        meta,
+        [lane.state[0], lane.state[1], lane.state[2], lane.aux],
+        constants,
+    );
+    let z = meta.advice_column();
+    let range = RunningSumConfig::configure(meta, z, LIMBS);
+    let rounds = RoundConstantColumns::allocate(meta);
+    let sponge = SpongeConfig::configure(
+        meta,
+        lane,
+        rounds,
+        &[
+            (CORE_DOMAIN, head_words),
+            (REST_DOMAIN, REST_FIELDS),
+            (STATEMENT_DOMAIN, 26),
+        ],
+    );
+    let public = meta.instance_column(1);
+    meta.enable_equality(public);
+    AdminConfig {
+        glue,
+        range,
+        sponge,
+        public,
+    }
+}
+
 impl Circuit<Fp> for BootstrapCircuit {
     type Config = AdminConfig;
     type FloorPlanner = SimpleFloorPlanner;
@@ -127,34 +158,7 @@ impl Circuit<Fp> for BootstrapCircuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
-        let lane = Pow5Columns::allocate(meta);
-        let constants = meta.fixed_column();
-        let glue = GlueConfig::configure(
-            meta,
-            [lane.state[0], lane.state[1], lane.state[2], lane.aux],
-            constants,
-        );
-        let z = meta.advice_column();
-        let range = RunningSumConfig::configure(meta, z, LIMBS);
-        let rounds = RoundConstantColumns::allocate(meta);
-        let sponge = SpongeConfig::configure(
-            meta,
-            lane,
-            rounds,
-            &[
-                (CORE_DOMAIN, CORE_FIELDS + 1),
-                (REST_DOMAIN, REST_FIELDS),
-                (STATEMENT_DOMAIN, 26),
-            ],
-        );
-        let public = meta.instance_column(1);
-        meta.enable_equality(public);
-        AdminConfig {
-            glue,
-            range,
-            sponge,
-            public,
-        }
+        configure_head(meta, CORE_FIELDS + 1)
     }
 
     fn synthesize(
@@ -215,3 +219,7 @@ impl Circuit<Fp> for BootstrapCircuit {
         layouter.constrain_instance(digest.cell(), config.public, 0)
     }
 }
+
+#[cfg(test)]
+#[path = "admin_sigma/core30_initial_test.rs"]
+pub(crate) mod core30_initial;

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{kura::Kura, query::store::LiveQueryStore};
+use ivm_abi::error::VmDeferral;
 use std::{
     future::Future,
     sync::atomic::AtomicBool,
@@ -211,9 +212,9 @@ fn snapshot_runtime_adapters_preserve_original_decoder_refusal() {
         .clone();
     let failure = || {
         SnapshotCaptureError::Runtime(Box::new(LaneLifecycleError::NposPolicy(Attempt::Deferred(
-            crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
-                ivm::VMError::DecodeDeferred(captured.clone()),
-            )
+            crate::execution_attempt::ExecutionDeferred::try_from_vm_error(ivm::VMError::Deferred(
+                VmDeferral::DecodeDeferred(captured.clone()),
+            ))
             .unwrap(),
         ))))
     };

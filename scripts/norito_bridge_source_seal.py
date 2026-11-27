@@ -225,6 +225,10 @@ _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS = frozenset({
     "java/iroha_android/core/src/main/resources/META-INF/proguard/iroha3.pro",
     "kotlin/core-jvm/src/main/resources/META-INF/proguard/consumer-proguard-rules.pro",
 })
+# Reviewed Objective-C Security.framework adapter compiled by connect_norito_bridge.
+_REVIEWED_PUBLIC_APPLE_BRIDGE_SOURCES = frozenset({
+    "crates/connect_norito_bridge/src/kagemusha_wallet_ffi/apple_debit_key.m",
+})
 # Exact public build descriptors for the isolated Apple runtime fixture. Their
 # contents remain fingerprinted; this does not admit arbitrary module maps,
 # signing material, provisioning profiles, or generated Xcode projects.
@@ -1001,6 +1005,7 @@ def _public_source_relative(
             or relative in _REVIEWED_PUBLIC_NEARBY_SOURCE_PINS
             or relative in _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS
             or relative in _REVIEWED_PUBLIC_APPLE_FIXTURE_INPUTS
+            or relative in _REVIEWED_PUBLIC_APPLE_BRIDGE_SOURCES
             or relative in _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS
             or relative in _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS
             or relative in _REVIEWED_PUBLIC_IVM_BASELINE_V1_FIXTURE_INPUTS

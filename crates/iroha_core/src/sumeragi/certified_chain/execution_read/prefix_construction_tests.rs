@@ -8,6 +8,7 @@ use crate::{
 };
 use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBufferFromChargeError};
 use iroha_data_model::block::SharedSignedBlock;
+use ivm_abi::error::VmDeferral;
 use std::alloc::Layout;
 
 fn fixture() -> CertifiedTestChain {
@@ -100,7 +101,7 @@ fn prefix_physical_refusal_retains_original_charge_and_retries_without_credit() 
         allocations_during(|| exported = Some(original.into_vm_error())),
         0
     );
-    let ivm::VMError::AllocatorDeferred(original) = exported.unwrap() else {
+    let ivm::VMError::Deferred(VmDeferral::AllocatorDeferred(original)) = exported.unwrap() else {
         panic!("the original typed prefix allocator cause must cross the VM boundary");
     };
     assert_eq!(

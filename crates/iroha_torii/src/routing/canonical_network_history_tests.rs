@@ -152,7 +152,7 @@ fn borrowed_history_projection_matches_real_typed_proof_dto_and_sealed_identity(
     let borrowed = BorrowedNetworkTransaction {
         entrypoint: source,
         entrypoint_hash: source.hash(),
-        result: &output.result,
+        result: TransactionResultRef::Baseline(&output.result),
     };
     let owned = iroha_data_model::query::CommittedTransaction {
         block_hash: block.hash(),

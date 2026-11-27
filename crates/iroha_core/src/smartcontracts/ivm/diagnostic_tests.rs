@@ -10,6 +10,7 @@ use iroha_data_model::executor::fault::{
     IvmFaultKindV1, IvmFaultPositionV1, IvmInvocationSelectorV1,
 };
 use ivm::{VMError, encoding::wide::encode_ri, instruction::wide::arithmetic};
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 #[test]
 fn direct_local_mapper_keeps_original_nested_owner_without_physical_allocation() {
@@ -18,22 +19,18 @@ fn direct_local_mapper_keeps_original_nested_owner_without_physical_allocation()
     original.set_limit_bytes(original.reserved_bytes());
     let capacity = original.try_reserve_bytes(1).unwrap_err();
     for source in [
-        VMError::AllocationDeferred(capacity.clone()),
-        VMError::ExecutionDeferred(ivm::error::ExecutionDeferral::TraceOwnerUnavailable),
+        VMError::Deferred(VmDeferral::AllocationDeferred(capacity.clone())),
+        VMError::Deferred(VmDeferral::ExecutionDeferred(
+            ivm::error::ExecutionDeferral::TraceOwnerUnavailable,
+        )),
     ] {
         let expected_reason = source.execution_deferral().unwrap();
         let expected_allocation = match &source {
-            VMError::AllocationDeferred(original) => Some(original.clone()),
-            VMError::ExecutionDeferred(_) => None,
+            VMError::Deferred(VmDeferral::AllocationDeferred(original)) => Some(original.clone()),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(_)) => None,
             _ => unreachable!("exact fixture variants"),
         };
-        let error = VMError::Metered {
-            gas: 31,
-            source: Box::new(VMError::Metered {
-                gas: 17,
-                source: Box::new(source),
-            }),
-        };
+        let error = VMError::metered(31, VMError::metered(17, source));
         let mut attempt = None;
         let allocations = allocations_during(|| {
             attempt = Some(map_vm_error_with_context_to_validation(&vm, error));
@@ -45,8 +42,12 @@ fn direct_local_mapper_keeps_original_nested_owner_without_physical_allocation()
         assert_eq!(owner.reason(), expected_reason);
         assert_eq!(owner.allocation_refusal(), expected_allocation.as_ref());
         match (owner.into_vm_error(), expected_allocation) {
-            (VMError::AllocationDeferred(actual), Some(expected)) => assert_eq!(actual, expected),
-            (VMError::ExecutionDeferred(actual), None) => assert_eq!(actual, expected_reason),
+            (VMError::Deferred(VmDeferral::AllocationDeferred(actual)), Some(expected)) => {
+                assert_eq!(actual, expected)
+            }
+            (VMError::Deferred(VmDeferral::ExecutionDeferred(actual)), None) => {
+                assert_eq!(actual, expected_reason)
+            }
             _ => panic!("diagnostic mapping changed its original local owner"),
         }
         assert!(vm.last_diagnostic().is_none());
@@ -82,12 +83,12 @@ fn actual_semantic_trap_retains_bounded_fault_without_formatting() {
 fn host_invariants_remain_unfinished_local_attempts() {
     let vm = ivm::IVM::try_new(100).unwrap();
     for error in [
-        VMError::HostUnavailable,
-        VMError::SyscallGasQuoteExceeded {
+        VMError::Deferred(VmDeferral::HostUnavailable),
+        VMError::Deferred(VmDeferral::SyscallGasQuoteExceeded {
             quoted: 1,
             actual: 2,
-        },
-        VMError::SyscallMeteringModeMismatch { syscall: 3 },
+        }),
+        VMError::Deferred(VmDeferral::SyscallMeteringModeMismatch { syscall: 3 }),
     ] {
         let outcome = map_vm_error_with_context_to_validation(&vm, error);
         assert!(
@@ -150,19 +151,16 @@ fn declared_rejection_moves_original_backing_without_physical_allocation() {
             let name_backing = (name.as_ptr(), name.capacity());
             let type_backing = (error_type.as_ptr(), error_type.capacity());
             let message_backing = message.as_deref().map(str::as_ptr);
-            let mut error = VMError::ContractAbort {
+            let mut error = VMError::Trap(VmTrap::ContractAbort {
                 contract,
                 name,
                 error_type,
                 schema_hash: [7; 32],
                 code: 18,
                 message,
-            };
+            });
             for gas in 0..depth {
-                error = VMError::Metered {
-                    gas: gas + 13,
-                    source: Box::new(error),
-                };
+                error = VMError::metered(gas + 13, error);
             }
             let mut outcome = None;
             let allocations = allocations_during(|| {
@@ -212,15 +210,9 @@ fn metered_fault_keeps_kind_and_exact_phase() {
                 .unwrap();
             vm.run().unwrap_err()
         } else {
-            VMError::OutOfGas
+            VMError::Trap(VmTrap::OutOfGas)
         };
-        let error = VMError::Metered {
-            gas: 31,
-            source: Box::new(VMError::Metered {
-                gas: 17,
-                source: Box::new(source),
-            }),
-        };
+        let error = VMError::metered(31, VMError::metered(17, source));
         let ValidationFail::IvmFault(fault) =
             expect_completed_rejection(map_vm_error_with_context_to_validation(&vm, error))
         else {

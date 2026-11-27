@@ -3,6 +3,7 @@
 //! Private-input records are bounded before Norito decoding. Successful
 //! decoding yields an opaque private numeric TLV; only the explicitly approved
 //! full-width commitment path below may declassify it.
+use crate::error::VmTrap;
 use crate::{PointerType, VMError, pointer_abi};
 use blstrs::Scalar;
 use crypto_bigint::{CtLt, CtSelect, Encoding, U256};
@@ -31,22 +32,22 @@ pub(crate) struct ValidatedPrivateInput {
     pub envelope: Vec<u8>,
 }
 fn canonical_record_bytes(record: &PrivateInputRecordV1) -> Result<Vec<u8>, VMError> {
-    norito::encode_canonical(record).map_err(|_| VMError::NoritoInvalid)
+    norito::encode_canonical(record).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 /// Encode a canonical integer private-input record.
 pub fn int_record(value: BigInt) -> Result<PrivateInputRecordV1, VMError> {
     let payload = IntValueV1::try_new(value)
-        .map_err(|_| VMError::NoritoInvalid)?
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
         .encode_frame()
-        .map_err(|_| VMError::NoritoInvalid)?;
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     Ok(PrivateInputRecordV1::new(PrivateInputKindV1::Int, payload))
 }
 /// Encode a canonical decimal private-input record.
 pub fn decimal_record(value: Numeric) -> Result<PrivateInputRecordV1, VMError> {
     let payload = DecimalValueV1::try_from_numeric(value)
-        .map_err(|_| VMError::NoritoInvalid)?
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
         .encode_frame()
-        .map_err(|_| VMError::NoritoInvalid)?;
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     Ok(PrivateInputRecordV1::new(
         PrivateInputKindV1::Decimal,
         payload,
@@ -56,7 +57,7 @@ pub fn decimal_record(value: Numeric) -> Result<PrivateInputRecordV1, VMError> {
 pub fn quantity_record(value: Quantity) -> Result<PrivateInputRecordV1, VMError> {
     let payload = QuantityValueV1::new(value)
         .encode_frame()
-        .map_err(|_| VMError::NoritoInvalid)?;
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     Ok(PrivateInputRecordV1::new(
         PrivateInputKindV1::Quantity,
         payload,
@@ -74,11 +75,11 @@ pub fn encode_record(record: &PrivateInputRecordV1) -> Result<Vec<u8>, VMError> 
         PrivateInputKindV1::Quantity => MAX_QUANTITY_FRAME_BYTES_V1,
     };
     if record.payload.len() > max_payload_bytes {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let encoded = canonical_record_bytes(record)?;
     if encoded.len() > MAX_PRIVATE_INPUT_RECORD_BYTES_V1 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(encoded)
 }
@@ -86,31 +87,31 @@ fn validate_frame(kind: PrivateInputKindV1, frame: &[u8]) -> Result<(), VMError>
     let canonical = match kind {
         PrivateInputKindV1::Int => {
             if frame.len() > MAX_INT_FRAME_BYTES_V1 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             IntValueV1::decode_frame(frame)
                 .and_then(|value| value.encode_frame())
-                .map_err(|_| VMError::NoritoInvalid)?
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
         }
         PrivateInputKindV1::Decimal => {
             if frame.len() > MAX_DECIMAL_FRAME_BYTES_V1 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             DecimalValueV1::decode_frame(frame)
                 .and_then(|value| value.encode_frame())
-                .map_err(|_| VMError::NoritoInvalid)?
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
         }
         PrivateInputKindV1::Quantity => {
             if frame.len() > MAX_QUANTITY_FRAME_BYTES_V1 {
-                return Err(VMError::NoritoInvalid);
+                return Err(VMError::Trap(VmTrap::NoritoInvalid));
             }
             QuantityValueV1::decode_frame(frame)
                 .and_then(|value| value.encode_frame())
-                .map_err(|_| VMError::NoritoInvalid)?
+                .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
         }
     };
     if canonical != frame {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(())
 }
@@ -123,12 +124,12 @@ pub(crate) fn decode_record(
     expected: PrivateInputKindV1,
 ) -> Result<ValidatedPrivateInput, VMError> {
     if raw.is_empty() || raw.len() > MAX_PRIVATE_INPUT_RECORD_BYTES_V1 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     let record: PrivateInputRecordV1 =
-        norito::decode_canonical(raw).map_err(|_| VMError::NoritoInvalid)?;
+        norito::decode_canonical(raw).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     if record.kind != expected {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     validate_frame(record.kind, &record.payload)?;
     let envelope =
@@ -147,7 +148,7 @@ pub(crate) fn validate_private_numeric_envelope(
         PointerType::Int => PrivateInputKindV1::Int,
         PointerType::Decimal => PrivateInputKindV1::Decimal,
         PointerType::Quantity => PrivateInputKindV1::Quantity,
-        _ => return Err(VMError::NoritoInvalid),
+        _ => return Err(VMError::Trap(VmTrap::NoritoInvalid)),
     };
     validate_frame(kind, tlv.payload)?;
     Ok(kind)
@@ -221,11 +222,12 @@ pub(crate) fn valcom(
     if unsigned_le.last().is_some_and(|byte| byte & 0x80 != 0) {
         unsigned_le.push(0);
     }
-    BigInt::from_twos_bytes(&unsigned_le).map_err(|_| VMError::NoritoInvalid)
+    BigInt::from_twos_bytes(&unsigned_le).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     fn envelope(record: PrivateInputRecordV1) -> Vec<u8> {
         let raw = encode_record(&record).expect("encode private record");
         decode_record(&raw, record.kind)
@@ -272,7 +274,7 @@ mod tests {
         );
         assert!(matches!(
             decode_record(&alternate, PrivateInputKindV1::Quantity),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         assert_eq!(
@@ -305,7 +307,7 @@ mod tests {
         );
         assert!(matches!(
             encode_record(&oversized),
-            Err(VMError::NoritoInvalid)
+            Err(VMError::Trap(VmTrap::NoritoInvalid))
         ));
     }
     #[test]

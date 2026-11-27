@@ -98,7 +98,9 @@ impl Rows {
             return Ok(None);
         }
         let next = capacity.checked_mul(2).ok_or_else(unavailable)?.max(4);
-        ExecutionMemoryPlan::array::<WriteLogEntry>(next).map_err(VMError::AllocationDeferred)?;
+        ExecutionMemoryPlan::array::<WriteLogEntry>(next).map_err(|cause| {
+            VMError::Deferred(crate::error::VmDeferral::AllocationDeferred(cause))
+        })?;
         Ok(Some(next))
     }
 

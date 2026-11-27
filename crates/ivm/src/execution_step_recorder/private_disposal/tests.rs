@@ -1,6 +1,7 @@
 //! Observe retained diagnostic register fields at their actual backing deallocation.
 
 use super::super::*;
+use crate::error::VmDeferral;
 use crate::memory::private_disposal::tests::{
     assert_erased_and_freed, budget, original_credit_at_free, serial, watch, watch_second_span,
 };
@@ -152,15 +153,15 @@ fn refused_step_completion_preserves_published_rows_and_original_credit() {
         .unwrap();
     let expected = recorder.records()[0];
     assert!(
-        matches!(recorder.finish_step(stale, state(44), DiagnosticStepOutcome::Completed), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(recorder.finish_step(stale, state(44), DiagnosticStepOutcome::Completed), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             ExecutionDeferral::AllocationUnavailable
         ))
     );
     assert!(matches!(
         recorder.begin_step(state(55)),
-        Err(VMError::ExecutionDeferred(
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::ActiveMemoryCapacity
-        ))
+        )))
     ));
     assert_eq!(recorder.records(), &[expected]);
     assert_eq!(budget.reserved_bytes(), bytes);

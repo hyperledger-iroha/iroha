@@ -115,6 +115,7 @@ impl StateTransaction<'_, '_> {
     pub(crate) fn clear_direct_parliament_candidate_testing(&mut self) {
         self.direct_parliament_candidate_testing = None;
         self.direct_parliament_registration = None;
+        self.direct_parliament_runtime = None;
     }
 
     /// Consume the exact direct marker before the parameter handler can perform any effect.

@@ -1,6 +1,7 @@
 //! Native conditional-branch captures on the original private dispatcher ports.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 const OPCODES: [u8; 6] = [
     wide::control::BEQ,
@@ -107,7 +108,10 @@ fn native_branch_rejects_either_private_tag_even_when_tags_match() {
                 16,
                 32,
             );
-            assert!(matches!(outcome, Err(ivm::VMError::PrivacyViolation)));
+            assert!(matches!(
+                outcome,
+                Err(ivm::VMError::Trap(VmTrap::PrivacyViolation))
+            ));
             let record = &recorder.records()[0];
             assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));
             assert_eq!(record.after.pc, record.before.pc);
@@ -210,11 +214,11 @@ fn branch_gas_cycle_underflow_and_false_halt_cannot_form_successful_rows() {
     let instruction = enc::encode_branch(wide::control::BEQ, 0, 0, 0);
     for gas in [0, root_result_table_gas()] {
         let (program, recorder, outcome) = capture(&[instruction], &[], gas, 32);
-        assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+        assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
         assert_root_preflight_out_of_gas(&program, &recorder, gas);
     }
     let (_, recorder, outcome) = capture(&[instruction], &[], root_setup_gas(), 32);
-    assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+    assert!(matches!(outcome, Err(ivm::VMError::Trap(VmTrap::OutOfGas))));
     assert_eq!(recorder.records().len(), 1);
     let trapped = &recorder.records()[0];
     assert_eq!(trapped.instruction, Some(instruction));
@@ -237,7 +241,10 @@ fn branch_gas_cycle_underflow_and_false_halt_cannot_form_successful_rows() {
     carries(&mut underflow.0.row[CARRIES..CARRIES + 4], 0, 1, true);
     assert!(!underflow.accepts(&program));
     let (limited, recorder, outcome) = capture(&[instruction], &[], 16, 1);
-    assert!(matches!(outcome, Err(ivm::VMError::ExceededMaxCycles)));
+    assert!(matches!(
+        outcome,
+        Err(ivm::VMError::Trap(VmTrap::ExceededMaxCycles))
+    ));
     assert_eq!(recorder.records().len(), 1);
     let mut exhausted = ScalarFixture::from_record(&limited, &recorder.records()[0]);
     assert!(exhausted.accepts(&limited));

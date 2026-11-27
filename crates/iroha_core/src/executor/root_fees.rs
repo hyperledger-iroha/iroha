@@ -212,6 +212,7 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use ivm_abi::error::VmDeferral;
 
     fn fixture(with_policy: bool, restricted: bool) -> (State, DataSpaceId, AssetDefinitionId) {
         let ds = DataSpaceId::new(u64::MAX - 19);
@@ -717,7 +718,8 @@ mod tests {
                 exported = Some(owner.into_vm_error())
             });
             assert_eq!(allocations, 0);
-            let ivm::VMError::DecodeDeferred(exported) = exported.unwrap() else {
+            let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(exported)) = exported.unwrap()
+            else {
                 panic!("preserve actual decoder owner");
             };
             assert_eq!(exported, original_cause);

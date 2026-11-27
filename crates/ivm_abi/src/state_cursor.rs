@@ -1,4 +1,5 @@
 //! Exact pointer-boundary validation for opaque durable-map cursors.
+use crate::error::VmTrap;
 use iroha_data_model::smart_contract::state_cursor::StateCursorV1;
 
 use crate::{
@@ -16,11 +17,12 @@ pub fn validate_cursor_envelope(
 ) -> Result<StateCursorV1, VMError> {
     let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
     if tlv.type_id != PointerType::NoritoBytes {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
-    let cursor = StateCursorV1::decode_frame(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+    let cursor = StateCursorV1::decode_frame(tlv.payload)
+        .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     if cursor.key_schema_hash != key_schema_hash {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(cursor)
 }

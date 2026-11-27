@@ -6,6 +6,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
@@ -40,5 +41,5 @@ fn wsv_host_input_publish_rejects_unknown_type_id() {
     let err = vm
         .run()
         .expect_err("unknown pointer type should be rejected");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
 }

@@ -1698,6 +1698,199 @@ mod canonical_stream_handshake_tests {
             .with_state(app)
     }
     #[test]
+    fn c10_events_require_a_single_explicit_offer_on_the_event_route() {
+        use iroha_data_model::ivm_c10::events::C10_EVENT_SUBPROTOCOL;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(C10_EVENT_SUBPROTOCOL),
+        );
+        assert_eq!(
+            select_norito_websocket_protocol(&headers, None, true).unwrap(),
+            C10_EVENT_SUBPROTOCOL
+        );
+        assert_eq!(
+            error_code(select_norito_websocket_protocol(&headers, None, false).unwrap_err()),
+            "websocket_subprotocol_unsupported"
+        );
+        assert!(select_norito_websocket_protocol(&headers, Some("cursor=1"), true).is_err());
+        headers.append(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
+        );
+        assert!(select_norito_websocket_protocol(&headers, None, true).is_err());
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
+        );
+        assert_eq!(
+            select_norito_websocket_protocol(&headers, None, true).unwrap(),
+            NORITO_V1_WEBSOCKET_SUBPROTOCOL
+        );
+    }
+
+    #[cfg(feature = "app_api_wss")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opted_in_websocket_reports_only_the_certified_c10_rejection_after_publication() {
+        use crate::tests_runtime_handlers::{
+            mk_native_app_state_for_tests, signed_network_app_headers,
+        };
+        use futures_util::{SinkExt as _, StreamExt as _};
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::{
+            account::AccountId,
+            isi::{Grant, Log, smart_contract_code::RegisterSmartContractBytes},
+            ivm_c10::{
+                EventBoxC10V1, IvmAdmissionErrorC10V1, PipelineEventBoxC10V1,
+                TransactionRejectionReasonC10V1, TransactionStatusC10V1, ValidationFailC10V1,
+                events::{
+                    C10_EVENT_SUBPROTOCOL, EventMessageC10V1, EventSubscriptionC10V1,
+                    TransactionEventFilterC10V1,
+                },
+            },
+            smart_contract::ContractArtifactId,
+        };
+        use iroha_executor_data_model::permission::query::CanReadAllLedgerData;
+        use tokio_tungstenite::tungstenite::{self, Message, client::IntoClientRequest};
+
+        let mut config = TestChainConfig::new(World::new(), 1000);
+        let owner = config.genesis_key.clone();
+        let account = AccountId::new(owner.public_key().clone());
+        config
+            .genesis_instructions
+            .push(Grant::account_permission(CanReadAllLedgerData, account.clone()).into());
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        let at = chain.committed(chain.height()).block_time_ms() + 1000;
+        chain.schedule_catalog_service_for_test("iroha.runtime.ivm_c10.v1", at);
+        chain.commit_at(at, vec![]);
+        chain.commit_at(at + 1000, vec![]);
+
+        let mut app = mk_native_app_state_for_tests();
+        let inner = Arc::get_mut(&mut app).unwrap();
+        inner.state = Arc::clone(chain.state());
+        inner.kura = Arc::clone(chain.kura());
+        inner.require_api_token = true;
+        inner.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["fixture-token"]));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, shutdown) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                gated_event_websocket_router(app)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown.await;
+            })
+            .await
+            .unwrap();
+        });
+        let url = format!("ws://{address}/v1/events/ws");
+        let mut denied = url.as_str().into_client_request().unwrap();
+        denied.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(C10_EVENT_SUBPROTOCOL),
+        );
+        let rejected = tokio_tungstenite::connect_async(denied).await.unwrap_err();
+        assert!(
+            matches!(rejected, tungstenite::Error::Http(response) if response.status() == StatusCode::UNAUTHORIZED)
+        );
+
+        let mut request = url.as_str().into_client_request().unwrap();
+        request.headers_mut().extend(signed_network_app_headers(
+            &chain.network_id(),
+            &account,
+            &owner,
+            &Method::GET,
+            &"/v1/events/ws".parse().unwrap(),
+            &[],
+        ));
+        request
+            .headers_mut()
+            .insert(HEADER_API_TOKEN, HeaderValue::from_static("fixture-token"));
+        request.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(C10_EVENT_SUBPROTOCOL),
+        );
+        let (mut socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+        assert_eq!(
+            response.headers()[header::SEC_WEBSOCKET_PROTOCOL],
+            C10_EVENT_SUBPROTOCOL
+        );
+        let mut code = kotodama_lang::compiler::Compiler::new_c10()
+            .compile_source_with_manifest(
+                "seiyaku Counter { view fn answer() authorize(anyone) -> int { return 10; } }",
+            )
+            .unwrap()
+            .0;
+        let layout = ivm::IvmProfileId::C10_ABI_V1.engine().header_layout();
+        code[layout.budget_offset..layout.abi_version_offset].copy_from_slice(&17u64.to_le_bytes());
+        let invalid = RegisterSmartContractBytes {
+            artifact_id: ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                ivm::contract_code_hash(&code),
+            ),
+            code,
+        };
+        let tx = chain.sign(&owner, [invalid.into()], at + 2000);
+        let hash = tx.hash();
+        let filter = EventSubscriptionC10V1 {
+            filters: vec![TransactionEventFilterC10V1::default()],
+        };
+        socket
+            .send(Message::Binary(
+                norito::encode_canonical(&filter).unwrap().into(),
+            ))
+            .await
+            .unwrap();
+        let ordinary = chain.sign(
+            &owner,
+            [Log::new(iroha_data_model::Level::INFO, "ordinary".into()).into()],
+            at + 2000,
+        );
+        assert_eq!(
+            chain.commit_at(at + 2000, vec![ordinary, tx]),
+            [true, false]
+        );
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match socket.next().await.unwrap().unwrap() {
+                    Message::Binary(bytes) => break bytes,
+                    Message::Ping(_) | Message::Pong(_) => continue,
+                    other => panic!("unexpected WebSocket frame: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("committed C10 event before deadline");
+        assert!(
+            norito::decode_canonical::<iroha_data_model::events::stream::EventMessage>(&received)
+                .is_err()
+        );
+        let EventMessageC10V1(EventBoxC10V1::Pipeline(PipelineEventBoxC10V1::Transaction(event))) =
+            norito::decode_canonical(&received).unwrap()
+        else {
+            panic!("C10 transaction event")
+        };
+        assert_eq!(event.hash, hash);
+        assert_eq!(event.block_height.unwrap().get(), chain.height());
+        assert!(
+            matches!(event.status, TransactionStatusC10V1::Rejected(reason) if *reason == TransactionRejectionReasonC10V1::Validation(ValidationFailC10V1::IvmAdmission(IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(17))))
+        );
+        socket.close(None).await.unwrap();
+        drop(socket);
+        stop.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[test]
     fn websocket_requires_exact_single_subprotocol() {
         let headers = HeaderMap::new();
         assert_eq!(

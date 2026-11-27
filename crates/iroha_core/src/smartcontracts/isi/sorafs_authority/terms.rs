@@ -17,6 +17,7 @@ use iroha_data_model::runtime::definition::DefinitionId;
     norito::json::JsonDeserialize,
 )]
 #[norito_schema(name = "iroha_core::sorafs_authority::SorafsAuthorityApprovalV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct SorafsAuthorityApprovalV1 {
     /// Exact immutable decision.
     pub proposal_content_id: ProposalContentId,
@@ -53,6 +54,7 @@ impl SorafsAuthorityApprovalV1 {
     norito::json::JsonDeserialize,
 )]
 #[norito_schema(name = "iroha_core::sorafs_authority::SorafsAuthorityExecutionV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct SorafsAuthorityExecutionV1 {
     /// Successful subject revision.
     pub revision: u64,
@@ -79,6 +81,7 @@ pub struct SorafsAuthorityExecutionV1 {
     norito::json::JsonDeserialize,
 )]
 #[norito_schema(name = "iroha_core::sorafs_authority::SorafsAuthorityLeaseV1")]
+#[derive(iroha_schema::IntoSchema)]
 pub struct SorafsAuthorityLeaseV1 {
     /// Canonical plan content, normalized to the Grant action.
     pub plan: SorafsAuthorityProposalV1,

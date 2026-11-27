@@ -262,7 +262,13 @@ fn identical_genuine_ballots_keep_verified_duplicate_results_in_canonical_block(
         let (output_index, row) = decoded.network_output_at(index).unwrap();
         assert_eq!(output_index, index);
         assert_eq!(row.input_index, index);
-        assert_eq!(&row.result, rows[index as usize].result());
+        assert_eq!(
+            &row.result,
+            rows[index as usize]
+                .result()
+                .baseline()
+                .expect("anonymous ballot decisions use the baseline Network result")
+        );
         assert!(row.completions.is_empty());
         assert!(row.result.batch_transfer_outcomes().is_empty());
         assert!(row.result.nexus_fee_receipt().is_none());

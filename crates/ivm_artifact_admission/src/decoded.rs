@@ -2,6 +2,7 @@
 
 use super::{ContractArtifactError, MAX_CONTRACT_IMAGE_BYTES, VMError};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
+use ivm_abi::error::VmDeferral;
 
 /// One fixed-width decoded instruction in the executable stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,9 +42,13 @@ pub fn instructions(
     }
     let mut decoded = ChargedBuffer::new(code.len() / 4, budget).map_err(|error| {
         let error = match error {
-            ChargedBufferError::Admission(error) => VMError::AllocationDeferred(error),
+            ChargedBufferError::Admission(error) => {
+                VMError::Deferred(VmDeferral::AllocationDeferred(error))
+            }
             ChargedBufferError::Allocator { .. } => {
-                VMError::ExecutionDeferred(ivm_abi::error::ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    ivm_abi::error::ExecutionDeferral::AllocationUnavailable,
+                ))
             }
         };
         ContractArtifactError::preparation("instruction admission", error)
@@ -61,6 +66,7 @@ pub fn instructions(
 mod tests {
     use super::*;
     use iroha_allocation::AllocationRefusal;
+    use ivm_abi::error::VmDeferral;
 
     #[test]
     fn funded_decode_refuses_the_original_pool_and_retries_exact_backing() {
@@ -72,9 +78,9 @@ mod tests {
         let budget = AllocationBudget::new(0);
         let error = instructions(&code, Some(&budget)).err().unwrap();
         assert!(
-            matches!(error.try_into_local_vm_error(), Ok(VMError::AllocationDeferred(
+            matches!(error.try_into_local_vm_error(), Ok(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }
-        )) if requested_bytes == bytes)
+        ))) if requested_bytes == bytes)
         );
         assert_eq!(budget.peak_reserved_bytes(), 0);
         budget.set_limit_bytes(bytes);
@@ -82,7 +88,9 @@ mod tests {
         let error = instructions(&code, Some(&budget)).err().unwrap();
         assert!(matches!(
             error.into_vm_error(),
-            VMError::AllocationDeferred(AllocationRefusal::Capacity { .. })
+            VMError::Deferred(VmDeferral::AllocationDeferred(
+                AllocationRefusal::Capacity { .. }
+            ))
         ));
         assert_eq!(budget.reserved_bytes(), bytes);
         drop(occupied);

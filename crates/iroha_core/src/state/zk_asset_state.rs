@@ -2,7 +2,14 @@
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::FrontierCheckpoint")]
 #[derive(
-    Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+    Copy,
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct FrontierCheckpoint {
     /// Block height when the checkpoint was recorded.
@@ -39,7 +46,9 @@ mod zk_asset_tree_frontier_json {
 /// Canonical shielded asset ledger snapshot persisted within the world state.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ZkAssetState")]
-#[derive(Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+)]
 pub struct ZkAssetState {
     /// Authenticated commitment-tree construction for this asset.
     pub tree_profile: ConfidentialTreeProfile,

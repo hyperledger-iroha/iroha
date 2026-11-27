@@ -11,6 +11,7 @@ use iroha_primitives::{
     numeric_abi::{IntValueV1, QuantityValueV1},
 };
 use ivm::{CoreHost, IVM, PointerType, ProgramMetadata, VMError, host::DefaultHost};
+use ivm_abi::error::VmTrap;
 use std::collections::BTreeMap;
 
 fn tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -76,7 +77,7 @@ fn compact_schema_validates_an_unused_numeric_root_argument_before_its_constant_
             assert!(matches!(result, Ok(())));
             assert_eq!(quantity_result(&vm), "7");
         } else {
-            assert!(matches!(result, Err(VMError::DecodeError)));
+            assert!(matches!(result, Err(VMError::Trap(VmTrap::DecodeError))));
             assert!(vm.call_result_word_count().is_err());
         }
     }
@@ -113,7 +114,7 @@ fn compact_schema_rejects_a_genuine_invalid_durable_quantity_before_an_unused_pr
     common::select_kotodama_entrypoint(&mut vm, &program, "main");
     assert!(matches!(
         vm.run_with_host(&mut host),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert!(vm.call_result_word_count().is_err());
     assert!(vm.remaining_gas() < 4_000_000);

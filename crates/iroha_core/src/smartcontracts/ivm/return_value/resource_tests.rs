@@ -8,7 +8,9 @@ use iroha_data_model::smart_contract::entrypoint::{
     MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
 };
 use iroha_primitives::bigint::BigInt;
+use ivm::error::VmErrorRef;
 use ivm::{IVM, VMError, error::ExecutionDeferral};
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 const FUNDED_BYTES: usize = 128 * 1024 * 1024;
 
@@ -45,7 +47,11 @@ pub fn leave_read_slots(vm: &IVM, budget: &AllocationBudget, spare_reads: usize)
         );
         match vm.memory.load_u64(vm.register(10)) {
             Ok(_) => capacity += 1,
-            Err(error @ VMError::AllocationDeferred(AllocationRefusal::Capacity { .. })) => {
+            Err(
+                error @ VMError::Deferred(VmDeferral::AllocationDeferred(
+                    AllocationRefusal::Capacity { .. },
+                )),
+            ) => {
                 break error;
             }
             Err(error) => panic!("unexpected tracked load failure: {error}"),
@@ -72,30 +78,27 @@ fn leaf(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
 /// Compare every field of the exact VM variants exercised by these fixtures.
 /// Original allocation equality includes its retained pool/release identity.
 pub fn assert_same_return_error(actual: &VMError, expected: &VMError) {
-    match (actual, expected) {
-        (VMError::AllocationDeferred(actual), VMError::AllocationDeferred(expected)) => {
-            assert_eq!(actual, expected);
-        }
-        (VMError::ExecutionDeferred(actual), VMError::ExecutionDeferred(expected)) => {
+    assert_eq!(actual.metered_gas(), expected.metered_gas());
+    match (actual.as_unmetered(), expected.as_unmetered()) {
+        (
+            VmErrorRef::Deferred(VmDeferral::AllocationDeferred(actual)),
+            VmErrorRef::Deferred(VmDeferral::AllocationDeferred(expected)),
+        ) => {
             assert_eq!(actual, expected);
         }
         (
-            VMError::Metered {
-                gas: actual_gas,
-                source: actual,
-            },
-            VMError::Metered {
-                gas: expected_gas,
-                source: expected,
-            },
+            VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(actual)),
+            VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(expected)),
         ) => {
-            assert_eq!(actual_gas, expected_gas);
-            assert_same_return_error(actual, expected);
+            assert_eq!(actual, expected);
         }
-        (VMError::DecodeError, VMError::DecodeError)
-        | (VMError::PrivacyViolation, VMError::PrivacyViolation)
-        | (VMError::NoritoInvalid, VMError::NoritoInvalid)
-        | (VMError::OutOfGas, VMError::OutOfGas) => {}
+        (VmErrorRef::Trap(VmTrap::DecodeError), VmErrorRef::Trap(VmTrap::DecodeError))
+        | (
+            VmErrorRef::Trap(VmTrap::PrivacyViolation),
+            VmErrorRef::Trap(VmTrap::PrivacyViolation),
+        )
+        | (VmErrorRef::Trap(VmTrap::NoritoInvalid), VmErrorRef::Trap(VmTrap::NoritoInvalid))
+        | (VmErrorRef::Trap(VmTrap::OutOfGas), VmErrorRef::Trap(VmTrap::OutOfGas)) => {}
         (actual, expected) => panic!("return failure changed: {actual:?}; expected {expected:?}"),
     }
 }
@@ -107,7 +110,7 @@ fn expect_deferred(error: EntrypointReturnDecodeError, expected: &VMError) {
     assert_eq!(word_index, 0);
     assert_same_return_error(&reason, expected);
     let owner = ExecutionDeferred::try_from_vm_error(reason).expect("retain local retry owner");
-    assert_same_return_error(&owner.into_vm_error(), expected.as_unmetered());
+    assert_same_return_error(&owner.into_vm_error(), expected);
 }
 
 #[test]
@@ -179,20 +182,32 @@ fn return_error_mapping_retains_all_local_variants_and_metered_owners() {
     let capacity = budget.try_reserve_bytes(1).unwrap_err();
     let errors = || {
         [
-            VMError::AllocationDeferred(capacity.clone()),
-            VMError::AllocationDeferred(AllocationRefusal::DemandOverflow),
-            VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
-                requested_bytes: 9,
-                limit_bytes: 8,
-            }),
-            VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
-            VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
-            VMError::ExecutionDeferred(ExecutionDeferral::VerifierArtifactsUnavailable),
-            VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable),
-            VMError::Metered {
-                gas: 17,
-                source: Box::new(VMError::AllocationDeferred(capacity.clone())),
-            },
+            VMError::Deferred(VmDeferral::AllocationDeferred(capacity.clone())),
+            VMError::Deferred(VmDeferral::AllocationDeferred(
+                AllocationRefusal::DemandOverflow,
+            )),
+            VMError::Deferred(VmDeferral::AllocationDeferred(
+                AllocationRefusal::ExceedsLimit {
+                    requested_bytes: 9,
+                    limit_bytes: 8,
+                },
+            )),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            )),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::ActiveMemoryCapacity,
+            )),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::VerifierArtifactsUnavailable,
+            )),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::TraceOwnerUnavailable,
+            )),
+            VMError::metered(
+                17,
+                VMError::Deferred(VmDeferral::AllocationDeferred(capacity.clone())),
+            ),
         ]
     };
     for ((expected, first), second) in errors().into_iter().zip(errors()).zip(errors()) {
@@ -209,7 +224,7 @@ fn return_error_mapping_retains_all_local_variants_and_metered_owners() {
         let ExecutionAttemptError::Deferred(owner) = attempt else {
             panic!("local refusal must not complete an execution attempt");
         };
-        assert_same_return_error(&owner.into_vm_error(), expected.as_unmetered());
+        assert_same_return_error(&owner.into_vm_error(), &expected);
     }
     drop(reservation);
 }
@@ -217,7 +232,7 @@ fn return_error_mapping_retains_all_local_variants_and_metered_owners() {
 #[test]
 fn return_error_mapping_preserves_privacy_malformed_and_gas_boundaries() {
     assert!(matches!(
-        EntrypointReturnDecodeError::from_vm_error(2, "Int", VMError::NoritoInvalid),
+        EntrypointReturnDecodeError::from_vm_error(2, "Int", VMError::Trap(VmTrap::NoritoInvalid)),
         EntrypointReturnDecodeError::InvalidValue {
             word_index: 2,
             kind: "Int",
@@ -225,18 +240,25 @@ fn return_error_mapping_preserves_privacy_malformed_and_gas_boundaries() {
         }
     ));
     assert!(matches!(
-        EntrypointReturnDecodeError::from_vm_error(2, "Int", VMError::NoritoInvalid)
+        EntrypointReturnDecodeError::from_vm_error(2, "Int", VMError::Trap(VmTrap::NoritoInvalid))
             .into_nested_vm_error(),
-        VMError::DecodeError
+        VMError::Trap(VmTrap::DecodeError)
     ));
     assert!(matches!(
-        EntrypointReturnDecodeError::from_vm_error(2, "Int", VMError::PrivacyViolation)
-            .into_nested_vm_error(),
-        VMError::PrivacyViolation
+        EntrypointReturnDecodeError::from_vm_error(
+            2,
+            "Int",
+            VMError::Trap(VmTrap::PrivacyViolation)
+        )
+        .into_nested_vm_error(),
+        VMError::Trap(VmTrap::PrivacyViolation)
     ));
     for (max_bytes, expected) in [
-        (1024, VMError::OutOfGas),
-        (MAX_ENTRYPOINT_RETURN_RECORD_BYTES, VMError::DecodeError),
+        (1024, VMError::Trap(VmTrap::OutOfGas)),
+        (
+            MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
+            VMError::Trap(VmTrap::DecodeError),
+        ),
     ] {
         assert_same_return_error(
             &EntrypointReturnDecodeError::RecordTooLarge {

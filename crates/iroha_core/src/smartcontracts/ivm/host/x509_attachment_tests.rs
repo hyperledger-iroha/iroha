@@ -304,7 +304,7 @@ fn x509_actual_compiled_child_queues_then_failure_restores_business_state_and_cu
         .expect_err("failed child poisons consumed original attachment");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::PermissionDenied
+        VmErrorRef::Trap(VmTrap::PermissionDenied)
     ));
     assert_eq!(host.nested_contract_call_depth, 0);
     assert!(host.queued.is_empty());

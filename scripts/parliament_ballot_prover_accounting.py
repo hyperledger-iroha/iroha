@@ -15,7 +15,7 @@ import types
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = Path("scripts/check_parliament_ballot_resource_accounting.py")
-REVIEWED_SOURCE_SHA256 = "8f6732fbed5b7b9960c91339cddf4cc7c0a01dccaf9871253d917d9fe6bdbba9"
+REVIEWED_SOURCE_SHA256 = "8bad6f2f1ff14a3ce1b797c5e4e14914c7038c56baca51c94ba84154f3461db5"
 ALLOWANCE = 65_536
 MAX_ATTEMPTS = 1 << 20
 ROWS = {"candidate": (33, 8, 704), "comparator": (22, 6, 696)}

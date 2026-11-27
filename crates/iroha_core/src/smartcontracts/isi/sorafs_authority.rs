@@ -49,6 +49,7 @@ static COMPLIANCE_ROLE: LazyLock<RoleId> = LazyLock::new(|| {
 )]
 #[norito_schema(name = "iroha_core::sorafs_authority::SorafsAuthorityProposalRecordV1")]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct SorafsAuthorityProposalRecordV1 {
     /// Bonded citizen who submitted the immutable content.
     pub proposer: AccountId,
@@ -77,6 +78,7 @@ pub struct SorafsAuthorityProposalRecordV1 {
 )]
 #[norito_schema(name = "iroha_core::sorafs_authority::SorafsAuthorityDeadlineClosureV1")]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct SorafsAuthorityDeadlineClosureV1 {
     /// Exact canonical approval cutoff or early-revocation term end.
     pub closed_at_height: u64,
@@ -96,6 +98,7 @@ pub struct SorafsAuthorityDeadlineClosureV1 {
 )]
 #[norito_schema(name = "iroha_core::sorafs_authority::SorafsAuthorityHeadV1")]
 #[norito(deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub struct SorafsAuthorityHeadV1 {
     /// Exact two-decision lease plan owning this authority incarnation.
     pub plan_id: [u8; 32],

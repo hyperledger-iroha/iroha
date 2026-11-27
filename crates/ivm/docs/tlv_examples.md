@@ -43,4 +43,4 @@ Examples (hex, spaces added for readability)
   - TLV: `00 08 01 <len:be u32> <payload bytes> <hash:32>`
 
 Hash field
-- Fill with the 32‑byte hash of `payload` according to the pointer‑ABI type table (e.g., blake2b‑32 for AccountId/AssetDefinitionId/Name/NftId; blake2b‑32 over canonical JSON bytes for Json). The VM validates TLVs on first dereference: version must be 1, `type_id` must be known, envelope must lie entirely in INPUT, and the hash must match. Invalid TLVs trap with `VMError::NoritoInvalid`.
+- Fill with the 32‑byte hash of `payload` according to the pointer‑ABI type table (e.g., blake2b‑32 for AccountId/AssetDefinitionId/Name/NftId; blake2b‑32 over canonical JSON bytes for Json). The VM validates TLVs on first dereference: version must be 1, `type_id` must be known, envelope must lie entirely in INPUT, and the hash must match. Invalid TLVs trap with `VmTrap::NoritoInvalid`.

@@ -15,13 +15,21 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         output_budget::{ExecutionOutputBudget, ExecutionOutputTerminalCeilings},
     },
-    events::EventFilterBox,
+    events::TriggeringEventType,
     isi::error::{InstructionExecutionError, InvalidParameterError},
     parameter::{BlockParameter, ExecutionOutputPolicyV1, Parameter},
     transaction::signed::TransactionEntrypoint,
-    trigger::Trigger,
+    trigger::TriggerId,
 };
 use mv::storage::StorageReadOnly;
+
+fn registered_count(
+    baseline: usize,
+    c10: &impl StorageReadOnly<TriggerId, TriggeringEventType>,
+    category: TriggeringEventType,
+) -> usize {
+    baseline.saturating_add(c10.iter().filter(|(_, kind)| **kind == category).count())
+}
 
 /// Immutable logical capacity observed after this constructor's start effects.
 pub(super) struct FrozenExecutionOutputCapacity {
@@ -152,10 +160,18 @@ impl StateBlock<'_> {
             policy.validate()?;
             let time_invocations = parameters.max_time_trigger_invocations().get();
             policy.validate_time_invocations(time_invocations)?;
-            let pipeline_candidates = u32::try_from(self.world.triggers.pipeline_triggers().len())
-                .map_err(|_| "Pipeline registry count exceeds u32")?;
-            let time_registered = u32::try_from(self.world.triggers.time_triggers().len())
-                .map_err(|_| "Time registry count exceeds u32")?;
+            let pipeline_candidates = u32::try_from(registered_count(
+                self.world.triggers.pipeline_triggers().len(),
+                &self.world.c10_trigger_candidates,
+                TriggeringEventType::Pipeline,
+            ))
+            .map_err(|_| "Pipeline registry count exceeds u32")?;
+            let time_registered = u32::try_from(registered_count(
+                self.world.triggers.time_triggers().len(),
+                &self.world.c10_trigger_candidates,
+                TriggeringEventType::Time,
+            ))
+            .map_err(|_| "Time registry count exceeds u32")?;
             if pipeline_candidates > policy.max_pipeline_triggers
                 || time_registered > policy.max_time_triggers
             {
@@ -168,7 +184,14 @@ impl StateBlock<'_> {
                 policy,
                 time_invocations,
                 pipeline_candidates,
-                terminals: ExecutionOutputTerminalCeilings::derive_for_lifecycle(lifecycle)?,
+                terminals: ExecutionOutputTerminalCeilings::derive_for_profiles(
+                    lifecycle,
+                    crate::smartcontracts::ivm::profile::resolve_selected(
+                        &self.world,
+                        ivm::IvmProfileId::C10_ABI_V1,
+                    )
+                    .is_some(),
+                )?,
                 lifecycle,
                 lifecycle_selection: if lifecycle {
                     Some(
@@ -331,11 +354,19 @@ impl StateTransaction<'_, '_> {
                 current.fastpq_source().validate(*next).map_err(invalid)?;
                 next.validate_time_invocations(current.max_time_trigger_invocations().get())
                     .map_err(invalid)?;
-                if u32::try_from(self.world.triggers.pipeline_triggers().len())
-                    .map_err(|_| invalid("Pipeline registry exceeds protocol index width"))?
+                if u32::try_from(registered_count(
+                    self.world.triggers.pipeline_triggers().len(),
+                    &self.world.c10_trigger_candidates,
+                    TriggeringEventType::Pipeline,
+                ))
+                .map_err(|_| invalid("Pipeline registry exceeds protocol index width"))?
                     > next.max_pipeline_triggers
-                    || u32::try_from(self.world.triggers.time_triggers().len())
-                        .map_err(|_| invalid("Time registry exceeds protocol index width"))?
+                    || u32::try_from(registered_count(
+                        self.world.triggers.time_triggers().len(),
+                        &self.world.c10_trigger_candidates,
+                        TriggeringEventType::Time,
+                    ))
+                    .map_err(|_| invalid("Time registry exceeds protocol index width"))?
                         > next.max_time_triggers
                 {
                     return Err(invalid(
@@ -361,22 +392,32 @@ impl StateTransaction<'_, '_> {
     /// Rejects an invalid committed policy or a registry already at its agreed cap.
     pub(crate) fn validate_execution_output_registration(
         &self,
-        trigger: &Trigger,
+        id: &TriggerId,
+        kind: TriggeringEventType,
     ) -> Result<(), InstructionExecutionError> {
         let policy = self.world.parameters.get().block().execution_output();
         policy.validate().map_err(invalid)?;
-        if self.world.triggers.ids().get(trigger.id()).is_some() {
+        if self.world.triggers.ids().get(id).is_some() || self.world.c10_triggers.get(id).is_some()
+        {
             return Ok(());
         }
-        let full = match trigger.action().filter() {
-            EventFilterBox::Pipeline(_) => {
-                u32::try_from(self.world.triggers.pipeline_triggers().len())
-                    .map_err(|_| invalid("Pipeline registry exceeds protocol index width"))?
+        let full = match kind {
+            TriggeringEventType::Pipeline => {
+                u32::try_from(registered_count(
+                    self.world.triggers.pipeline_triggers().len(),
+                    &self.world.c10_trigger_candidates,
+                    TriggeringEventType::Pipeline,
+                ))
+                .map_err(|_| invalid("Pipeline registry exceeds protocol index width"))?
                     >= policy.max_pipeline_triggers
             }
-            EventFilterBox::Time(_) => {
-                u32::try_from(self.world.triggers.time_triggers().len())
-                    .map_err(|_| invalid("Time registry exceeds protocol index width"))?
+            TriggeringEventType::Time => {
+                u32::try_from(registered_count(
+                    self.world.triggers.time_triggers().len(),
+                    &self.world.c10_trigger_candidates,
+                    TriggeringEventType::Time,
+                ))
+                .map_err(|_| invalid("Time registry exceeds protocol index width"))?
                     >= policy.max_time_triggers
             }
             _ => false,

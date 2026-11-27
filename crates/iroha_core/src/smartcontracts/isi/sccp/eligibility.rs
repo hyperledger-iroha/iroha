@@ -52,9 +52,22 @@ impl<W: WorldReadOnly + ?Sized> Clone for Current<'_, W> {
 }
 impl<W: WorldReadOnly + ?Sized> EligibilityRead for Current<'_, W> {
     fn scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64> {
-        self.0
+        let baseline = self
+            .0
             .triggers()
-            .next_scheduled_progress_at_ms(since_ms, next_height)
+            .next_scheduled_progress_at_ms(since_ms, next_height);
+        let rows = self
+            .0
+            .c10_trigger_candidates()
+            .iter()
+            .filter(|(_, kind)| **kind == iroha_data_model::events::TriggeringEventType::Time)
+            .filter_map(|(id, _)| self.0.c10_triggers().get(id));
+        crate::state::c10_trigger_runtime::scheduled_progress_at_ms(
+            baseline,
+            rows,
+            since_ms,
+            next_height,
+        )
     }
     fn fast_pause_due(&self) -> bool {
         store::fast_pause_rounds::iter(self.0).any(|(_, round)| round.certify_due)
@@ -110,9 +123,24 @@ macro_rules! parent_read {
     ($owner:ty) => {
         impl EligibilityRead for $owner {
             fn scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64> {
-                self.0
+                let baseline = self
+                    .0
                     .triggers
-                    .scheduled_progress_before_block_ms(since_ms, next_height)
+                    .scheduled_progress_before_block_ms(since_ms, next_height);
+                let rows = self
+                    .0
+                    .c10_trigger_candidates
+                    .iter_before_block()
+                    .filter(|(_, kind)| {
+                        **kind == iroha_data_model::events::TriggeringEventType::Time
+                    })
+                    .filter_map(|(id, _)| self.0.c10_triggers.get_before_block(id));
+                crate::state::c10_trigger_runtime::scheduled_progress_at_ms(
+                    baseline,
+                    rows,
+                    since_ms,
+                    next_height,
+                )
             }
             fn fast_pause_due(&self) -> bool {
                 if cfg!(all(test, sumeragi_core_mutation = "HC302")) {

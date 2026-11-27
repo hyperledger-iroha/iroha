@@ -7,7 +7,11 @@ impl<F: Scalar> UniformCircuit<F> {
     /// Computing these counts compiles the exact public matrix program.
     pub fn public_program_counts(&self) -> (usize, usize, usize) {
         let plan = self.plan();
-        (plan.ops.len(), plan.pool.len(), self.fixed_values.len())
+        (
+            plan.regs.ops.len(),
+            plan.pool.len(),
+            self.fixed_values.len(),
+        )
     }
 
     /// Locate exact public program differences while diagnosing convergence.
@@ -16,14 +20,10 @@ impl<F: Scalar> UniformCircuit<F> {
         let a = self.plan();
         let b = other.plan();
         let first = |a: &[F], b: &[F]| a.iter().zip(b).position(|(a, b)| a != b);
-        let op = |op: &Op| match *op {
-            Op::Add(a, b) => (0, a, b),
-            Op::Sub(a, b) => (1, a, b),
-            Op::Mul(a, b) => (2, a, b),
-            Op::Scale(a, b) => (3, a, b),
-            Op::Const(a) => (4, a, 0),
-        };
-        let ops = a.ops.iter().zip(&b.ops).position(|(a, b)| op(a) != op(b));
+        let ops = a
+            .slot_instructions()
+            .zip(b.slot_instructions())
+            .position(|(a, b)| a != b);
         let pool = first(&a.pool, &b.pool);
         let fixed = self
             .fixed_values
@@ -43,8 +43,8 @@ impl<F: Scalar> UniformCircuit<F> {
             self.io_len == other.io_len,
             a.inputs,
             b.inputs,
-            a.ops.len(),
-            b.ops.len(),
+            a.regs.ops.len(),
+            b.regs.ops.len(),
             a.out == b.out,
             a.pool.len(),
             b.pool.len(),

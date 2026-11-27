@@ -12,6 +12,7 @@ use ivm::{
     IVM, ProgramMetadata, VMError, encoding, host::DefaultHost, numeric::NumericFaultV1,
     pointer_abi::PointerType, syscalls,
 };
+use ivm_abi::error::VmTrap;
 use kotodama_lang::compiler::Compiler;
 use std::collections::BTreeMap;
 const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
@@ -109,7 +110,7 @@ fn run_mixed_int_decimal(program: &[u8], left: &str, right: &str) -> Result<Nume
     assert_eq!(output.type_id, PointerType::Decimal);
     DecimalValueV1::decode_frame(output.payload)
         .map(DecimalValueV1::into_numeric)
-        .map_err(|_| VMError::DecodeError)
+        .map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
 fn bigint(value: &str) -> BigInt {
     value.parse().expect("parse bounded integer fixture")
@@ -182,9 +183,8 @@ fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
     }
 }
 fn numeric_fault_from_vm_error(error: &VMError) -> Option<NumericFaultV1> {
-    match error {
-        VMError::NumericFault(fault) => Some(*fault),
-        VMError::Metered { source, .. } => numeric_fault_from_vm_error(source),
+    match error.unmetered_trap() {
+        Some(VmTrap::NumericFault(fault)) => Some(*fault),
         _ => None,
     }
 }
@@ -285,10 +285,10 @@ enum ArithmeticOutcome {
 fn classify_runtime(result: Result<BigInt, VMError>) -> ArithmeticOutcome {
     match result {
         Ok(value) => ArithmeticOutcome::Value(value),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow)) => {
+        Err(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::MantissaOverflow))) => {
             ArithmeticOutcome::MantissaOverflow
         }
-        Err(VMError::NumericFault(NumericFaultV1::DivisionByZero)) => {
+        Err(VMError::Trap(VmTrap::NumericFault(NumericFaultV1::DivisionByZero))) => {
             ArithmeticOutcome::DivisionByZero
         }
         Err(error) => panic!("unexpected runtime arithmetic failure: {error:?}"),
@@ -954,11 +954,15 @@ fn ordinary_addition_and_subtraction_trap_at_signed_512_bit_boundaries() {
     assert_eq!(run_binary(&add, MIN_INT, "0").unwrap(), bigint(MIN_INT));
     assert!(matches!(
         run_binary(&add, MAX_INT, "1"),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
     assert!(matches!(
         run_binary(&add, MIN_INT, "-1"),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
     let sub = compile(
         "seiyaku CheckedSub { view fn run(int left, int right) authorize(anyone) -> int { return left - right; } }",
@@ -967,11 +971,15 @@ fn ordinary_addition_and_subtraction_trap_at_signed_512_bit_boundaries() {
     assert_eq!(run_binary(&sub, MAX_INT, "0").unwrap(), bigint(MAX_INT));
     assert!(matches!(
         run_binary(&sub, MIN_INT, "1"),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
     assert!(matches!(
         run_binary(&sub, MAX_INT, "-1"),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
 }
 #[test]
@@ -983,11 +991,15 @@ fn ordinary_multiplication_and_negation_trap_at_signed_512_bit_boundaries() {
     assert_eq!(run_binary(&mul, MIN_INT, "1").unwrap(), bigint(MIN_INT));
     assert!(matches!(
         run_binary(&mul, MAX_INT, "2"),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
     assert!(matches!(
         run_binary(&mul, MIN_INT, "-1"),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
     let neg = compile(
         "seiyaku CheckedNeg { view fn run(int value) authorize(anyone) -> int { return -value; } }",
@@ -999,7 +1011,9 @@ fn ordinary_multiplication_and_negation_trap_at_signed_512_bit_boundaries() {
     assert_eq!(run_unary(&neg, "0").unwrap(), bigint("0"));
     assert!(matches!(
         run_unary(&neg, MIN_INT),
-        Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
+        Err(VMError::Trap(VmTrap::NumericFault(
+            NumericFaultV1::MantissaOverflow
+        )))
     ));
 }
 #[test]

@@ -319,6 +319,78 @@ fn a_transaction_stops_at_its_unknown_envelope_before_any_effect() {
 }
 
 #[test]
+fn baseline_refuses_both_c10_registration_frames_before_the_first_effect() {
+    use iroha_data_model::{
+        isi::decode_instruction_envelope,
+        ivm_c10::{
+            ActionC10V1, ContractManifestC10V1, RegisterSmartContractCodeC10V1,
+            RegisterTriggerC10V1, TransactionEventFilterC10V1, TriggerC10V1,
+        },
+        smart_contract::ContractArtifactId,
+        transaction::IvmBytecode,
+        trigger::action::Repeats,
+    };
+
+    let mut code = ivm::ProgramMetadata::default().encode();
+    code.extend(ivm::encoding::wide::encode_halt().to_le_bytes());
+    let code_hash = ivm::contract_code_hash(&code);
+    let contract = RegisterSmartContractCodeC10V1 {
+        artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+        manifest: ContractManifestC10V1 {
+            seiyaku_name: None,
+            code_hash: Some(code_hash),
+            abi_hash: Some(Hash::prehashed(
+                ivm_abi::IvmProfileId::C10_ABI_V1.abi_hash(),
+            )),
+            compiler_fingerprint: None,
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            permissions: Vec::new(),
+            events: Vec::new(),
+            entrypoints: None,
+            states: None,
+            error_types: None,
+            enum_types: Vec::new(),
+            error_messages: None,
+            kotoba: None,
+            provenance: None,
+        },
+    };
+    let trigger = RegisterTriggerC10V1 {
+        object: TriggerC10V1 {
+            id: "c10_trigger".parse().unwrap(),
+            action: ActionC10V1::new(
+                Executable::Ivm(IvmBytecode::from_compiled(code)),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TransactionEventFilterC10V1::default(),
+            )
+            .unwrap(),
+        },
+    };
+    for (wire_id, frame) in [
+        (
+            RegisterSmartContractCodeC10V1::WIRE_ID,
+            norito::to_bytes(&contract).unwrap(),
+        ),
+        (
+            RegisterTriggerC10V1::WIRE_ID,
+            norito::to_bytes(&trigger).unwrap(),
+        ),
+    ] {
+        let instruction = decode_instruction_envelope(wire_id, &frame).unwrap();
+        execute(
+            vec![write("before_c10"), instruction],
+            |_| {},
+            |tx, result| {
+                assert_eq!(result, Err(failed(inactive(wire_id))));
+                untouched(tx, "before_c10");
+            },
+        );
+    }
+}
+
+#[test]
 fn a_transaction_stops_at_a_registered_envelope_the_selection_does_not_bind() {
     execute(
         vec![write("before_unbound"), log()],

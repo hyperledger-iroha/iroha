@@ -1,3 +1,4 @@
+export { AnonymousBallotClientV1, AnonymousBallotRefusal } from "./anonymous-ballot.js";
 import type { KagemushaWalletLoadSelectionV1, KagemushaWalletLedgerSelectionV1, KagemushaWalletEpochSelectionV1, KagemushaWalletReadOptionsV1, KagemushaWalletOriginalV1 } from "./kagemusha-wallet-read.js";
 export type * from "./kagemusha-wallet-read.js";
 import type { Buffer } from "buffer";

@@ -4,6 +4,18 @@ use super::*;
 
 const MAX_RANGE_ROWS: usize = 8_192;
 
+/// A read-only original table visit refused its bound or retained the consumer's error.
+/// This local outcome has no codec and grants no authority to a reconstructed tree.
+#[derive(Debug, thiserror::Error)]
+pub enum StateTableVisitError<E> {
+    /// Invalid table identity or a complete table above the caller's bound.
+    #[error(transparent)]
+    Tree(#[from] KeyedStateError),
+    /// Original consumer refusal, returned unchanged before visiting another row.
+    #[error("original State table consumer: {0}")]
+    Consumer(E),
+}
+
 #[derive(
     Debug,
     Clone,
@@ -49,6 +61,36 @@ pub struct StateRangeProofV1 {
 }
 
 impl KeyedStateTreeV1 {
+    /// Visit every original row of one exact table, in canonical bare-key order.
+    /// The visitor borrows the immutable tree's retained bytes; this method allocates
+    /// nothing, creates no proof, and changes no tree or allocation owner. It checks
+    /// the complete row count before invoking the consumer. A missing table is empty.
+    /// Authority must come from the independently authenticated owner of this tree.
+    /// # Errors
+    /// Invalid table identity, too many rows, or the unchanged original consumer error.
+    pub fn visit_table<E>(
+        &self,
+        table: &str,
+        max_rows: u64,
+        mut visit: impl FnMut(&[u8], &[u8]) -> Result<(), E>,
+    ) -> Result<u64, StateTableVisitError<E>> {
+        if !StateKeyV1::valid_table_id(table) || table.len() >= u32::MAX as usize / 9 {
+            return Err(KeyedStateError::InvalidKey.into());
+        }
+        let start = self.partition(|leaf| leaf.table() < table.as_bytes());
+        let end = self.partition(|leaf| leaf.table() <= table.as_bytes());
+        let count = end - start;
+        if count > max_rows {
+            return Err(KeyedStateError::Capacity.into());
+        }
+        for rank in start..end {
+            let leaf = self.at_rank(rank).ok_or(KeyedStateError::Count)?;
+            visit(&leaf.encoded_key()[table.len() + 1..], leaf.value())
+                .map_err(StateTableVisitError::Consumer)?;
+        }
+        Ok(count)
+    }
+
     fn at_rank(&self, mut rank: u64) -> Option<&Leaf> {
         if rank >= self.len() {
             return None;

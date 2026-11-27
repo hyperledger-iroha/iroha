@@ -555,7 +555,7 @@ impl Circuit<Fq> for OmegaFrame {
         Ok(())
     }
 }
-fn digest(fields: &[Fp; 18], pallas: &FoldInput<Ep>) -> Fp {
+pub(crate) fn digest(fields: &[Fp; 18], pallas: &FoldInput<Ep>) -> Fp {
     let mut words = fields.to_vec();
     let (x, y) = iroha_plonk::transcript::generator_coordinates::<iroha_pasta::Ep>(pallas.g());
     words.extend([x, y]);
@@ -887,6 +887,7 @@ impl SourceProfile {
 #[derive(Clone)]
 struct TerminalCircuit {
     profile: SourceProfile,
+    state_opener: BootstrapStateOpener,
     plan: AProofPlan,
     signature_schema: iroha_kagemusha_proof::q_signature::QSignaturePlan,
     signature_order: [usize; 3],
@@ -911,13 +912,10 @@ impl TerminalCircuit {
         bytes: &mut BytesChip<Fp>,
         region: &mut iroha_plonk::frontend::Region<'_, Fp>,
     ) -> Result<Vec<iroha_plonk_gadgets::Word<Fp>>, Error> {
-        use iroha_kagemusha_proof::{
-            a_relation::{
-                bind_signature_q,
-                bootstrap::{BootstrapInputs, BootstrapObjects},
-                bounded_word, close_unsplit, verify_q,
-            },
-            operation_relation::state::StateCells,
+        use iroha_kagemusha_proof::a_relation::{
+            bind_signature_q,
+            bootstrap::{BootstrapInputs, BootstrapObjects},
+            bounded_word, close_unsplit, verify_q,
         };
 
         let core = chip
@@ -928,7 +926,7 @@ impl TerminalCircuit {
             .uint()
             .glue()
             .witnesses(region, &self.state.rest.map(|v| self.value(v)))?;
-        let state = StateCells::constrain_with_verifier(
+        let state = (self.state_opener)(
             chip,
             region,
             &core.try_into().map_err(|_| Error::Synthesis)?,
@@ -1145,22 +1143,22 @@ pub fn authenticated_bootstrap_with_identity(
     .expect("matching signed Bootstrap scheme")
 }
 
-fn authenticated_bootstrap_for_schemes(
-    adversarial: bool,
-    omega_digest: Fp,
-    profile: SourceProfile,
-    identity: BootstrapIdentity,
-    scheme: [u128; 2],
-    certificate_scheme: [u128; 2],
-) -> Option<AuthenticatedBootstrap> {
+/// Source-fixed state commitment used by a test terminal. The resulting key is always
+/// regenerated and checked by the normal compact outer against the actual A proof.
+pub type BootstrapStateOpener =
+    fn(
+        &mut VerifierChip<Ep>,
+        &mut iroha_plonk::frontend::Region<'_, Fp>,
+        &[iroha_plonk_gadgets::Word<Fp>; 29],
+        &[iroha_plonk_gadgets::Word<Fp>; 6],
+    ) -> Result<iroha_kagemusha_proof::operation_relation::state::StateCells, Error>;
+
+type BootstrapState = iroha_kagemusha_proof::admin_sigma::BootstrapWitness;
+type BootstrapSigma = (iroha_plonk::ProvingKey<Eq>, Vec<u8>);
+
+fn ordinary_bootstrap_sigma(initial: &mut BootstrapState) -> BootstrapSigma {
     use iroha_kagemusha_proof::admin_sigma::{BOOTSTRAP_K, BootstrapCircuit};
-    eprintln!("BOOTSTRAP_SOURCE_PROFILE {profile:?}");
-    let (mut initial, certificate, credential) =
-        bootstrap_objects::enrollment_for_schemes(identity, scheme, certificate_scheme);
-    initial.lineage[17] = omega_digest;
-    // Native still produces sigma_bootstrap (owner decision R-O2), so the signed
-    // receipt keeps naming its digest; A proves the transition and verifies no sigma.
-    let sigma = BootstrapCircuit::new(&initial);
+    let sigma = BootstrapCircuit::new(initial);
     let sigma_params = common::vesta_params(BOOTSTRAP_K);
     let sigma_instances = sigma.instances();
     let sigma_key = keygen_pk_v2(
@@ -1178,6 +1176,47 @@ fn authenticated_bootstrap_for_schemes(
     )
     .unwrap()
     .proof;
+    (sigma_key, sigma_bytes)
+}
+
+fn authenticated_bootstrap_for_schemes(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    identity: BootstrapIdentity,
+    scheme: [u128; 2],
+    certificate_scheme: [u128; 2],
+) -> Option<AuthenticatedBootstrap> {
+    bootstrap_from_source(
+        adversarial,
+        omega_digest,
+        profile,
+        identity,
+        scheme,
+        certificate_scheme,
+        iroha_kagemusha_proof::operation_relation::state::StateCells::constrain_with_verifier,
+        ordinary_bootstrap_sigma,
+    )
+}
+
+/// Prove Bootstrap using one explicit administrative state opening and the matching
+/// signed step original, then bind both through the genuine signature Q and terminal A.
+#[allow(clippy::too_many_arguments)]
+pub fn bootstrap_from_source(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    identity: BootstrapIdentity,
+    scheme: [u128; 2],
+    certificate_scheme: [u128; 2],
+    state_opener: BootstrapStateOpener,
+    prepare_sigma: impl FnOnce(&mut BootstrapState) -> BootstrapSigma,
+) -> Option<AuthenticatedBootstrap> {
+    eprintln!("BOOTSTRAP_SOURCE_PROFILE {profile:?}");
+    let (mut initial, certificate, credential) =
+        bootstrap_objects::enrollment_for_schemes(identity, scheme, certificate_scheme);
+    initial.lineage[17] = omega_digest;
+    let (sigma_key, sigma_bytes) = prepare_sigma(&mut initial);
     let vparams = common::vesta_params(16);
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     let receipt = bootstrap_objects::receipt_for(&initial, &sigma_bytes, identity);
@@ -1216,6 +1255,7 @@ fn authenticated_bootstrap_for_schemes(
         AProofPlan::inline(Variant::Bootstrap, vec![signature_plan], None, &params).unwrap();
     let terminal = TerminalCircuit {
         profile,
+        state_opener,
         plan: operation.clone(),
         signature_schema: signature.plan().clone(),
         signature_order: [0, 1, 2],

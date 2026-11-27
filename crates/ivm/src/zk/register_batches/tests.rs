@@ -1,6 +1,7 @@
 //! Original logger identity, nested quotas and callbacks at actual row growth.
 
 use super::*;
+use crate::error::VmDeferral;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
 use iroha_crypto::{Hash, HashOf};
 use std::{alloc::Layout, mem::size_of};
@@ -138,7 +139,7 @@ fn outer_refusal_and_nested_exhaustion_publish_no_new_credit_or_event() {
     let baseline = original.reserved_bytes();
     assert!(matches!(
         RegEventBatch::begin(4),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(remaining(), None);
     assert_eq!(row_count(&log), 0);
@@ -147,7 +148,7 @@ fn outer_refusal_and_nested_exhaustion_publish_no_new_credit_or_event() {
     let _batch = RegEventBatch::begin(1).unwrap();
     assert!(matches!(
         RegEventBatch::begin(2),
-        Err(VMError::HostUnavailable)
+        Err(VMError::Deferred(VmDeferral::HostUnavailable))
     ));
     assert_eq!(remaining(), Some(1));
     publish(1);
@@ -181,7 +182,7 @@ fn pending_instruction_retains_the_delayed_native_finish_observation() {
     assert_eq!(remaining(), None);
     assert!(matches!(
         RegEventBatch::begin(1),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(row_count(&log), 5);
 }
@@ -221,8 +222,10 @@ fn original_refusal_and_copy_panic_clear_preparing_after_owned_growth_unwinds() 
     }
     let baseline = original.reserved_bytes();
     original.set_limit_bytes(baseline + 8 * ROW - 1);
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. })) =
-        RegEventBatch::begin(1)
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    }))) = RegEventBatch::begin(1)
     else {
         panic!("complete replacement demand must retain its original refusal");
     };
@@ -301,7 +304,7 @@ fn allocation_refund_reenters_without_logger_mutex_or_tls_borrow_and_cannot_mint
                 let _same = RegLoggerGuard::install(Some(self.log.clone()));
                 assert!(matches!(
                     RegEventBatch::begin(1),
-                    Err(VMError::HostUnavailable)
+                    Err(VMError::Deferred(VmDeferral::HostUnavailable))
                 ));
             }
             {
@@ -311,7 +314,7 @@ fn allocation_refund_reenters_without_logger_mutex_or_tls_borrow_and_cannot_mint
             }
             assert!(matches!(
                 RegEventBatch::begin(1),
-                Err(VMError::HostUnavailable)
+                Err(VMError::Deferred(VmDeferral::HostUnavailable))
             ));
             self.calls.fetch_add(1, Ordering::SeqCst);
         }

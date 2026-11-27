@@ -262,7 +262,7 @@ fn applied_and_rejected_network_outputs_verify_under_the_compact_certificate() {
             .verify_external_execution(&fixture.network_id(), &external(&committed), &inclusion)
             .unwrap();
         assert_eq!(result.is_ok(), applied);
-        assert_eq!(result, committed.result());
+        assert_eq!(TransactionResultRef::Baseline(result), committed.result());
         assert_eq!(
             inclusion.joined_network_output().unwrap().input_index,
             index
@@ -322,7 +322,11 @@ fn compact_inclusion_agrees_with_selective_full_block_verification() {
         let compact = certified.verify_external_execution(&network, &external(case), &membership);
         assert_eq!(full, compact.is_ok(), "membership verdicts agree");
         if let Ok(result) = compact {
-            assert_eq!(result, case.result(), "certified results agree");
+            assert_eq!(
+                TransactionResultRef::Baseline(result),
+                case.result(),
+                "certified results agree"
+            );
             accepted += 1;
         }
     }
@@ -387,7 +391,12 @@ fn foreign_network_unjoined_internal_and_deep_inclusions_are_refused() {
     );
     let mut output_leaf = genuine.clone();
     output_leaf.output_proof = other.output_proof.clone();
-    assert!(output_leaf.joined_network_output().is_err());
+    // A candidate later output position can name a governance prefix. Only the
+    // certified output membership proof can distinguish that claim from a swapped path.
+    assert_ne!(
+        output_leaf.output_proof.leaf_index(),
+        genuine.output_proof.leaf_index()
+    );
     assert!(
         certified
             .verify_external_execution(&network, &signed, &output_leaf)
@@ -415,4 +424,206 @@ fn foreign_network_unjoined_internal_and_deep_inclusions_are_refused() {
             .verify_external_execution(&network, &signed, &deep)
             .is_err()
     );
+}
+
+#[test]
+fn certified_c10_and_ordinary_payments_keep_independent_input_and_output_coordinates() {
+    use crate::{
+        asset::AssetId,
+        block::{
+            execution_output::{ExecutionOutputC10V1, ExecutionSourceC10V1},
+            output_budget::ExecutionOutputLimits,
+        },
+        governance::anonymous_ballot::{
+            BallotScopeV1, CastingClockEstablishedV1, GOVERNANCE_START_OUTPUT_BYTES_V1,
+            GovernanceBlockStartEventV1, GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1,
+        },
+        isi::Transfer,
+        ivm_c10::{
+            IvmAdmissionErrorC10V1, TransactionRejectionReasonC10V1, TransactionResultC10V1,
+            ValidationFailC10V1,
+        },
+        smart_contract::event::ContractEmissionsV1,
+    };
+
+    let mut fixture = NativeFinalityFixture::start("certified mixed c10 payment");
+    let network = fixture.network_id();
+    let header = fixture.next_header();
+    let signer = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
+    let authority = AccountId::new(signer.public_key().clone());
+    let recipient = KeyPair::from_seed(vec![0x52; 32], Algorithm::Ed25519);
+    let asset = AssetId::new(
+        "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap(),
+        authority.clone(),
+    );
+    let mut builder = BlockBuilder::new(header);
+    for index in 0..3_u32 {
+        let mut tx = TransactionBuilder::new(
+            network,
+            authority.clone(),
+            FeePaymentIntent::authority(vec![], None),
+        );
+        tx.set_creation_time(Duration::from_millis(header.creation_time_ms - 1));
+        let tx = if index == 1 {
+            tx.with_instructions([Log::new(Level::INFO, "C10 fixture".into())])
+        } else {
+            tx.with_instructions([Transfer::asset_quantity(
+                asset.clone(),
+                1 + index,
+                AccountId::new(recipient.public_key().clone()),
+            )])
+        };
+        builder.push_transaction(tx.sign(signer.private_key()));
+    }
+    let mut block = builder.build(BlockSignatures::default());
+    let reason = TransactionRejectionReasonC10V1::Validation(ValidationFailC10V1::IvmAdmission(
+        IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(19),
+    ));
+    let rows = vec![
+        ExecutionOutputV1::GovernanceBlockStart(GovernanceBlockStartOutputV1 {
+            anchor: GovernanceOutputAnchorV1::CastingClockPrelude {
+                height: header.height().get(),
+                timestamp_ms: header.creation_time_ms,
+            },
+            event: GovernanceBlockStartEventV1::CastingClockEstablished(
+                CastingClockEstablishedV1 {
+                    scope: BallotScopeV1::new([3; 64]),
+                    casting_window_ms: 1000,
+                    closing_ms: header.creation_time_ms + 1000,
+                },
+            ),
+        }),
+        output_test_support::network(0, Ok(vec![])),
+        ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source: ExecutionSourceC10V1::Network(1),
+            result: TransactionResultC10V1(
+                Err(reason.clone()),
+                vec![],
+                None,
+                ContractEmissionsV1::default(),
+            ),
+            completions: vec![],
+            trigger_lifecycle: None,
+        }),
+        output_test_support::network(2, Ok(vec![])),
+    ];
+    let mut limits: ExecutionOutputLimits = output_test_support::limits();
+    limits.max_executed_wire_bytes =
+        GOVERNANCE_START_OUTPUT_BYTES_V1 + limits.max_total_output_bytes;
+    block
+        .set_execution_outputs(
+            rows,
+            0,
+            Default::default(),
+            vec![],
+            Default::default(),
+            Default::default(),
+            &limits,
+        )
+        .unwrap();
+    let proof = fixture.certify(block);
+    let verified = fixture.verifier().verify_retained_decision(&proof).unwrap();
+    let certificate = compact(&fixture, &verified);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/sumeragi/native-finality/c10-mixed");
+    let vector = |name: &str, bytes: Vec<u8>| {
+        assert_eq!(
+            std::fs::read(directory.join(name)).expect("pinned consumer fixture"),
+            bytes,
+            "{name}"
+        );
+    };
+    vector(
+        "signed-genesis.nrt",
+        fixture.genesis().encode_wire().unwrap(),
+    );
+    vector(
+        "height-2-checkpoint.nrt",
+        norito::encode_canonical(&proof).unwrap(),
+    );
+    vector(
+        "height-2-compact.nrt",
+        norito::encode_canonical(&SumeragiCommitCertificateV1::from_verified(&verified).unwrap())
+            .unwrap(),
+    );
+    for i in 0..3 {
+        let tx = output_test_support::committed(verified.block(), i);
+        let bytes = norito::encode_canonical(&tx).unwrap();
+        vector(&format!("input-{i}.nrt"), bytes.clone());
+        let tx: CommittedTransaction = norito::decode_canonical(&bytes).unwrap();
+        let separate = verified
+            .block()
+            .network_execution_proof(&tx.entrypoint_hash)
+            .unwrap();
+        let anchor = crate::block::proofs::TrustedBlockProofAnchor::from_verified_finality(
+            verified.block(),
+            &verified,
+            &tx.entrypoint_hash,
+        )
+        .unwrap();
+        assert!(separate.verify(&anchor));
+        let signed = external(&tx);
+        let joined = inclusion(&tx);
+        assert_eq!(
+            (
+                joined.entry_proof.leaf_index(),
+                joined.output_proof.leaf_index()
+            ),
+            (i, i + 1)
+        );
+        assert!(tx.verify_selective_in_authenticated_execution(
+            &network,
+            &verified.header(),
+            verified.execution()
+        ));
+        assert!(tx.verify_inclusion_in_block(verified.block()));
+        let result = certificate
+            .verify_profiled_external_execution(&network, &signed, &joined)
+            .unwrap();
+        match result {
+            TransactionResultRef::Baseline(result) => {
+                assert_ne!(i, 1);
+                assert!(result.is_ok());
+            }
+            TransactionResultRef::C10(result) => {
+                assert_eq!(i, 1);
+                assert_eq!(result.0.as_ref().unwrap_err(), &reason);
+            }
+        }
+        assert_eq!(
+            certificate
+                .verify_external_execution(&network, &signed, &joined)
+                .is_ok(),
+            i != 1
+        );
+        let wallet = crate::kagemusha::kagemusha_wallet_v1::KagemushaWalletLedgerFinalityV1 {
+            version: 1,
+            entrypoint_hash: tx.entrypoint_hash,
+            certificate: SumeragiCommitCertificateV1::from_verified(&verified).unwrap(),
+            inclusion: joined.clone(),
+        };
+        let encoded = wallet.to_canonical_bytes().unwrap();
+        let wallet = crate::kagemusha::kagemusha_wallet_v1::KagemushaWalletLedgerFinalityV1::decode_canonical(&encoded).unwrap();
+        let retained = wallet.custody_bindings().unwrap();
+        assert_eq!(retained.input_index, i);
+        assert_eq!(retained.accepted, i != 1);
+        assert_eq!(
+            wallet
+                .verify(
+                    &SumeragiCommitVerifierV1::new(&root(&fixture)).unwrap(),
+                    fixture.chain_id(),
+                    &signed
+                )
+                .unwrap()
+                .accepted(),
+            i != 1
+        );
+        let mut unrelated = joined;
+        unrelated.output_proof = verified.block().output_proof(i).unwrap();
+        assert!(
+            certificate
+                .verify_profiled_external_execution(&network, &signed, &unrelated)
+                .is_err()
+        );
+    }
 }

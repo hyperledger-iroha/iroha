@@ -76,7 +76,7 @@ pub use portable_prefix::{
 mod page;
 pub use page::{VerifiedFinalityPage, certified_block_context_id, verify_checkpoint_page};
 pub mod keyed_schema;
-pub use keyed_schema::SelectedStateSchemaV1;
+pub use keyed_schema::{CarrierStateSchemaError, SelectedStateSchemaV1};
 mod keyed_rows;
 pub use keyed_rows::{
     KeyedStateRowV1, KeyedStateRowsV1, MAX_STATE_PROOF_KEY_BYTES_V1, MAX_STATE_PROOF_ROWS_V1,

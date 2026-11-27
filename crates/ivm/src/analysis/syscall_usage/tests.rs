@@ -1,6 +1,7 @@
 //! Histogram parity, bounded staging, refusal and final-borrower regressions.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::AllocationRefusal;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -61,12 +62,12 @@ fn exact_scratch_and_output_refusals_preserve_original_credit_and_retry() {
     let scratch_bytes = std::mem::size_of_val(&numbers);
     let budget = AllocationBudget::new(0);
     assert!(
-        matches!(histogram(&numbers, Some(&budget)), Err(VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. })) if requested_bytes == scratch_bytes)
+        matches!(histogram(&numbers, Some(&budget)), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit { requested_bytes, .. }))) if requested_bytes == scratch_bytes)
     );
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(scratch_bytes + output_bytes - 1);
     assert!(
-        matches!(histogram(&numbers, Some(&budget)), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == output_bytes)
+        matches!(histogram(&numbers, Some(&budget)), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == output_bytes)
     );
     assert_eq!(budget.peak_reserved_bytes(), scratch_bytes);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -74,9 +75,9 @@ fn exact_scratch_and_output_refusals_preserve_original_credit_and_retry() {
     let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
     assert!(matches!(
         histogram(&numbers, Some(&budget)),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     drop(occupied);
     let result = histogram(&numbers, Some(&budget)).unwrap();
@@ -130,11 +131,17 @@ fn empty_histogram_has_no_shell_and_inexact_accumulation_reclaims_scratch() {
     let budget = AllocationBudget::new(4096);
     let mut short = UsageScratch::new(2, Some(&budget)).unwrap();
     short.push(7).unwrap();
-    assert!(matches!(short.finish(), Err(VMError::DecodeError)));
+    assert!(matches!(
+        short.finish(),
+        Err(VMError::Trap(VmTrap::DecodeError))
+    ));
     assert_eq!(budget.reserved_bytes(), 0);
     let mut full = UsageScratch::new(1, Some(&budget)).unwrap();
     full.push(7).unwrap();
-    assert!(matches!(full.push(8), Err(VMError::DecodeError)));
+    assert!(matches!(
+        full.push(8),
+        Err(VMError::Trap(VmTrap::DecodeError))
+    ));
     assert_eq!(
         &*full.finish().unwrap(),
         &[SyscallUsage {

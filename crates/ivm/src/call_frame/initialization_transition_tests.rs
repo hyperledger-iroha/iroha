@@ -3,6 +3,7 @@
 //! These exercise the existing memory and frame owners without adding a public
 //! test shim or granting proof authority to a descriptor or packet.
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 
 const TOP: u64 = Memory::STACK_START + 256;
 const ARG: u64 = Memory::HEAP_START + 64;
@@ -80,17 +81,17 @@ fn successful_memory_stores_initialize_exact_bytes_and_failed_stores_leave_no_ma
     assert_eq!(top_mask(&memory.call_frames, RESULT & !15), 0);
     assert!(match (
         &(memory.store_u128(RESULT, 1)),
-        &(VMError::MisalignedAccess {
+        &(VMError::Trap(VmTrap::MisalignedAccess {
             addr: RESULT as u32
-        })
+        }))
     ) {
         (
-            Err(VMError::MisalignedAccess {
+            Err(VMError::Trap(VmTrap::MisalignedAccess {
                 addr: actual_field_0,
-            }),
-            VMError::MisalignedAccess {
+            })),
+            VMError::Trap(VmTrap::MisalignedAccess {
                 addr: expected_field_0,
-            },
+            }),
         ) => actual_field_0 == expected_field_0,
         _ => false,
     });
@@ -146,7 +147,7 @@ fn write_tracking_allocation_refusal_precedes_memory_and_initialization_mutation
     budget.set_limit_bytes(reserved);
     assert!(matches!(
         memory.store_u64(RESULT, 7),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), reserved);
     assert_eq!(top_mask(&memory.call_frames, RESULT & !15), 0);

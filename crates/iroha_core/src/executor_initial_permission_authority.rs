@@ -410,16 +410,16 @@ fn initial_trigger_authority(
     authority: &AccountId,
     trigger_id: &iroha_data_model::trigger::TriggerId,
 ) -> Result<bool, ValidationFail> {
-    use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
-    state_transaction
-        .world
-        .triggers()
-        .inspect_by_id(trigger_id, |action| action.authority() == authority)
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!(
-                "permission references unknown trigger `{trigger_id}`"
-            ))
-        })
+    crate::smartcontracts::isi::triggers::isi::trigger_belongs_to(
+        &state_transaction.world,
+        trigger_id,
+        authority,
+    )
+    .ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "permission references unknown trigger `{trigger_id}`"
+        ))
+    })
 }
 #[allow(clippy::too_many_lines)]
 /// Return whether `authority` is a legitimate non-token root for delegating `permission`.
@@ -863,7 +863,7 @@ fn contract_permission_delegation_allowed(
         .map_err(|error| invalid_initial_permission_payload(permission, error))?;
     let manifest =
         retained_contract_authorization_manifest(&state_transaction.world, &token.contract)?;
-    if !manifest.permissions.iter().any(|declaration| {
+    if !manifest.permissions().iter().any(|declaration| {
         declaration.name == token.permission
             && matches!(declaration.scope, ContractPermissionScopeV1::Instance)
     }) {
@@ -904,15 +904,10 @@ fn contract_entrypoint_authorization_delegation_allowed(
     }
     let manifest =
         retained_contract_authorization_manifest(&state_transaction.world, &token.contract)?;
-    if !manifest.entrypoints.as_ref().is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry.name == token.entrypoint
-                && matches!(
-                    entry.authorization,
-                    EntrypointAuthorizationV1::RuntimeLifecycle
-                )
-        })
-    }) {
+    if !matches!(
+        manifest.authorization(&token.entrypoint),
+        Some((_, EntrypointAuthorizationV1::RuntimeLifecycle))
+    ) {
         return Err(ValidationFail::NotPermitted(
             "lifecycle grant must name a RuntimeLifecycle hook declared by the current code"
                 .to_owned(),
@@ -1789,6 +1784,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     // code, nonce, and deployment permissions inside Core.
     if is_any!(
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
+        iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1,
         iroha_data_model::isi::smart_contract_code::DeactivateContractInstance,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
         iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation,
@@ -2801,16 +2797,12 @@ pub fn enforce_named_contract_entrypoint_authorization(
     authorization: &EntrypointAuthorizationV1,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     let manifest = current_contract_authorization_manifest(world, contract_address)?;
-    let declared_entrypoint = manifest
-        .entrypoints
-        .as_ref()
-        .and_then(|entries| entries.iter().find(|entry| entry.name == entrypoint))
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(
-                "contract entrypoint is not declared by the current code".to_owned(),
-            )
-        })?;
-    if &declared_entrypoint.authorization != authorization {
+    let (kind, declaration) = manifest.authorization(entrypoint).ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "contract entrypoint is not declared by the current code".to_owned(),
+        )
+    })?;
+    if declaration != authorization {
         return Err(ValidationFail::NotPermitted(
             "contract entrypoint authorization differs from the current signed declaration"
                 .to_owned(),
@@ -2821,7 +2813,7 @@ pub fn enforce_named_contract_entrypoint_authorization(
         EntrypointAuthorizationV1::Anyone => true,
         EntrypointAuthorizationV1::RuntimeLifecycle => {
             if !matches!(
-                declared_entrypoint.kind,
+                kind,
                 iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
                     | iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
             ) {
@@ -2851,7 +2843,7 @@ pub fn enforce_named_contract_entrypoint_authorization(
         }
         EntrypointAuthorizationV1::Permission(name) => {
             let declaration = manifest
-                .permissions
+                .permissions()
                 .iter()
                 .find(|declaration| &declaration.name == name)
                 .ok_or_else(|| {
@@ -2913,7 +2905,7 @@ pub fn enforce_named_contract_entrypoint_authorization(
 fn current_contract_authorization_manifest<'a>(
     world: &'a impl WorldReadOnly,
     contract: &iroha_data_model::smart_contract::ContractAddress,
-) -> Result<&'a iroha_data_model::smart_contract::manifest::ContractManifest, ValidationFail> {
+) -> Result<code::registered_manifest::RegisteredManifest<'a>, ValidationFail> {
     world.contract_instances().get(contract).ok_or_else(|| {
         ValidationFail::NotPermitted("contract permission requires a live instance".to_owned())
     })?;
@@ -2924,7 +2916,7 @@ fn current_contract_authorization_manifest<'a>(
 fn retained_contract_authorization_manifest<'a>(
     world: &'a impl WorldReadOnly,
     contract: &iroha_data_model::smart_contract::ContractAddress,
-) -> Result<&'a iroha_data_model::smart_contract::manifest::ContractManifest, ValidationFail> {
+) -> Result<code::registered_manifest::RegisteredManifest<'a>, ValidationFail> {
     let code_hash = code::fetch_contract_lifecycle_binding(world, contract)
         .map_err(ValidationFail::NotPermitted)?
         .and_then(|binding| binding.lifecycle.retained_code_hash)
@@ -2936,16 +2928,15 @@ fn retained_contract_authorization_manifest<'a>(
     let dataspace = contract
         .dataspace_id()
         .map_err(|_| ValidationFail::NotPermitted("invalid contract dataspace".to_owned()))?;
-    world
-        .contract_manifests()
-        .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-            dataspace, code_hash,
-        ))
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(
-                "contract permission requires the current signed manifest".to_owned(),
-            )
-        })
+    code::registered_manifest::RegisteredManifest::get(
+        world,
+        &iroha_data_model::smart_contract::ContractArtifactId::new(dataspace, code_hash),
+    )
+    .ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "contract permission requires the current signed manifest".to_owned(),
+        )
+    })
 }
 
 fn enforce_transaction_contract_permission_before_proof_verification<R>(
@@ -2980,35 +2971,43 @@ where
                     ))
                 })?;
             ensure_contract_invocation_code_hash(call, identity.code_hash)?;
+            let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &identity.contract_address,
+                identity.code_hash,
+            )
+            .map_err(|_| ValidationFail::NotPermitted("invalid contract dataspace".into()))?;
+            let c10 = code::registered_manifest::RegisteredManifest::captured_c10(
+                state.world(),
+                &artifact_id,
+            )?;
             let code_bytes = state
                 .world()
                 .contract_code()
-                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                    identity.contract_address.dataspace_id().map_err(|_| {
-                        ValidationFail::NotPermitted("invalid contract dataspace".into())
-                    })?,
-                    identity.code_hash,
-                ))
+                .get(&artifact_id)
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
                         "contract bytecode `{}` not found in WSV",
                         identity.code_hash
                     ))
                 })?;
-            let summary = if let Some(summary) = ivm_cache
-                .cached_program_summary_in_world(state.world(), identity.code_hash)
-                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
-            {
-                summary
+            let profile = if c10 {
+                crate::smartcontracts::ivm::host_profile::ensure_at_height(
+                    state.world(),
+                    ivm::IvmProfileId::C10_ABI_V1,
+                    execution_height,
+                )?;
+                ivm::IvmProfileId::C10_ABI_V1
             } else {
-                ivm_cache
-                    .summarize_program_with_hash_in_world(
-                        state.world(),
-                        identity.code_hash,
-                        code_bytes.as_ref(),
-                    )
-                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                crate::smartcontracts::ivm::profile::resolve_raw_artifact(state.world(), code_bytes)
+                    .id()
             };
+            let summary = ivm_cache
+                .summarize_program_with_hash_for_profile(identity.code_hash, code_bytes, profile)
+                .map_err(|error| {
+                    crate::execution_attempt::vm_attempt_error(error, |error| {
+                        ValidationFail::InternalError(error.to_string())
+                    })
+                })?;
             if summary.prepared_contract().artifact() != code_bytes.as_slice() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "cached contract bytecode `{}` does not match live WSV",
@@ -3035,23 +3034,16 @@ where
                 summary.profile(),
                 &summary.metadata,
             )?;
-            let manifest = state
-                .world()
-                .contract_manifests()
-                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                    identity.contract_address.dataspace_id().map_err(|_| {
-                        ValidationFail::NotPermitted("invalid contract dataspace".into())
-                    })?,
-                    identity.code_hash,
-                ))
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract instance `{}` has no manifest",
-                        identity.contract_address
-                    ))
-                })?;
-            crate::smartcontracts::ivm::validate_manifest_hashes(
-                manifest,
+            let manifest =
+                code::registered_manifest::RegisteredManifest::get(state.world(), &artifact_id)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract instance `{}` has no manifest",
+                            identity.contract_address
+                        ))
+                    })?;
+            crate::smartcontracts::ivm::validate_manifest_hash_fields(
+                manifest.hashes(),
                 summary.code_hash,
                 summary.abi_hash,
             )

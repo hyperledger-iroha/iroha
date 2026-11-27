@@ -135,6 +135,30 @@ fn startup_compliance_rejects_missing_and_wrong_lane_policy_before_replay() {
     );
 }
 
+#[test]
+fn checkpoint_compliance_freezes_bytes_before_the_restored_catalog_is_known() {
+    let directory = tempfile::tempdir().expect("policy directory");
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.compliance.enabled = true;
+    nexus.compliance.policy_dir = Some(directory.path().to_path_buf());
+    let mut other_lane = policy();
+    other_lane.lane_id = LaneId::new(9);
+    let path = directory.path().join("retained.norito");
+    std::fs::write(&path, other_lane.encode()).unwrap();
+    let frozen = load_lane_compliance_for_startup_replay(&nexus)
+        .expect("loading does not claim coverage for a catalog not yet restored")
+        .unwrap();
+    assert!(frozen.validate_active_catalog(&nexus.lane_catalog).is_err());
+    let digest = frozen.consensus_policy_digest();
+    std::fs::write(&path, policy().encode()).unwrap();
+    assert_eq!(frozen.consensus_policy_digest(), digest);
+    assert!(frozen.validate_active_catalog(&nexus.lane_catalog).is_err());
+    let fresh = freeze_lane_compliance_for_startup_replay(&nexus)
+        .expect("ordinary startup still requires immediate effective-catalog coverage")
+        .unwrap();
+    assert_ne!(fresh.consensus_policy_digest(), digest);
+}
+
 fn governed_nexus(directory: &std::path::Path) -> iroha_config::parameters::actual::Nexus {
     let catalog = LaneCatalog::new(
         std::num::NonZeroU32::new(1).expect("nonzero lane namespace"),

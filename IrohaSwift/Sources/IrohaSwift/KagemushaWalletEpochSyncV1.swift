@@ -56,3 +56,19 @@ func kagemushaWalletSynchronizeEpochsV1(
   try await requireCurrentOwner()
   return selected
 }
+
+extension KagemushaSpartanWalletV1 {
+  /// Synchronize committees for the selected online Load. The subsequent Load verifies the receipt itself.
+  public func synchronizeLoadEpochs(original: KagemushaWalletLoadOriginalV1, transport: ToriiClient,
+      canonicalAuth: ToriiCanonicalRequestAuth, maximumBoundaries: Int = 64,
+      requireCurrentOwner: @escaping @Sendable () async throws -> Void
+  ) async throws -> KagemushaWalletEpochProgressV1 {
+    try await kagemushaWalletSynchronizeEpochsV1(targetHeight: original.blockHeight,
+      maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner,
+      progress: { try self.epochProgress() },
+      fetch: { height in
+        try await transport.getKagemushaWalletLoadEpochOriginalV1(selection: original.selection,
+          boundaryHeight: height, canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
+      }, ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
+  }
+}

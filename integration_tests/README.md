@@ -57,6 +57,16 @@ This crate hosts cross-component tests for Iroha.
   result and persisted state on all four peers, then repeats both reads through
   a cold-restarted validator.
   The pull-request test job sets this switch; ordinary developer runs keep the existing sandbox-skip behavior.
+- The child runtime administrator gate is
+  `IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api child_runtime_admin::four_validators_authorize_support_activate_and_restart_child_runtime -- --exact --nocapture --test-threads=1`.
+  It starts four validators from signed child-foundation genesis, rejects a foreign
+  root and consumed nonce, schedules and cancels through threshold certificates,
+  proves that three validator support signatures lapse, and activates with all four.
+  It verifies the certified child history on every peer before and after restart,
+  then exercises the persisted rotated administrator threshold. The test requires
+  actual sockets and same-candidate daemon/client artifacts. Qualification requires
+  `IROHA_TEST_REQUIRE_NETWORK=1`; the shared harness's ordinary developer sandbox
+  skip supplies no qualification evidence. Parent registration and anchoring remain separate gates.
 - Generic ZK record/event scenarios use genuine canonical full-unshield keys and
   native wallet proofs over synthetic local trees. Generic proof verification does
   not authorize ledger execution or value movement.

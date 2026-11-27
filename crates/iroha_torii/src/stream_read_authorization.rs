@@ -313,7 +313,7 @@ pub enum ScopedEventScope {
 }
 
 impl ScopedEventScope {
-    fn allows(&self, visibility: &DataspaceReadVisibility) -> bool {
+    pub(crate) fn allows(&self, visibility: &DataspaceReadVisibility) -> bool {
         match self {
             Self::Public => true,
             Self::Dataspaces(dataspaces) => dataspaces
@@ -390,7 +390,7 @@ pub struct BlockTransactionScopes {
 }
 
 impl BlockTransactionScopes {
-    fn from_block(height: NonZeroUsize, block: &SignedBlock) -> Self {
+    pub(crate) fn from_block(height: NonZeroUsize, block: &SignedBlock) -> Self {
         let count = block.external_entrypoint_count();
         let mut transactions = Vec::with_capacity(count);
         for index in 0..count {
@@ -416,7 +416,7 @@ impl BlockTransactionScopes {
     /// The scope of a transaction event: the union of the routes of every
     /// entrypoint carrying its hash. Absent, unscoped or malformed provenance
     /// is visible only to a global reader.
-    fn scope(&self, hash: &HashOf<SignedTransaction>) -> ScopedEventScope {
+    pub(crate) fn scope(&self, hash: &HashOf<SignedTransaction>) -> ScopedEventScope {
         let Some(transactions) = &self.transactions else {
             return ScopedEventScope::GlobalReaderOnly;
         };

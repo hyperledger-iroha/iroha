@@ -207,6 +207,7 @@ fn check_genesis_block_requires_canonical_execution_results() {
                             "genesis rejection fixture".to_owned()
                         ),
                     )
+                    .into()
                 ),
             }
         ))
@@ -307,7 +308,8 @@ fn genesis_checks_all_internal_outputs_without_equating_input_and_output_counts(
             ExecutionOutputV1::NetworkWithLifecycle(_)
             | ExecutionOutputV1::PipelineWithLifecycle(_)
             | ExecutionOutputV1::TimeWithLifecycle(_)
-            | ExecutionOutputV1::GovernanceBlockStart(_) => {
+            | ExecutionOutputV1::GovernanceBlockStart(_)
+            | ExecutionOutputV1::C10(_) => {
                 unreachable!("genesis_internal_outputs constructs only V1 internal fixtures")
             }
             ExecutionOutputV1::Network(_) => unreachable!(),
@@ -316,7 +318,7 @@ fn genesis_checks_all_internal_outputs_without_equating_input_and_output_counts(
             .result()
             .as_ref()
             .unwrap_err()
-            .clone();
+            .into_owned();
         let mut rejected = block.clone();
         install_genesis_outputs(&mut rejected, rejected_outputs, 3);
         assert_eq!(
@@ -619,7 +621,7 @@ fn genesis_rejection_selects_first_complete_output_and_retains_typed_source() {
         unreachable!()
     };
     outputs[1] = ExecutionOutputV1::pipeline_output_limit_rejection(pipeline.invocation.clone());
-    let first_reason = outputs[1].result().as_ref().unwrap_err().clone();
+    let first_reason = outputs[1].result().as_ref().unwrap_err().into_owned();
     let ExecutionOutputV1::Time(time) = &outputs[2] else {
         unreachable!()
     };
@@ -637,7 +639,12 @@ fn genesis_rejection_selects_first_complete_output_and_retains_typed_source() {
             .source()
             .unwrap()
             .downcast_ref::<TransactionRejectionReason>(),
-        Some(&first_reason),
+        Some(
+            first_reason
+                .as_borrowed()
+                .baseline()
+                .expect("baseline genesis fixture")
+        ),
         "the original typed reason remains available through Error::source"
     );
 }

@@ -1,6 +1,7 @@
 //! Canonical literal errors remain local only for original enclosing refusals.
 
 use super::*;
+use ivm_abi::error::{VmDeferral, VmTrap};
 use ivm_abi::{
     SyscallPolicy,
     error::ExecutionDeferral,
@@ -78,7 +79,7 @@ fn canonical_json_literals_preserve_each_actual_cumulative_refusal_and_retry() {
                     retained.execution_deferral(),
                     Some(ExecutionDeferral::ActiveMemoryCapacity)
                 );
-                let VMError::DecodeDeferred(original) = &retained else {
+                let VMError::Deferred(VmDeferral::DecodeDeferred(original)) = &retained else {
                     panic!("literal must retain the captured decoder owner");
                 };
                 assert_eq!(
@@ -111,7 +112,10 @@ fn malformed_literal_frames_and_opcode_kinds_remain_deterministic() {
         })
         .unwrap_err();
         assert!(!error.is_local_deferral());
-        assert!(matches!(error.into_vm_error(), VMError::InvalidMetadata));
+        assert!(matches!(
+            error.into_vm_error(),
+            VMError::Trap(VmTrap::InvalidMetadata)
+        ));
     }
     let program = self::program(PointerType::Blob, b"opaque");
     let parsed = ProgramMetadata::parse(&program).unwrap();
@@ -127,7 +131,7 @@ fn malformed_literal_frames_and_opcode_kinds_remain_deterministic() {
             validate_literal_table(&program, &parsed, &decoded)
                 .unwrap_err()
                 .into_vm_error(),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
     }
 }
@@ -237,16 +241,18 @@ fn actual_artifact_admission_keeps_literal_refusal_after_metadata_succeeds() {
         retained.execution_deferral(),
         Some(ExecutionDeferral::ActiveMemoryCapacity)
     );
-    let VMError::DecodeDeferred(original) = retained else {
+    let VMError::Deferred(VmDeferral::DecodeDeferred(original)) = retained else {
         panic!("literal refusal must retain its captured decoder owner");
     };
     let expected = original.clone();
     let converted = crate::ContractArtifactError::preparation(
         "literal index validation",
-        VMError::DecodeDeferred(original),
+        VMError::Deferred(VmDeferral::DecodeDeferred(original)),
     )
     .into_vm_error();
-    assert!(matches!(converted, VMError::DecodeDeferred(actual) if actual == expected));
+    assert!(
+        matches!(converted, VMError::Deferred(VmDeferral::DecodeDeferred(actual)) if actual == expected)
+    );
     let retried = crate::verify_contract_artifact(&artifact).unwrap();
     assert_eq!(retried.code_hash, baseline.code_hash);
     assert_eq!(retried.manifest, baseline.manifest);

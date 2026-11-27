@@ -1,6 +1,7 @@
 //! Exact original shell admission, retained borrowers and final reclamation.
 
 use super::*;
+use crate::error::VmDeferral;
 use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
 use std::{
     future::Future,
@@ -23,18 +24,18 @@ fn original_admission_precedes_shell_allocation_and_retries_exactly() {
     let retention = MemoryBudget::new(bytes);
     super::super::with_refused_shared_allocation_for_test(|| {
         assert!(
-            matches!(empty(&budget, &retention), Err(VMError::AllocationDeferred(
+            matches!(empty(&budget, &retention), Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }
-        )) if requested_bytes == bytes)
+        ))) if requested_bytes == bytes)
         );
         assert_eq!(budget.peak_reserved_bytes(), 0);
         assert_eq!(retention.stats().peak_reserved_bytes, 0);
         budget.set_limit_bytes(bytes);
         assert!(matches!(
             empty(&budget, &retention),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         assert_eq!(retention.stats().measured_resident_bytes(), 0);
@@ -163,8 +164,10 @@ fn original_capacity_release_waits_for_last_logger_reference() {
     .unwrap();
     let owner = empty(&budget, &retention).unwrap();
     let borrower = owner.clone();
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { release, .. })) =
-        empty(&budget, &retention)
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
+        release,
+        ..
+    }))) = empty(&budget, &retention)
     else {
         panic!("original full pool must refuse another shell");
     };

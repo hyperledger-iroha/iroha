@@ -336,6 +336,9 @@ pub enum GovernanceLifecycleItemV1 {
         /// The jury.
         body: ParliamentBody,
     },
+    /// G3: a production-qualified runtime certificate reached its exact enactment outcome.
+    #[codec(index = 9)]
+    EnactRuntimeUpgrade,
 }
 
 /// The ballot board a positioned item stored or changed, as the item left it.
@@ -928,6 +931,7 @@ mod tests {
             },
             GovernanceLifecycleItemV1::CloseBallot { body },
             GovernanceLifecycleItemV1::OpenBallot { body },
+            GovernanceLifecycleItemV1::EnactRuntimeUpgrade,
         ];
         for (index, item) in items.into_iter().enumerate() {
             assert_eq!(

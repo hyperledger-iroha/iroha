@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
+use ivm_abi::error::VmDeferral;
 use std::{
     future::Future,
     pin::Pin,
@@ -48,7 +49,13 @@ impl Wake for ReenterPreparation {
         }
         drop(store);
         let result = self.cache.get_or_prepare(self.hash, &self.program);
-        assert!(result.is_ok() || matches!(result, Err(ivm::VMError::AllocationDeferred(_))));
+        assert!(
+            result.is_ok()
+                || matches!(
+                    result,
+                    Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+                )
+        );
         self.reentered.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -58,9 +65,10 @@ fn first_preparation_demand(program: &[u8]) -> usize {
     let refused = crate::ivm_test_support::prepare_declared_with_memory_budget(program, &probe)
         .unwrap_err()
         .into_vm_error();
-    let ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
-        requested_bytes, ..
-    }) = refused
+    let ivm::VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        requested_bytes,
+        ..
+    })) = refused
     else {
         panic!("first actual canonical backing must require original admission");
     };
@@ -110,7 +118,7 @@ fn assert_partial_preparation_reentry(unwind: bool) {
     } else {
         assert!(matches!(
             result.unwrap(),
-            Err(ivm::VMError::AllocationDeferred(_))
+            Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
     }
     assert!(

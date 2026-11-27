@@ -16445,8 +16445,15 @@ impl Client {
             Err(QueryError::Sdk(error)) => return Err(error.into()),
             Err(QueryError::Other(error)) => return Err(error),
         };
-        match rejection_reason_from_transaction_details(&details, hash, entrypoint_hash) {
-            Ok(reason) => Ok(Some(TxConfirmationStatus::Rejected(Some(reason)))),
+        match profiled_rejection_from_transaction_details(&details, hash, entrypoint_hash) {
+            Ok(
+                iroha_data_model::block::execution_output::ProfiledTransactionRejection::Baseline(
+                    reason,
+                ),
+            ) => Ok(Some(TxConfirmationStatus::Rejected(Some(reason)))),
+            Ok(iroha_data_model::block::execution_output::ProfiledTransactionRejection::C10(
+                reason,
+            )) => Err(tx_confirmation_final_report(eyre::Report::new(reason))),
             Err(error) => {
                 warn!(
                     %hash,
@@ -20686,6 +20693,71 @@ impl Client {
         }
         Ok(code)
     }
+    /// Read a signed C10 manifest and verify it against the caller's network, artifact and host.
+    ///
+    /// # Errors
+    /// Returns an error if the server lacks the representation, or any requested identity differs.
+    pub fn get_c10_contract_manifest(
+        &self,
+        artifact_id: &iroha_data_model::smart_contract::ContractArtifactId,
+        expected_host: iroha_data_model::runtime::definition::DefinitionId,
+        expected_abi: iroha_crypto::Hash,
+        context: &norito::core::DecodeBudgetContext,
+    ) -> Result<iroha_data_model::ivm_c10::ContractManifestC10V1> {
+        use iroha_data_model::ivm_c10::manifest::{
+            REGISTERED_MANIFEST_MEDIA_TYPE, RegisteredManifestC10V1,
+        };
+        let path = format!(
+            "v1/contracts/artifacts/{}/{}",
+            artifact_id.dataspace_id.as_u64(),
+            hex::encode(artifact_id.code_hash.as_ref())
+        );
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", REGISTERED_MANIFEST_MEDIA_TYPE)
+                .max_response_bytes(CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to get C10 contract manifest",
+            " ",
+        )?;
+        if response.body().len() > CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES
+            || response
+                .headers()
+                .get("content-type")
+                .map(|value| value.as_bytes())
+                != Some(REGISTERED_MANIFEST_MEDIA_TYPE.as_bytes())
+        {
+            return Err(eyre!("invalid C10 contract manifest representation"));
+        }
+        let registered: RegisteredManifestC10V1 = norito::json::from_slice(response.body())?;
+        if registered.network_id != self.network_id
+            || registered.artifact_id != *artifact_id
+            || registered.host_profile != expected_host
+            || registered.manifest.abi_hash != Some(expected_abi)
+            || registered.manifest.code_hash != Some(artifact_id.code_hash)
+        {
+            return Err(eyre!(
+                "C10 registry response differs from the requested network, artifact or host"
+            ));
+        }
+        let provenance = registered
+            .manifest
+            .provenance
+            .as_ref()
+            .ok_or_else(|| eyre!("C10 manifest has no provenance"))?;
+        let frame = registered
+            .manifest
+            .signature_payload_bytes(context, CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES)?;
+        provenance
+            .signature
+            .verify(&provenance.signer, &frame)
+            .wrap_err("C10 manifest provenance does not authenticate the response")?;
+        Ok(registered.manifest)
+    }
     /// Account-signed GET of the manifest for one exact network and dataspace artifact.
     ///
     /// # Errors
@@ -22023,8 +22095,21 @@ impl Client {
 /// Render a rejection and its causes on one line, for people reading a failed transaction.
 #[must_use]
 pub fn rejection_summary(reason: &TransactionRejectionReason) -> String {
-    let mut summary = reason.to_string();
-    let mut cause = std::error::Error::source(reason);
+    profiled_rejection_summary(reason.into())
+}
+
+/// Render the original profile's error and its typed source chain for a failed transaction.
+#[must_use]
+pub fn profiled_rejection_summary(
+    reason: iroha_data_model::block::execution_output::TransactionRejectionRef<'_>,
+) -> String {
+    use iroha_data_model::block::execution_output::TransactionRejectionRef;
+    let error: &dyn std::error::Error = match reason {
+        TransactionRejectionRef::Baseline(reason) => reason,
+        TransactionRejectionRef::C10(reason) => reason,
+    };
+    let mut summary = error.to_string();
+    let mut cause = error.source();
     while let Some(error) = cause {
         let text = error.to_string();
         if !summary.contains(&text) {
@@ -22036,11 +22121,11 @@ pub fn rejection_summary(reason: &TransactionRejectionReason) -> String {
     summary
 }
 
-pub(crate) fn rejection_reason_from_transaction_details(
+pub(crate) fn profiled_rejection_from_transaction_details(
     details: &iroha_torii_shared::PipelineTransactionDetailsResponse,
     signed_hash: HashOf<SignedTransaction>,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> Result<TransactionRejectionReason> {
+) -> Result<iroha_data_model::block::execution_output::ProfiledTransactionRejection> {
     crate::query::validate_transaction_details_bindings(details, entrypoint_hash)?;
     let transaction = &details.transaction;
     let TransactionEntrypoint::External(committed) = transaction.entrypoint() else {
@@ -22055,10 +22140,9 @@ pub(crate) fn rejection_reason_from_transaction_details(
     }
     transaction
         .result()
-        .0
         .as_ref()
         .err()
-        .cloned()
+        .map(|reason| reason.into_owned())
         .ok_or_else(|| {
             eyre!("transaction-details response contains a successful transaction result")
         })
@@ -30183,6 +30267,69 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn c10_manifest_read_authenticates_artifact_host_provenance_and_representation() {
+        use iroha_data_model::ivm_c10::{
+            ContractManifestC10V1,
+            manifest::{REGISTERED_MANIFEST_MEDIA_TYPE, RegisteredManifestC10V1},
+        };
+        use iroha_data_model::runtime::definition::DefinitionId;
+        let client = client_with_base_url(base_url());
+        let owner = iroha_allocation::AllocationBudget::new(1 << 20);
+        let ctx = norito::core::DecodeBudgetContext::try_new_owned(
+            norito::DecodeLimits::new(65536, 65536, 65536, 1 << 18, 256),
+            &owner,
+        )
+        .unwrap();
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::new(9),
+            iroha_data_model::smart_contract::contract_code_hash(b"C10 scoped response"),
+        );
+        let host = DefinitionId([0x5a; 32]);
+        let abi = iroha_crypto::Hash::new(b"C10 fixture ABI");
+        let mut baseline: iroha_data_model::smart_contract::manifest::ContractManifest =
+            norito::json::from_str(r#"{"code_hash":null,"abi_hash":null,"compiler_fingerprint":null,"features_bitmap":null,"permissions":[],"events":[],"enum_types":[]}"#).unwrap();
+        baseline.code_hash = Some(artifact_id.code_hash);
+        baseline.abi_hash = Some(abi);
+        let manifest = ContractManifestC10V1::try_from(baseline)
+            .unwrap()
+            .try_signed(&ctx, 65536, &client.key_pair)
+            .unwrap();
+        let registered = RegisteredManifestC10V1 {
+            network_id: client.network_id,
+            artifact_id,
+            host_profile: host,
+            manifest,
+        };
+        let read = |record: &RegisteredManifestC10V1, media| {
+            let response = mk_response(
+                StatusCode::OK,
+                norito::json::to_json(record).unwrap().into_bytes(),
+                Some(media),
+            );
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let result = with_mock_http(respond_with(&store, response), |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .get_c10_contract_manifest(&artifact_id, host, abi, &ctx)
+            });
+            assert_canonical_account_signed_request(&client, &store.lock().unwrap()[0]);
+            result
+        };
+        assert_eq!(
+            read(&registered, REGISTERED_MANIFEST_MEDIA_TYPE).unwrap(),
+            registered.manifest
+        );
+        assert!(read(&registered, APPLICATION_JSON).is_err());
+        let mut wrong = registered.clone();
+        wrong.host_profile = DefinitionId([9; 32]);
+        assert!(read(&wrong, REGISTERED_MANIFEST_MEDIA_TYPE).is_err());
+        let mut wrong = registered;
+        wrong.manifest.seiyaku_name = Some("Substituted".to_owned());
+        assert!(read(&wrong, REGISTERED_MANIFEST_MEDIA_TYPE).is_err());
+    }
+
     #[test]
     fn contract_manifest_read_is_signed_and_rejects_scope_or_payload_substitution() {
         let client = client_with_base_url(base_url());

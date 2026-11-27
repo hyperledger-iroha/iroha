@@ -297,6 +297,37 @@ impl SumeragiCommitVerifierV1 {
                 && checkpoint.initial == *native.initial_epoch(),
             "compact checkpoint differs from independently selected global genesis",
         )?;
+        Ok(Self::from_checked_epoch(checkpoint))
+    }
+
+    /// Genesis-rooted initial epoch of this installed compact verifier.
+    #[must_use]
+    pub const fn initial_commit_epoch(&self) -> u64 {
+        self.initial.authorization.epoch
+    }
+
+    /// Restore one previously certified epoch retrieved from rollback-protected local custody.
+    /// A peer-supplied checkpoint has no authority and must never be passed here.
+    ///
+    /// # Errors
+    /// Rejects a malformed checkpoint or any disagreement with the independently installed genesis.
+    pub fn restore_trusted_local_epoch(
+        &self,
+        checkpoint: &SumeragiCommitCheckpointV1,
+    ) -> Result<Self, FinalityError> {
+        checkpoint.validate_bounds()?;
+        need(
+            checkpoint.genesis_hash == self.genesis_hash
+                && checkpoint.network == self.network
+                && checkpoint.chain == self.chain
+                && checkpoint.instance == self.instance
+                && checkpoint.initial == self.initial,
+            "compact checkpoint differs from installed genesis",
+        )?;
+        Ok(Self::from_checked_epoch(checkpoint))
+    }
+
+    fn from_checked_epoch(checkpoint: &SumeragiCommitCheckpointV1) -> Self {
         let mut epochs = BTreeMap::new();
         epochs.insert(
             checkpoint.initial.authorization.epoch,
@@ -306,14 +337,14 @@ impl SumeragiCommitVerifierV1 {
             checkpoint.selected.authorization.epoch,
             checkpoint.selected.clone(),
         );
-        Ok(Self {
+        Self {
             genesis_hash: checkpoint.genesis_hash,
             network: checkpoint.network,
             chain: checkpoint.chain.clone(),
             instance: checkpoint.instance,
             initial: checkpoint.initial.clone(),
             epochs,
-        })
+        }
     }
 }
 

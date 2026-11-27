@@ -4,6 +4,7 @@
 //! borrows its argument table for reading, and borrows a separate caller result table for writing.
 //! A returned count never substitutes for evidence that every result byte was actually written.
 
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     Memory, VMError,
     error::Perm,
@@ -47,15 +48,17 @@ impl Region {
         // Per-access path: build the error only on overflow.
         match start.checked_add(bytes) {
             Some(end) => Ok(Self { start, end }),
-            None => Err(VMError::MemoryOutOfBounds),
+            None => Err(VMError::Trap(VmTrap::MemoryOutOfBounds)),
         }
     }
     fn table(start: u64, words: u64) -> Result<Self, VMError> {
         if words > MAX_CALL_WORDS_V1 as u64 || (words == 0 && start != 0) {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         if !start.is_multiple_of(CALL_WORD_BYTES_V1 as u64) {
-            return Err(VMError::MisalignedAccess { addr: start as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: start as u32,
+            }));
         }
         Self::new(start, words * CALL_WORD_BYTES_V1 as u64)
     }
@@ -119,8 +122,8 @@ impl DerefMut for BitmapStorage {
 }
 impl InitializedRegion {
     fn bitmap_bytes(region: Region) -> Result<usize, VMError> {
-        let bytes =
-            usize::try_from(region.end - region.start).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let bytes = usize::try_from(region.end - region.start)
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         Ok(bytes.div_ceil(8))
     }
 
@@ -130,12 +133,15 @@ impl InitializedRegion {
         // and frame bounds above remain deterministic faults.
         #[cfg(test)]
         if REFUSE_NEXT_BITMAP_FOR_TEST.with(|refuse| refuse.replace(false)) {
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable,
-            ));
+            )));
         }
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let bits = match lease {
             Some(lease) => BitmapStorage::Funded(
                 ExecutionBuffer::zeroed(bytes, lease).map_err(|_| unavailable())?,
@@ -249,7 +255,9 @@ impl FrameStack {
     fn try_reserve_one(&mut self) -> Result<(), VMError> {
         match self {
             Self::Local(values) => values.try_reserve_one().map_err(|_| {
-                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable,
+                ))
             }),
             Self::Funded { budget, backing } => {
                 let capacity = backing.as_ref().map_or(0, ExecutionBuffer::capacity);
@@ -266,16 +274,16 @@ impl FrameStack {
                     .as_ref()
                     .is_some_and(|owner| owner.as_slice().len() == capacity)
                 {
-                    return Err(VMError::CallDepthExceeded);
+                    return Err(VMError::Trap(VmTrap::CallDepthExceeded));
                 }
                 let plan = ExecutionMemoryPlan::array::<Frame>(capacity)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 let mut lease = ExecutionMemoryLease::reserve(budget, plan)
-                    .map_err(VMError::AllocationDeferred)?;
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
                 let mut replacement = ExecutionBuffer::new(capacity, &mut lease).map_err(|_| {
-                    VMError::ExecutionDeferred(
+                    VMError::Deferred(VmDeferral::ExecutionDeferred(
                         crate::error::ExecutionDeferral::AllocationUnavailable,
-                    )
+                    ))
                 })?;
                 if let Some(previous) = backing.as_mut() {
                     // The new backing and its charge are complete before moving
@@ -454,13 +462,13 @@ impl CallFrameMemory {
         stack_top: u64,
     ) -> Result<PreparedCallFrame, VMError> {
         if !self.frames.is_empty() {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         let descriptor = Self::descriptor(stack_pointer, callable, tables, stack_top)?;
         if descriptor.stack.overlaps(descriptor.arguments)
             || descriptor.stack.overlaps(descriptor.results)
         {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         let frame = self.frame(descriptor)?;
         self.reserve_frame_slot()?;
@@ -495,15 +503,18 @@ impl CallFrameMemory {
         tables: CallTables,
         stack_top: u64,
     ) -> Result<PreparedCallFrame, VMError> {
-        let parent = self.frames.last().ok_or(VMError::ControlFlowViolation)?;
+        let parent = self
+            .frames
+            .last()
+            .ok_or(VMError::Trap(VmTrap::ControlFlowViolation))?;
         if stack_pointer != parent.stack.region.start {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         let descriptor = Self::descriptor(stack_pointer, callable, tables, stack_top)?;
         if (!descriptor.arguments.empty() && !parent.stack.initialized(descriptor.arguments))
             || (!descriptor.results.empty() && !parent.stack.region.contains(descriptor.results))
         {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         let frame = self.frame(descriptor)?;
         self.reserve_frame_slot()?;
@@ -530,16 +541,16 @@ impl CallFrameMemory {
             || !stack_pointer.is_multiple_of(CALL_WORD_BYTES_V1 as u64)
             || stack_pointer > stack_top
         {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         let start = stack_pointer
             .checked_sub(u64::from(frame_bytes))
             .filter(|start| *start >= Memory::STACK_START)
-            .ok_or(VMError::MemoryOutOfBounds)?;
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         let arguments = Region::table(tables.argument_base, tables.argument_words)?;
         let results = Region::table(tables.result_base, tables.result_words)?;
         if arguments.overlaps(results) {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         Ok(FrameDescriptor {
             stack: Region::new(start, u64::from(frame_bytes))?,
@@ -567,13 +578,14 @@ impl CallFrameMemory {
             .map(|budget| {
                 let mut plan =
                     ExecutionMemoryPlan::array::<u8>(InitializedRegion::bitmap_bytes(stack)?)
-                        .map_err(|_| VMError::MemoryOutOfBounds)?;
+                        .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
                 plan.include_child(
                     ExecutionMemoryPlan::array::<u8>(InitializedRegion::bitmap_bytes(results)?)
-                        .map_err(|_| VMError::MemoryOutOfBounds)?,
+                        .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?,
                 )
-                .map_err(|_| VMError::MemoryOutOfBounds)?;
-                ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)
+                .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+                ExecutionMemoryLease::reserve(budget, plan)
+                    .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
             })
             .transpose()?;
         let stack = InitializedRegion::new(stack, lease.as_mut())?;
@@ -651,10 +663,10 @@ impl CallFrameMemory {
         if permitted {
             Ok(())
         } else {
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: address as u32,
                 perm: permission,
-            })
+            }))
         }
     }
 
@@ -688,13 +700,16 @@ impl CallFrameMemory {
         result_base: u64,
         initialized_words: u64,
     ) -> Result<(), VMError> {
-        let frame = self.frames.last().ok_or(VMError::ControlFlowViolation)?;
+        let frame = self
+            .frames
+            .last()
+            .ok_or(VMError::Trap(VmTrap::ControlFlowViolation))?;
         let returned = Region::table(result_base, initialized_words)?;
         if stack_pointer != frame.entry_stack_pointer
             || returned != frame.results.region
             || !frame.results.initialized(returned)
         {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         self.frames.pop();
         if let Some(parent) = self.frames.last_mut() {
@@ -745,7 +760,7 @@ impl CallFrameMemory {
         self.frames
             .last()
             .map(|frame| frame.entry_pc)
-            .ok_or(VMError::ControlFlowViolation)
+            .ok_or(VMError::Trap(VmTrap::ControlFlowViolation))
     }
 
     pub(crate) fn try_retain(&self) -> bool {
@@ -778,37 +793,46 @@ impl CallFrameMemory {
 
     /// Return the validated word count only after a successful root return.
     pub(crate) fn completed_word_count(&self) -> Result<usize, VMError> {
-        let table = self.completed.ok_or(VMError::ControlFlowViolation)?;
+        let table = self
+            .completed
+            .ok_or(VMError::Trap(VmTrap::ControlFlowViolation))?;
         Ok(((table.end - table.start) / CALL_WORD_BYTES_V1 as u64) as usize)
     }
 
     /// Resolve an initialized active result word for trusted return validation.
     pub(crate) fn active_result_word(&self, index: usize) -> Result<u64, VMError> {
-        let frame = self.frames.last().ok_or(VMError::ControlFlowViolation)?;
+        let frame = self
+            .frames
+            .last()
+            .ok_or(VMError::Trap(VmTrap::ControlFlowViolation))?;
         let address = Self::word_address(frame.results.region, index)?;
         let range = Region::new(address, CALL_WORD_BYTES_V1 as u64)?;
         if !frame.results.initialized(range) {
-            return Err(VMError::ControlFlowViolation);
+            return Err(VMError::Trap(VmTrap::ControlFlowViolation));
         }
         Ok(address)
     }
 
     /// Resolve a successful root result without trusting mutable guest descriptor registers.
     pub(crate) fn completed_result_word(&self, index: usize) -> Result<u64, VMError> {
-        Self::word_address(self.completed.ok_or(VMError::ControlFlowViolation)?, index)
+        Self::word_address(
+            self.completed
+                .ok_or(VMError::Trap(VmTrap::ControlFlowViolation))?,
+            index,
+        )
     }
 
     fn word_address(table: Region, index: usize) -> Result<u64, VMError> {
         let offset = u64::try_from(index)
             .ok()
             .and_then(|index| index.checked_mul(CALL_WORD_BYTES_V1 as u64))
-            .ok_or(VMError::MemoryOutOfBounds)?;
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         let address = table
             .start
             .checked_add(offset)
-            .ok_or(VMError::MemoryOutOfBounds)?;
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if !table.contains(Region::new(address, CALL_WORD_BYTES_V1 as u64)?) {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         Ok(address)
     }
@@ -817,6 +841,7 @@ impl CallFrameMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use std::sync::Arc;
 
     const TOP: u64 = Memory::STACK_START + 4096;
@@ -922,7 +947,7 @@ mod tests {
         let denied = |frames: &CallFrameMemory, address: u64, bytes: u64, perm: Perm| {
             matches!(
                 frames.check_access(address, bytes, perm),
-                Err(VMError::MemoryAccessViolation { .. })
+                Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
             )
         };
         for perm in [Perm::READ, Perm::WRITE, Perm::READ | Perm::WRITE] {
@@ -978,9 +1003,9 @@ mod tests {
         CallFrameMemory::refuse_next_bitmap_for_testing();
         assert!(matches!(
             frames.prepare_root(TOP, &callable(128), tables(ARG, 1, RESULT, 1), TOP),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(frames.is_empty());
         assert!(frames.completed_word_count().is_err());
@@ -1005,9 +1030,9 @@ mod tests {
                 tables(argument, 1, result, 1),
                 TOP,
             ),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(frames.frames.len(), 1);
         frames.check_access(argument, 8, Perm::READ).unwrap();
@@ -1061,7 +1086,7 @@ mod tests {
         let mut frames = CallFrameMemory::with_memory_budget(&budget);
         assert!(matches!(
             frames.prepare_root(TOP, &callable(128), tables(ARG, 1, RESULT, 1), TOP),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         assert!(frames.is_empty());
@@ -1079,7 +1104,7 @@ mod tests {
                 tables(argument, 1, result, 1),
                 TOP,
             ),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), FRAME_BACKING_BYTES + 17);
         assert_eq!(frames.frames.len(), 1);
@@ -1120,7 +1145,7 @@ mod tests {
                 tables(argument, 1, result, 1),
                 TOP,
             ),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(frames.frames.len(), 1);
         frames.check_access(argument, 8, Perm::READ).unwrap();
@@ -1166,9 +1191,9 @@ mod tests {
         CallFrameMemory::refuse_next_bitmap_for_testing();
         assert!(matches!(
             frames.prepare_root(TOP, &callable(128), tables(ARG, 1, RESULT, 1), TOP),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
         frames
@@ -1219,7 +1244,7 @@ mod tests {
                 tables(TOP - 32, 1, TOP - 16, 1),
                 TOP,
             ),
-            Err(VMError::ControlFlowViolation)
+            Err(VMError::Trap(VmTrap::ControlFlowViolation))
         ));
         assert_eq!(budget.reserved_bytes(), FRAME_BACKING_BYTES + 17);
         drop(frames);

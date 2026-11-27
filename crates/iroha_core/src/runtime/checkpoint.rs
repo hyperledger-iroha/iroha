@@ -17,7 +17,8 @@
 //!   adoption record from its own store ([`adoption_record`]) and signs a record only after
 //!   checking it against its own certified history ([`attest_anchor`], [`attest_floor`]): the
 //!   block, its committed time, the certified World roots around the adoption height, the
-//!   committee, and for a floor that it holds the checkpoint.
+//!   committee. [`attest_replayed_floor`] consumes exact-checkpoint restore and certified
+//!   catch-up evidence; the artifact-only [`attest_floor`] path always refuses.
 //! - **Boundary.** [`history_boundary`] is the height at or below which no release re-executes
 //!   a block: the highest boundary in force. Certified publication persists that boundary in
 //!   Kura before State visibility; startup reads it before choosing a snapshot. An older snapshot
@@ -28,8 +29,8 @@
 //! configuration. TODO(`status.md`, ZK delivery F.4): commit those inputs, then delete it.
 //!
 //! The snapshot maker produces a checkpoint at the heights the committed policy names and keeps
-//! the ones it retains (`crate::snapshot::checkpoint_store`); Torii's runtime boundary routes have
-//! a node sign its statements. TODO(§7.3): start a node from a transferred checkpoint without the
+//! the ones it retains (`crate::snapshot::checkpoint_store`); Torii's runtime boundary routes
+//! expose this inventory and sign anchor statements. TODO(§7.3): start a node from a transferred checkpoint without the
 //! block bodies below it.
 
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
@@ -371,6 +372,11 @@ pub enum RecordAttestationError {
     /// The anchor is not the checkpoint this node was configured to adopt at.
     #[error("the anchor is not the upgrade checkpoint this node adopted the foundation at")]
     NotAdopted,
+    /// Retained checkpoint bytes do not prove this build restored and caught up from them.
+    #[error(
+        "startup floor signing requires verified exact-checkpoint restore and certified catch-up evidence"
+    )]
+    CheckpointRehearsalRequired,
     /// The record or the committee cannot be encoded, or the key cannot sign.
     #[error("{0}")]
     Signature(String),
@@ -495,14 +501,13 @@ pub fn attest_anchor(
         .map_err(|error| RecordAttestationError::Signature(error.to_string()))
 }
 
-/// Sign this node's statement of the startup `floor` (§7.3), after checking it against the
-/// node's own store.
+/// Check this node's startup `floor` (§7.3), refusing to sign without restore/replay evidence.
 ///
 /// The floor names this network, the block the node stores at its height and that block's
-/// committed time. `holds_checkpoint` says the node holds a restorable checkpoint at exactly
-/// that height, which it restored from and caught up from before the caller asked: a validator
-/// vouches for a floor only if it can still start from it. The node signs only while its key is
-/// a member of the current `committee`.
+/// committed time. `holds_checkpoint_artifacts` reports only authenticated artifact custody:
+/// it grants no signing authority. A validator may vouch for a floor only after this build
+/// restores its exact checkpoint and reproduces the certified suffix. The current caller
+/// supplies no evidence from that execution owner, so even matching retained artifacts refuse.
 ///
 /// # Errors
 /// The first check that fails; the node then signs nothing.
@@ -510,7 +515,7 @@ pub fn attest_floor(
     history: &impl History,
     network: &NetworkId,
     committee: &[PublicKey],
-    holds_checkpoint: bool,
+    holds_checkpoint_artifacts: bool,
     floor: &StartupFloorV1,
     key_pair: &KeyPair,
 ) -> Result<SignedStartupFloorAttestationV1, RecordAttestationError> {
@@ -528,13 +533,31 @@ pub fn attest_floor(
     if history.committed_ms(floor.height) != Some(floor.committed_ms) {
         return Err(differs("another committed time of the floor block"));
     }
-    if !holds_checkpoint {
+    if !holds_checkpoint_artifacts {
         return Err(differs("this node holds no checkpoint at the floor height"));
     }
-    RuntimeStartupFloorV1::statement(floor, validator)
-        .map_err(|error| RecordAttestationError::Signature(error.to_string()))?
-        .sign(key_pair.private_key())
-        .map_err(|error| RecordAttestationError::Signature(error.to_string()))
+    // This inventory-only caller owns no replay continuation. The separate
+    // `attest_replayed_floor` entry point consumes the exact stopped-store execution owner;
+    // neither this custody bool nor an offline report DTO can construct that evidence.
+    Err(RecordAttestationError::CheckpointRehearsalRequired)
+}
+
+/// Sign only the consuming continuation of exact retained-checkpoint restore and replay.
+///
+/// The sealed Core owner retains the stopped source lock, exact checkpoint files and actual
+/// replay State. It rechecks custody and the replayed current committee through signing; no
+/// artifact inventory, caller-selected history or report DTO can construct this capability.
+///
+/// # Errors
+/// Original custody, certified-history, resource or signing refusal; no statement is returned.
+pub fn attest_replayed_floor(
+    replay: crate::snapshot::checkpoints::ReplayedFloorCheckpoint,
+    key_pair: &KeyPair,
+) -> Result<
+    (StartupFloorV1, SignedStartupFloorAttestationV1),
+    crate::snapshot::checkpoints::FloorRehearsalError,
+> {
+    replay.sign(key_pair)
 }
 
 #[cfg(test)]

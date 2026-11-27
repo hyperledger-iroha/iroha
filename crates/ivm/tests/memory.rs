@@ -1,6 +1,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, Memory, Perm, VMError, encoding, instruction};
+use ivm_abi::error::VmTrap;
 fn push_word(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
@@ -68,7 +69,7 @@ fn test_memory_access() {
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(
-        matches!(res, Err(VMError::MisalignedAccess { .. })),
+        matches!(res, Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))),
         "Expected misaligned access error"
     );
     // 3. Test out-of-bounds access: SB to an address outside defined regions -> MemoryAccessViolation
@@ -82,12 +83,14 @@ fn test_memory_access() {
     vm.load_program(&prog).unwrap();
     let res2 = vm.run();
     assert!(
-        matches!(res2, Err(VMError::MemoryAccessViolation { .. }))
-            && if let Err(VMError::MemoryAccessViolation { perm, .. }) = res2 {
-                perm == Perm::WRITE
-            } else {
-                false
-            },
+        matches!(
+            res2,
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
+        ) && if let Err(VMError::Trap(VmTrap::MemoryAccessViolation { perm, .. })) = res2 {
+            perm == Perm::WRITE
+        } else {
+            false
+        },
         "Expected MemoryAccessViolation with WRITE perm"
     );
     // 4. Test manual sign/zero extension for byte-sized value using shifts.
@@ -140,7 +143,7 @@ fn test_code_region_is_read_only() {
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     match res {
-        Err(VMError::MemoryAccessViolation { perm, .. }) => {
+        Err(VMError::Trap(VmTrap::MemoryAccessViolation { perm, .. })) => {
             assert_eq!(perm, Perm::WRITE);
         }
         _ => panic!("Expected MemoryAccessViolation"),
@@ -156,7 +159,10 @@ fn test_misaligned_load() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
 }
 #[test]
 fn test_halfword_sign_extension() {
@@ -192,7 +198,10 @@ fn test_misaligned_store_word() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
+    assert!(matches!(
+        res,
+        Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+    ));
 }
 #[test]
 fn test_stack_region_bounds() {
@@ -216,10 +225,10 @@ fn test_stack_region_bounds() {
     let res = vm2.run();
     assert!(matches!(
         res,
-        Err(VMError::MemoryAccessViolation {
+        Err(VMError::Trap(VmTrap::MemoryAccessViolation {
             perm: Perm::WRITE,
             ..
-        })
+        }))
     ));
 }
 #[test]
@@ -232,10 +241,10 @@ fn test_input_output_regions() {
     let err = vm.store_u32(Memory::INPUT_START, 1).unwrap_err();
     assert!(matches!(
         err,
-        VMError::MemoryAccessViolation {
+        VMError::Trap(VmTrap::MemoryAccessViolation {
             perm: Perm::WRITE,
             ..
-        }
+        })
     ));
 }
 #[test]
@@ -256,7 +265,7 @@ fn test_heap_is_not_executable() {
     vm.set_register(4, Memory::HEAP_START);
     let res = vm.run();
     assert!(
-        matches!(res, Err(VMError::MemoryAccessViolation { perm, .. }) if perm.contains(Perm::EXECUTE))
+        matches!(res, Err(VMError::Trap(VmTrap::MemoryAccessViolation { perm, .. })) if perm.contains(Perm::EXECUTE))
     );
 }
 #[test]

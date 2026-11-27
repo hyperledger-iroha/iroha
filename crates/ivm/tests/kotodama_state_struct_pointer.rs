@@ -2,6 +2,7 @@
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
 use ivm::{CoreHost, IVM, IVMHost, PointerType, VMError, pointer_abi, syscalls};
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn encode_pointer_tlv(ty: PointerType, payload: Vec<u8>) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + IrohaHash::LENGTH);
@@ -89,7 +90,7 @@ fn pointer_from_norito_rejects_retired_blob_carrier() {
     let mut host = CoreHost::new();
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-        Err(VMError::NoritoInvalid)
+        Err(VMError::Trap(VmTrap::NoritoInvalid))
     ));
     assert_eq!(vm.register(10), ptr);
 }
@@ -107,7 +108,7 @@ fn pointer_from_norito_rejects_inner_tlv_without_hash() {
     let err = host
         .syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
         .expect_err("invalid inner TLV without hash should fail");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn pointer_from_norito_rejects_wrong_expected_type() {
@@ -124,7 +125,7 @@ fn pointer_from_norito_rejects_wrong_expected_type() {
     let err = host
         .syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
         .expect_err("mismatched expected pointer type should fail");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn pointer_validate_rejects_unknown_type() {
@@ -138,5 +139,5 @@ fn pointer_validate_rejects_unknown_type() {
     let hash: [u8; 32] = IrohaHash::new(payload).into();
     tlv.extend_from_slice(&hash);
     let err = pointer_abi::validate_tlv_bytes(&tlv).expect_err("unknown type must fail");
-    assert!(matches!(err, VMError::NoritoInvalid));
+    assert!(matches!(err, VMError::Trap(VmTrap::NoritoInvalid)));
 }

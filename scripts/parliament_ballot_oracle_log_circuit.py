@@ -13,12 +13,12 @@ import hashlib
 import json
 from pathlib import Path
 
-RECEIPT = "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/receipt.json"
-REPORT = "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/report.json"
+RECEIPT = "docs/validation/parliament_ballot_resource_bindings_20261118/ideal_sampler_accounting/receipt.json"
+REPORT = "docs/validation/parliament_ballot_resource_bindings_20261118/ideal_sampler_accounting/report.json"
 PINS = {
-    RECEIPT: "1b1517be0421aff81906d66f47e1f346b2ee984b155fd2e700ffb48d757344bf",
-    REPORT: "28f9f50f376d1aee6f03738744acfbba27e4c6cab6a40555b64d983803e96805",
-    "scripts/parliament_ballot_ideal_sampler_accounting.py": "dba52c66d04b77959d17315b319f1c7a8f6ae223fc216d358c5a425ace2c2978",
+    RECEIPT: "af443c706963b480801d1277f89c1e46c4e8bb7014d3d4414b15268651e711f2",
+    REPORT: "1822617ab4f5b10f60abbec6a862a05658bb349b690811b235e39b6cf82a71e0",
+    "scripts/parliament_ballot_ideal_sampler_accounting.py": "f5c1315be7d0021ae760e77be538383b30b10f064cf742e333373cb31a1e3f5e",
     "specs/parliament_ballot_b6_ideal_sampler_accounting.md": "c022d1f76360dfe4bdd6934fe352d5d87e7b9f63df3828608230f759cb1e22c5",
     "specs/parliament_ballot_b6_ideal_public_sampler.md": "eeea377a3686fcd31c1c77b8ea576d6f72895789389ed4c2d99d9107a5f0ab74",
 }

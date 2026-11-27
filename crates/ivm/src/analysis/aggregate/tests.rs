@@ -1,6 +1,7 @@
 //! Aggregate content, pre-analysis admission and unwind cleanup.
 
 use super::*;
+use crate::error::VmDeferral;
 use crate::{analysis::SyscallUsage, encoding::wide as enc};
 use std::{
     cell::Cell,
@@ -91,7 +92,10 @@ fn original_pool_refuses_before_second_pass_and_reclaims_on_visit_unwind() {
         },
         Some(&budget),
     );
-    assert!(matches!(result, Err(VMError::AllocationDeferred(_))));
+    assert!(matches!(
+        result,
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+    ));
     assert_eq!(
         passes.get(),
         1,
