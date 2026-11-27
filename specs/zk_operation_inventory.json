@@ -857,7 +857,7 @@
    },
    "runtime_carrier": {
     "scope": "out",
-    "reason": "A registered account stages immutable code for its selected data space. The handler checks the artifact scope, complete code hash and C10 generic carrier bytecode profile before storage (crates/iroha_core/src/runtime/generic_carriers/artifact_staging.rs). Bytecode validation grants no execution binding and verifies no ZK or FHE proof."
+    "reason": "A registered account stages immutable code for its selected data space. The handler checks the artifact scope, complete-image byte limit, complete code hash and C10 generic carrier bytecode profile before storage (crates/iroha_core/src/runtime/generic_carriers/artifact_staging.rs). Bytecode validation grants no execution binding and verifies no ZK or FHE proof."
    },
    "runtime_obligation": {
     "scope": "out",

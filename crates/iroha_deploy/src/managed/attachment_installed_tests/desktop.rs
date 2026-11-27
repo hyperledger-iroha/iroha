@@ -1,5 +1,7 @@
 //! Interactive native Mochi attachment; only the operator initiates attachment and stop.
 
+#![cfg(test)]
+
 use super::*;
 
 impl Harness {

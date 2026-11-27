@@ -24,8 +24,19 @@ pub(crate) fn table(
     writes: bool,
     effects: u32,
 ) -> DefinitionId {
+    let id = install_table(state, "test.carrier.host.table.v1".into());
+    select_access(
+        state,
+        if reads { vec![id] } else { vec![] },
+        if writes { vec![id] } else { vec![] },
+        effects,
+    );
+    id
+}
+
+fn install_table(state: &mut StateTransaction<'_, '_>, namespace: String) -> DefinitionId {
     let storage = DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
-        namespace: "test.carrier.host.table.v1".into(),
+        namespace,
         shape: StorageShapeV1::Table {
             key: SchemaV1::Carrier(schema()),
         },
@@ -39,6 +50,16 @@ pub(crate) fn table(
     let selection = state.world.runtime_selection.get_mut();
     selection.installed_storage.push(id);
     selection.installed_storage.sort();
+    id
+}
+
+fn select_access(
+    state: &mut StateTransaction<'_, '_>,
+    reads: Vec<DefinitionId>,
+    writes: Vec<DefinitionId>,
+    effects: u32,
+) {
+    let selection = state.world.runtime_selection.get_mut();
     let binding = selection
         .bindings
         .iter_mut()
@@ -49,8 +70,8 @@ pub(crate) fn table(
     let DefinitionDescriptorV1::Implementation(inner) = &mut implementation else {
         panic!("implementation");
     };
-    inner.reads = if reads { vec![id] } else { vec![] };
-    inner.writes = if writes { vec![id] } else { vec![] };
+    inner.reads = reads;
+    inner.writes = writes;
     inner.limits.max_effects = effects;
     let replacement = implementation.id().unwrap();
     binding.implementation = replacement;
@@ -61,7 +82,6 @@ pub(crate) fn table(
         .world
         .runtime_definitions
         .insert(replacement, implementation);
-    id
 }
 
 fn vm() -> IVM {
@@ -120,6 +140,29 @@ fn original_carrier_read_views_keep_host_send_sync_without_copying_state() {
     drop(original);
     assert_eq!(budget.reserved_bytes(), reserved);
     budget.set_limit_bytes(limit);
+}
+
+#[test]
+fn captures_all_sixteen_owners_per_class_and_refuses_the_next_index() {
+    let (state, instruction, candidate) =
+        fixture::fixture(fixture::program(&[ivm_abi::encoding::wide::encode_halt()]));
+    let mut block = state.block(fixture::header());
+    candidate.install(&mut block);
+    let mut transaction = block.transaction();
+    let mut owners: Vec<_> = (0..16)
+        .map(|index| install_table(&mut transaction, format!("test.carrier.host.bound.{index}")))
+        .collect();
+    owners.sort();
+    select_access(&mut transaction, owners.clone(), owners.clone(), 1);
+    let signed = fixture::source(&transaction, &instruction);
+    fixture::bind_source(&mut transaction, &signed);
+    let invocation = Invocation::capture(&transaction, &instruction).unwrap();
+    for write in [false, true] {
+        for (index, expected) in owners.iter().enumerate() {
+            assert_eq!(invocation.owner(index as u64, write).unwrap(), *expected);
+        }
+        assert!(invocation.owner(16, write).is_err());
+    }
 }
 
 #[test]

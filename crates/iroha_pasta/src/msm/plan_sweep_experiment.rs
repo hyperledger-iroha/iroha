@@ -7,6 +7,8 @@
 //! checked against the planner's own plan, so a broken candidate cannot pass
 //! silently. Synthetic inputs only; no proof or production claim.
 
+#![cfg(test)]
+
 use super::*;
 use crate::Eq;
 use crate::msm::MemoryBudget;

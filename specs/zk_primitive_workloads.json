@@ -3735,6 +3735,10 @@
     "poseidon": {
      "class": "label-only",
      "note": "Poseidon parameter tables of the State registry."
+    },
+    "sha2-256": {
+     "class": "test-or-tooling",
+     "note": "The authority registry's test-only storage_layout module fingerprints recursive baseline storage schemas for its local release evidence fixture."
     }
    }
   },
@@ -5053,6 +5057,8 @@
    "crates/iroha_core/src/smartcontracts/ivm/host/controlled_asset_locks.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/core_codec_and_contract_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/core_query_execution_tests.rs": ["iroha-hash"],
+   "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier.rs": ["iroha-hash"],
+   "crates/iroha_core/src/smartcontracts/ivm/host/generic_carrier/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/native_event_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/native_events.rs": ["iroha-hash"],
    "crates/iroha_core/src/smartcontracts/ivm/host/nested_contract_state_and_rollback_tests.rs": ["iroha-hash"],
@@ -5116,6 +5122,8 @@
    "crates/iroha_core/src/state/authority_registry/policy_borrowed.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/runtime_codec_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/state.rs": ["iroha-hash"],
+   "crates/iroha_core/src/state/authority_registry/storage_layout.rs": ["sha2-256"],
+   "crates/iroha_core/src/state/authority_registry/storage_layout/structure.rs": ["sha2-256"],
    "crates/iroha_core/src/state/authority_registry/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/authority_registry/world.rs": ["iroha-hash", "lthash", "pedersen", "poseidon"],
    "crates/iroha_core/src/state/authority_registry/zk_policy.rs": ["pedersen", "poseidon"],
@@ -5432,6 +5440,7 @@
    "crates/iroha_core_zk/src/kagemusha_spartan_native/settlement.rs": ["blake3"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1.rs": ["poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/advance_tests.rs": ["poseidon"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/archive_sent_delivery_tests.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/engineering_fixture.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/platform.rs": ["poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1.rs": ["poseidon", "sha2-256"],
@@ -6320,6 +6329,7 @@
    "crates/ivm/src/gas.rs": ["iroha-hash", "pedersen"],
    "crates/ivm/src/gas/baseline.rs": ["blake2s", "iroha-hash", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/host.rs": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sha3", "sm3"],
+   "crates/ivm/src/host/stateless_memory.rs": ["iroha-hash"],
    "crates/ivm/src/host/syscall_context.rs": ["iroha-hash"],
    "crates/ivm/src/host/tests/quantity_pointer_tests.rs": ["iroha-hash", "sha2-256"],
    "crates/ivm/src/iso20022.rs": ["sha2-256"],
@@ -6524,6 +6534,7 @@
    "crates/ivm_abi/src/state_value.rs": ["iroha-hash"],
    "crates/ivm_abi/src/syscalls.rs": ["blake2b", "iroha-hash", "keccak", "pedersen", "sha2-256", "sha3", "sm3"],
    "crates/ivm_abi/src/syscalls/access_profile_tests.rs": ["sha2-256"],
+   "crates/ivm_abi/src/syscalls/generic_carrier.rs": ["iroha-hash"],
    "crates/ivm_abi/src/syscalls_doc_gen.rs": ["blake2b", "keccak", "pedersen"],
    "crates/ivm_abi/tests/axt_policy_vectors.rs": ["iroha-hash"],
    "crates/ivm_abi/tests/norito_pointer_abi_roundtrip.rs": ["iroha-hash"],

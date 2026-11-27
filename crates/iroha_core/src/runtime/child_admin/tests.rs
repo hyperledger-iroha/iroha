@@ -217,6 +217,93 @@ fn execute(
     Executor::Initial.execute_instruction(tx, &ALICE_ID, &instruction)
 }
 
+#[cfg(feature = "sm")]
+#[test]
+fn policy_size_and_signed_rotation_envelope_have_independent_bounds() {
+    use iroha_crypto::{
+        PublicKey,
+        sm::{Sm2PrivateKey, encode_sm2_public_key_payload},
+    };
+    let (state, keys) = fixture();
+    let mut block = state.block(header());
+    let mut tx = block.transaction();
+    bind_scope(&mut tx);
+    let before = tx.world.runtime_child_admin_state.get().clone();
+    let original = &before.as_ref().unwrap().policy;
+    // SM2 authenticates the complete distinguishing identifier with each public key.
+    // One compact identifier byte occupies two encoded bytes below. A short Ed25519
+    // key gives the second roster the opposite frame-length parity.
+    let points: Vec<_> = (1..=10)
+        .map(|seed| {
+            Sm2PrivateKey::new("fixture", [seed; 32])
+                .unwrap()
+                .public_key()
+                .to_sec1_bytes(false)
+        })
+        .collect();
+    let candidate = |total_identifier_bytes: usize, short_key: Option<&PublicKey>| {
+        let mut policy = original.clone();
+        policy.revision += 1;
+        policy.admins = points
+            .iter()
+            .enumerate()
+            .map(|(i, point)| {
+                let n = total_identifier_bytes / points.len()
+                    + usize::from(i < total_identifier_bytes % points.len());
+                let envelope = encode_sm2_public_key_payload(&"x".repeat(n), point).unwrap();
+                PublicKey::from_bytes(Algorithm::Sm2, &envelope).unwrap()
+            })
+            .collect();
+        policy.admins.extend(short_key.cloned());
+        policy.admins.sort();
+        policy
+    };
+    let exact = candidate(31_977, None);
+    let oversized = candidate(31_940, Some(keys[0].public_key()));
+    assert_eq!(norito::encode_canonical(&exact).unwrap().len(), 65_536);
+    assert_eq!(norito::encode_canonical(&oversized).unwrap().len(), 65_537);
+    exact.id().unwrap();
+    assert!(matches!(oversized.id(), Err(ChildAdminErrorV1::TooLarge)));
+
+    // The original current administrators can sign this plan, but the enclosing
+    // signed transaction has its own 64 KiB ceiling before direct capture.
+    let instruction: InstructionBox = action(
+        &tx,
+        &keys[..2],
+        ChildRuntimeAdminActionV1::RotatePolicy(exact),
+    )
+    .into();
+    let external = signed(&tx, vec![instruction.clone()]);
+    assert!(
+        norito::canonical_frame_len(&external).unwrap()
+            > crate::query::signer_check::FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1
+    );
+    assert!(matches!(
+        crate::query::signer_check::native_signed_transaction_frame_attempt_v1(&external),
+        Err(ExecutionAttemptError::Rejected(
+            crate::query::signer_check::NativeCheckErrorV1::Transaction
+        ))
+    ));
+    bind(&mut tx, &external);
+    assert!(
+        capture_direct(&mut tx, &external, &ALICE_ID, &instruction, 0, true)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(tx.world.runtime_child_admin_state.get(), &before);
+
+    let encodable = candidate(28_000, None);
+    let rotate = action(
+        &tx,
+        &keys[..2],
+        ChildRuntimeAdminActionV1::RotatePolicy(encodable.clone()),
+    );
+    execute(&mut tx, rotate.into()).unwrap();
+    let committed = tx.world.runtime_child_admin_state.get().as_ref().unwrap();
+    assert_eq!(committed.policy, encodable);
+    assert_eq!(committed.next_nonce, 1);
+}
+
 #[test]
 fn threshold_schedule_cancel_and_policy_rotation_consume_exact_nonces() {
     let (state, keys) = fixture();
