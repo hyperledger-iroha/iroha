@@ -122,8 +122,10 @@ What exists so far:
   owner-only files of `nodes/peerN/secrets/` and state derives under `nodes/peerN/state/`,
   so no peer config holds a private key or a per-path state setting. Its `service_authorities` module is the opt-in
   storage layer of managed networks (`kagami localnet up --with-storage`): three storage
-  providers, their network services and the `dev.universal` publication namespace. CLI
-  parsing stays in Kagami; generation and process ownership have no CLI or GUI dependency.
+  providers, their network services and the `dev.universal` publication namespace. On a new
+  storage network, each of the four validators gets one quarter of the available host CPUs
+  (rounded down, from one to eight workers per pool) for its IVM scheduler, Rayon pool and pipeline.
+  Kagami owns CLI parsing. The generator and process manager run independently of the CLI and GUI.
   Retained private-root fee policies decode under the validated child's account
   profile; verification restores the parent caller's profile on success and failure.
 - `bootstrap`: native discovery through an installed HTTPS root, chain label and address

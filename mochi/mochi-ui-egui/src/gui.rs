@@ -8,7 +8,10 @@ mod develop;
 mod endpoints;
 mod home;
 mod ledger;
+#[cfg(test)]
+mod responsiveness_tests;
 mod theme;
+mod updates;
 mod viz;
 mod widgets;
 
@@ -27,10 +30,22 @@ use mochi_core::{
 use std::{
     collections::VecDeque,
     path::PathBuf,
+    pin::Pin,
     sync::mpsc::{self, Receiver, Sender},
+    task::{Context, Poll, Waker},
     time::{Duration, Instant},
 };
+use tokio_stream::{
+    Stream,
+    wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
+};
+use updates::UiSender;
 use widgets::icon;
+
+const STATUS_INTERVAL: Duration = Duration::from_secs(5);
+const ATTACHMENT_INTERVAL: Duration = Duration::from_secs(1);
+const LEDGER_INTERVAL: Duration = Duration::from_secs(2);
+const UPDATES_PER_FRAME: usize = 64;
 
 /// Launch the desktop; the optional argument is a workspace directory, never a configuration file.
 pub fn run(workspace: PathBuf) -> eframe::Result<()> {
@@ -268,6 +283,10 @@ enum Message {
         decision: Sender<bool>,
     },
     Progress(String),
+    StreamsOpened {
+        request: u64,
+        streams: UiResult<(ManagedBlockStream, ManagedEventStream)>,
+    },
     Deployed {
         /// The deployed contract, ready to call; absent when deployment failed.
         prefill: Option<CallPrefill>,
@@ -491,9 +510,17 @@ impl WorkspacePath {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObservationKind {
+    Selection,
+    Ledger,
+}
+
 struct Desktop {
     runtime: Option<tokio::runtime::Runtime>,
-    sender: Sender<(u64, Message)>,
+    sender: UiSender,
+    /// A read-only refresh can be superseded immediately by a user action.
+    observation: Option<(ObservationKind, Receiver<(u64, Message)>)>,
     receiver: Receiver<(u64, Message)>,
     epoch: u64,
     busy: bool,
@@ -545,13 +572,16 @@ struct Desktop {
     page: Option<StatePage>,
     filter: String,
     activity: VecDeque<ActivityLine>,
+    /// Incremented whenever the stream target changes, including a stop on the same peer.
+    stream_request: u64,
+    opening_streams: bool,
     blocks: Option<(
         ManagedBlockStream,
-        tokio::sync::broadcast::Receiver<mochi_core::BlockStreamEvent>,
+        BroadcastStream<mochi_core::BlockStreamEvent>,
     )>,
     events: Option<(
         ManagedEventStream,
-        tokio::sync::broadcast::Receiver<mochi_core::EventStreamEvent>,
+        BroadcastStream<mochi_core::EventStreamEvent>,
     )>,
     logs: String,
     drafts: String,
@@ -590,6 +620,7 @@ impl Desktop {
         theme::install(&creation.egui_ctx);
         theme::install_fonts(&creation.egui_ctx);
         let mut app = Self::model(path);
+        app.sender.bind_window(&creation.egui_ctx);
         app.brand = brand::Brand::load(&creation.egui_ctx);
         app.open();
         app
@@ -607,8 +638,9 @@ impl Desktop {
             .map(|e| format!("Cannot start desktop task runtime: {e}"));
         Self {
             runtime: runtime.ok(),
-            sender,
+            sender: UiSender::new(sender, Waker::noop().clone()),
             receiver,
+            observation: None,
             epoch: 0,
             busy: false,
             foreground: false,
@@ -651,6 +683,8 @@ impl Desktop {
             page: None,
             filter: String::new(),
             activity: VecDeque::new(),
+            stream_request: 0,
+            opening_streams: false,
             blocks: None,
             events: None,
             logs: String::new(),
@@ -688,21 +722,60 @@ impl Desktop {
     }
 
     fn spawn_task(&mut self, work: impl FnOnce() -> Message + Send + 'static) {
+        self.cancel_observation();
         self.busy = true;
         self.foreground = false;
         self.busy_since = Instant::now();
-        let sender = self.sender.clone();
-        let epoch = self.epoch;
-        std::thread::spawn(move || {
-            let _ = sender.send((epoch, work()));
-        });
+        self.sender.spawn(self.epoch, work);
+    }
+
+    fn spawn_observation(
+        &mut self,
+        kind: ObservationKind,
+        work: impl FnOnce() -> Message + Send + 'static,
+    ) {
+        if self
+            .observation
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == kind)
+        {
+            return;
+        }
+        self.cancel_observation();
+        let (sender, receiver) = mpsc::channel();
+        self.observation = Some((kind, receiver));
+        UiSender::new(sender, self.sender.waker.clone()).spawn(self.epoch, work);
+    }
+
+    fn cancel_observation(&mut self) {
+        if let Some((ObservationKind::Ledger, _)) = self.observation.take() {
+            // A superseded balance read may have consumed the dirty flag. Refresh it again.
+            self.ledger_stale = true;
+        }
+    }
+
+    fn next_update(&mut self) -> Option<(u64, Message)> {
+        if let Ok(update) = self.receiver.try_recv() {
+            return Some(update);
+        }
+        match self.observation.as_ref()?.1.try_recv() {
+            Ok(update) => {
+                self.observation = None;
+                Some(update)
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.cancel_observation();
+                None
+            }
+        }
     }
 
     fn clear_network(&mut self) {
+        self.cancel_observation();
         self.selected = None;
         self.peer = 0;
-        self.blocks = None;
-        self.events = None;
+        self.disconnect_streams();
         self.page = None;
         self.logs.clear();
         self.activity.clear();
@@ -890,11 +963,9 @@ impl Desktop {
         };
         self.attachment_poll_pending = true;
         self.last_poll = Instant::now();
-        let sender = self.sender.clone();
-        let epoch = self.epoch;
-        std::thread::spawn(move || {
+        self.sender.spawn(self.epoch, move || {
             let result = workspace.dataspace_status(&name).map_err(|e| e.to_string());
-            let _ = sender.send((epoch, Message::AttachmentObserved { name, result }));
+            Message::AttachmentObserved { name, result }
         });
     }
 
@@ -925,7 +996,7 @@ impl Desktop {
         let network = selected.network.clone();
         self.last_poll = Instant::now();
         // A background failure withdraws live context without erasing completed deployment evidence.
-        self.spawn_task(move || {
+        self.spawn_observation(ObservationKind::Selection, move || {
             Message::SelectionObserved(load_network_selection(&workspace, network))
         });
     }
@@ -949,38 +1020,56 @@ impl Desktop {
         self.connect_streams();
     }
 
+    fn disconnect_streams(&mut self) {
+        self.stream_request = self.stream_request.wrapping_add(1);
+        self.opening_streams = false;
+        self.blocks = None;
+        self.events = None;
+    }
+
     fn connect_streams(&mut self) {
         let Some(selected) = self.selected.as_ref() else {
             return;
         };
         if selected.phase != ManagedPhase::Ready {
-            self.blocks = None;
-            self.events = None;
+            self.disconnect_streams();
             return;
         }
-        if self.blocks.is_some() && self.events.is_some() {
+        if self.opening_streams || (self.blocks.is_some() && self.events.is_some()) {
             return;
         }
         let Some(runtime) = &self.runtime else {
             return;
         };
-        match selected.network.ledger_reader(self.peer) {
-            Ok(reader) => {
-                let label = format!("validator {}", self.peer + 1);
-                let blocks =
-                    ManagedBlockStream::spawn(runtime.handle(), label.clone(), reader.clone());
-                let block_rx = blocks.subscribe();
-                let events = ManagedEventStream::spawn(runtime.handle(), label, reader);
-                let event_rx = events.subscribe();
-                self.blocks = Some((blocks, block_rx));
-                self.events = Some((events, event_rx));
-            }
-            Err(error) => self.error = Some(error.to_string()),
-        }
+        let handle = runtime.handle().clone();
+        let network = selected.network.clone();
+        let peer = self.peer;
+        let request = self.stream_request;
+        self.opening_streams = true;
+        // The SDK checks the original generation on disk and builds the HTTP client here.
+        self.sender.spawn(self.epoch, move || {
+            let streams = network
+                .ledger_reader(peer)
+                .map(|reader| {
+                    let label = format!("validator {}", peer + 1);
+                    (
+                        ManagedBlockStream::spawn(&handle, label.clone(), reader.clone()),
+                        ManagedEventStream::spawn(&handle, label, reader),
+                    )
+                })
+                .map_err(|e| e.to_string());
+            Message::StreamsOpened { request, streams }
+        });
     }
 
     fn poll(&mut self) {
-        while let Ok((epoch, message)) = self.receiver.try_recv() {
+        for received in 1..=UPDATES_PER_FRAME {
+            let Some((epoch, message)) = self.next_update() else {
+                break;
+            };
+            if received == UPDATES_PER_FRAME {
+                self.sender.waker.wake_by_ref();
+            }
             if epoch != self.epoch {
                 continue;
             }
@@ -1006,6 +1095,21 @@ impl Desktop {
                         self.attachment_poll_pending = false;
                         if let Ok(Some(status)) = result {
                             self.attachment_progress = Some(status);
+                        }
+                    }
+                    continue;
+                }
+                Message::StreamsOpened { request, streams } => {
+                    if self.opening_streams && self.stream_request == request {
+                        self.opening_streams = false;
+                        match streams {
+                            Ok((blocks, events)) => {
+                                let block_rx = blocks.subscribe().into();
+                                let event_rx = events.subscribe().into();
+                                self.blocks = Some((blocks, block_rx));
+                                self.events = Some((events, event_rx));
+                            }
+                            Err(error) => self.error = Some(error),
                         }
                     }
                     continue;
@@ -1218,7 +1322,8 @@ impl Desktop {
                 Message::Review { .. }
                 | Message::Progress(_)
                 | Message::AttachmentObserved { .. }
-                | Message::BlockTips { .. } => {}
+                | Message::BlockTips { .. }
+                | Message::StreamsOpened { .. } => {}
             }
         }
         if let Some((_, receiver)) = self.blocks.as_mut() {
@@ -1227,31 +1332,44 @@ impl Desktop {
                 &mut self.latest_height,
                 &mut self.ledger_stale,
             );
-            drain_stream(receiver, &mut self.activity, block_activity, |event| {
-                if let mochi_core::BlockStreamEvent::Block {
-                    summary,
-                    block,
-                    raw_len,
-                } = event
-                    && let Some(height) =
-                        ledger::record_block(feed, summary, Some(block.clone()), *raw_len)
-                {
-                    *latest = Some(latest.map_or(height, |current| current.max(height)));
-                    *stale = true;
-                }
-            });
+            drain_stream(
+                receiver,
+                &self.sender.waker,
+                &mut self.activity,
+                block_activity,
+                |event| {
+                    if let mochi_core::BlockStreamEvent::Block {
+                        summary,
+                        block,
+                        raw_len,
+                    } = event
+                        && let Some(height) =
+                            ledger::record_block(feed, summary, Some(block.clone()), *raw_len)
+                    {
+                        *latest = Some(latest.map_or(height, |current| current.max(height)));
+                        *stale = true;
+                    }
+                },
+            );
         }
         if let Some((_, receiver)) = self.events.as_mut() {
-            drain_stream(receiver, &mut self.activity, event_activity, |_| {});
+            drain_stream(
+                receiver,
+                &self.sender.waker,
+                &mut self.activity,
+                event_activity,
+                |_| {},
+            );
         }
         if self.attaching.is_some()
             && !self.attachment_poll_pending
-            && self.last_poll.elapsed() >= Duration::from_secs(1)
+            && self.last_poll.elapsed() >= ATTACHMENT_INTERVAL
         {
             self.observe_attachment();
         } else if !self.busy
+            && self.observation.is_none()
             && self.selected.is_some()
-            && self.last_poll.elapsed() >= Duration::from_secs(5)
+            && self.last_poll.elapsed() >= STATUS_INTERVAL
         {
             self.refresh_selection();
         }
@@ -1266,22 +1384,30 @@ impl Desktop {
             self.fetch_open_block();
         }
         // Balances follow committed blocks; idle chains make no blocks and cause no queries.
-        let wanted = self.ledger_stale || (self.ledger.is_none() && self.ledger_error.is_none());
-        if wanted
+        if self.wants_ledger()
+            && self.observation.is_none()
             && !self.busy
             && self.ready()
-            && self.last_ledger_refresh.elapsed() >= Duration::from_secs(2)
+            && self.last_ledger_refresh.elapsed() >= LEDGER_INTERVAL
         {
             self.refresh_ledger();
         }
         self.poll_block_tips();
     }
 
+    fn wants_ledger(&self) -> bool {
+        matches!(self.view, View::Home | View::Accounts | View::Composer)
+            && (self.ledger_stale || (self.ledger.is_none() && self.ledger_error.is_none()))
+    }
+
     fn refresh_ledger(&mut self) {
         let Some(selected) = &self.selected else {
             return;
         };
-        if self.busy || selected.phase != ManagedPhase::Ready {
+        if self.busy
+            || selected.phase != ManagedPhase::Ready
+            || matches!(self.observation, Some((ObservationKind::Ledger, _)))
+        {
             return;
         }
         let Some(handle) = self.runtime.as_ref().map(|r| r.handle().clone()) else {
@@ -1292,7 +1418,9 @@ impl Desktop {
         self.ledger_stale = false;
         self.last_ledger_refresh = Instant::now();
         // Background observation: keep the foreground notice, such as a just-applied hash.
-        self.spawn_task(move || Message::Ledger(fetch_ledger(&handle, &network, peer)));
+        self.spawn_observation(ObservationKind::Ledger, move || {
+            Message::Ledger(fetch_ledger(&handle, &network, peer))
+        });
     }
 
     /// Stream from another validator. Observations bound to the previous one are dropped.
@@ -1300,9 +1428,9 @@ impl Desktop {
         if self.busy || index == self.peer {
             return;
         }
+        self.cancel_observation();
         self.peer = index;
-        self.blocks = None;
-        self.events = None;
+        self.disconnect_streams();
         self.page = None;
         self.blocks_feed.clear();
         self.motion.clear_blocks();
@@ -1865,7 +1993,41 @@ impl Desktop {
         self.review_dialog(&context);
         viz::paint_shower(&context, &mut self.motion);
         widgets::show_toasts(&context);
-        context.request_repaint_after(Duration::from_millis(100));
+        // Worker completions and streams wake the window themselves. Only live observations
+        // with an actual deadline need a timer; animations schedule their own frames.
+        if self.attaching.is_some() && !self.attachment_poll_pending {
+            context.request_repaint_after(
+                ATTACHMENT_INTERVAL.saturating_sub(self.last_poll.elapsed()),
+            );
+        }
+        if !self.busy
+            && self.ready()
+            && self.runtime.is_some()
+            && self
+                .block_view
+                .as_ref()
+                .is_some_and(block_view::BlockView::wants_body)
+        {
+            context.request_repaint();
+        }
+        if !self.busy && self.observation.is_none() && self.selected.is_some() {
+            context.request_repaint_after(STATUS_INTERVAL.saturating_sub(self.last_poll.elapsed()));
+            if self.ready() && self.runtime.is_some() && self.wants_ledger() {
+                context.request_repaint_after(
+                    LEDGER_INTERVAL.saturating_sub(self.last_ledger_refresh.elapsed()),
+                );
+            }
+        }
+        if self.ready()
+            && self.runtime.is_some()
+            && self.view == View::Home
+            && !self.block_tips.pending
+        {
+            let delay = self.block_tips.started.map_or(Duration::ZERO, |started| {
+                home::BLOCK_TIP_INTERVAL.saturating_sub(started.elapsed())
+            });
+            context.request_repaint_after(delay);
+        }
     }
 }
 
@@ -2027,21 +2189,25 @@ fn fetch_ledger(
     let signer = network.signer();
     let discriminant = network.address_discriminant();
     let query = |kind, size| {
-        handle
-            .block_on(run_state_query(
-                client.clone(),
-                &reader,
-                &signer,
-                discriminant,
-                kind,
-                None,
-                std::num::NonZeroU64::new(size),
-            ))
-            .map_err(|e| e.to_string())
+        run_state_query(
+            client.clone(),
+            &reader,
+            &signer,
+            discriminant,
+            kind,
+            None,
+            std::num::NonZeroU64::new(size),
+        )
     };
-    let accounts = query(StateQueryKind::Accounts, 100)?;
-    let holdings = query(StateQueryKind::Assets, 200)?;
-    let definitions = query(StateQueryKind::AssetDefinitions, 100)?;
+    let (accounts, holdings, definitions) = handle
+        .block_on(async {
+            tokio::try_join!(
+                query(StateQueryKind::Accounts, 100),
+                query(StateQueryKind::Assets, 200),
+                query(StateQueryKind::AssetDefinitions, 100)
+            )
+        })
+        .map_err(|e| e.to_string())?;
     network.validate().map_err(|e| e.to_string())?;
     Ok(accounts::LedgerSnapshot::new(
         accounts,
@@ -2128,32 +2294,43 @@ fn event_activity(event: &mochi_core::EventStreamEvent) -> String {
     }
 }
 
-fn drain_stream<T: Clone>(
-    receiver: &mut tokio::sync::broadcast::Receiver<T>,
+fn drain_stream<T: Clone + Send + 'static>(
+    receiver: &mut BroadcastStream<T>,
+    waker: &Waker,
     activity: &mut VecDeque<ActivityLine>,
     summarize: impl Fn(&T) -> String,
     mut record: impl FnMut(&T),
 ) {
-    for _ in 0..64 {
-        match receiver.try_recv() {
-            Ok(event) => {
+    let mut cx = Context::from_waker(waker);
+    for _ in 0..UPDATES_PER_FRAME {
+        match Pin::new(&mut *receiver).poll_next(&mut cx) {
+            Poll::Ready(Some(Ok(event))) => {
                 record(&event);
                 push_activity(activity, summarize(&event));
             }
-            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(count)) => push_activity(
+            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(count)))) => push_activity(
                 activity,
                 format!(
                     "Stream display skipped {count} messages; inspect canonical block history for complete data."
                 ),
             ),
-            Err(_) => break,
+            Poll::Pending | Poll::Ready(None) => return,
         }
     }
+    // We reached the per-frame limit before registering interest in the next arrival.
+    waker.wake_by_ref();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finish_observation(desktop: &mut Desktop) {
+        let (_, receiver) = desktop.observation.take().unwrap();
+        let message = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        desktop.sender.send(message).unwrap();
+        desktop.poll();
+    }
 
     /// Run a frame for shape and interaction assertions without a texture renderer.
     pub(super) fn run_headless_frame(
@@ -2524,17 +2701,15 @@ mod tests {
         desktop.last_poll = Instant::now() - Duration::from_secs(6);
         // Exercise the exact task owner used by refresh_selection, without creating a
         // managed context or invoking native filesystem/process services from a UI test.
-        desktop.spawn_task(|| Message::Logs(Ok("original context observation".into())));
+        desktop.spawn_observation(ObservationKind::Selection, || {
+            Message::Logs(Ok("original context observation".into()))
+        });
+        assert!(!desktop.busy);
         assert_eq!(
             desktop.error.as_deref(),
             Some("new localnet failed; prepared generation retained")
         );
-        let completion = desktop
-            .receiver
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap();
-        desktop.sender.send(completion).unwrap();
-        desktop.poll();
+        finish_observation(&mut desktop);
         assert!(!desktop.busy);
         assert_eq!(desktop.logs, "original context observation");
         assert_eq!(
@@ -2907,18 +3082,13 @@ mod tests {
 
         // Use the same task owner and completion variant as refresh_selection. The context
         // must withdraw on failure while the original completed result remains inspectable.
-        desktop.spawn_task(|| {
+        desktop.spawn_observation(ObservationKind::Selection, || {
             Message::SelectionObserved(
                 Err("automatic observation lost its original context".into()),
             )
         });
-        assert!(desktop.busy);
-        let completion = desktop
-            .receiver
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap();
-        desktop.sender.send(completion).unwrap();
-        desktop.poll();
+        assert!(!desktop.busy);
+        finish_observation(&mut desktop);
         assert!(!desktop.busy);
         assert_eq!(desktop.epoch, epoch);
         assert!(desktop.selected.is_none());
@@ -3487,7 +3657,8 @@ mod tests {
 
     #[test]
     fn stream_lag_is_visible_and_draining_is_bounded() {
-        let (sender, mut receiver) = tokio::sync::broadcast::channel(2);
+        let (sender, receiver) = tokio::sync::broadcast::channel(2);
+        let mut receiver = receiver.into();
         for index in 0..10 {
             sender.send(index).unwrap();
         }
@@ -3495,6 +3666,7 @@ mod tests {
         let mut recorded = Vec::new();
         drain_stream(
             &mut receiver,
+            Waker::noop(),
             &mut activity,
             |event| event.to_string(),
             |event| recorded.push(*event),

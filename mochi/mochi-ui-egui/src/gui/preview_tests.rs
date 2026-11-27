@@ -606,8 +606,7 @@ fn design_previews_with_a_real_generation() {
             failure,
             attachment: Ok(None),
         });
-        desktop.blocks = None;
-        desktop.events = None;
+        desktop.disconnect_streams();
         desktop.last_poll = Instant::now() + Duration::from_secs(3600);
         desktop.last_ledger_refresh = Instant::now() + Duration::from_secs(3600);
     };
@@ -824,7 +823,7 @@ fn live_walkthrough_with_a_real_generation() {
             "LIVE ledger: {} accounts; developer holds {} {}",
             ledger.accounts.entries.len(),
             holding.value,
-            ledger.asset_label(holding.definition)
+            ledger.asset_label(&holding.definition)
         );
         holding.asset.to_owned()
     });

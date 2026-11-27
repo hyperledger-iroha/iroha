@@ -580,10 +580,9 @@ impl ManagedStore {
                 reservations = Some(LocalnetPorts::reserve_prepared(&retained.prepared)?);
             }
             let listener_handoff = listeners::FrontendListeners::bind(&directory)?;
-            let launcher = super::program::NativeProgram::matching(&retained.launcher)?;
             let output = directory.open_append("supervisor.log")?;
             let errors = output.try_clone()?;
-            let mut command = Command::new(&retained.launcher.path);
+            let mut command = Command::new(programs.worker_launcher(&retained.launcher)?);
             command
                 .arg("_managed-worker")
                 .arg("--root")
@@ -619,7 +618,6 @@ impl ManagedStore {
                 .arg("--startup-deadline-ns")
                 .arg(startup_deadline_ns.to_string());
             programs.validate()?;
-            launcher.validate()?;
             // These original native owners remain alive across spawn. This is a source fence,
             // not a claim that pathname execution is atomic with the validation on every OS.
             runtime::startup_remaining_until(
