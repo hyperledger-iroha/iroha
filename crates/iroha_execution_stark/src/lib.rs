@@ -45,7 +45,7 @@ pub mod verifier;
 pub use circuit::{Builder, Circuit, Expr};
 pub use params::{Params, ParamsError};
 pub use proof::{Checkpoint, Proof, Statement, max_proof_bytes};
-pub use prover::{ProveError, check_trace, circuit_id, prove};
+pub use prover::{ProveError, check_trace, circuit_id, prove, prove_with_phase_timings};
 pub use verifier::{VerifyError, verify};
 
 #[cfg(test)]
@@ -174,6 +174,45 @@ mod tests {
         let bytes = proof.to_bytes();
         assert_eq!(Proof::from_bytes(&bytes).unwrap(), proof);
         assert!(Proof::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn phase_timings_preserve_proof_bytes() {
+        let circuit = toy_circuit(8);
+        let (statement, public, states) = toy_run(200, circuit.rows());
+        let params = fast_params();
+        let plain = prove(&circuit, &params, &statement, &public, &states).unwrap();
+        let timed =
+            prove_with_phase_timings(&circuit, &params, &statement, &public, &states).unwrap();
+        assert_eq!(plain.to_bytes(), timed.to_bytes());
+        verify(&circuit, &params, &statement, &public, &timed).unwrap();
+    }
+
+    #[test]
+    fn phase_reports_require_the_explicit_prover_call() {
+        // Each fresh test process inherits the benchmark switch. The library's default
+        // stays quiet, and the default-plus-timed pair emits exactly one phase report.
+        let exe = std::env::current_exe().unwrap();
+        for (test, reports) in [
+            ("tests::toy_game_proves_and_verifies", 0),
+            ("tests::phase_timings_preserve_proof_bytes", 1),
+        ] {
+            let child = std::process::Command::new(&exe)
+                .args(["--exact", test, "--nocapture"])
+                .env("IROHA_EXECUTION_STARK_TIMINGS", "1")
+                .output()
+                .unwrap();
+            assert!(child.status.success());
+            assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"));
+            let stderr = String::from_utf8(child.stderr).unwrap();
+            assert_eq!(
+                stderr
+                    .lines()
+                    .filter(|line| line.contains("total wall"))
+                    .count(),
+                reports * 11
+            );
+        }
     }
 
     #[test]

@@ -141,9 +141,13 @@ cargo test -p iroha_execution_stark --release
 `race_bench` takes `<NeonTokyo|Harbor|Sakura> <players 1-8> <throttle-percent 0-100> <seed>` and an
 optional lookups-per-helper (1–4); anything else exits with status 2. It prints the binary hash,
 arguments, Rayon threads, circuit identity, replay digest and proof hash before the timings. The
-tests cover field, NTT, Merkle, transcript and FRI units, a toy game with tampering and divergence rejection,
-every RaceV1 tick against the native port (full races in release builds), padding and adapter
-regressions, and `tests/race_oracle.rs`, which compiles `iroha_core_privacy`'s own `race.rs` and
+benchmark selects `prove_with_phase_timings` when its timing variable is present. Library callers
+can use that entry point to obtain the same report for one proof. The ordinary `prove` entry
+point leaves phase timing disabled.
+
+The tests cover field, NTT, Merkle, transcript and FRI units, a toy game with tampering and
+divergence rejection, every RaceV1 tick against the native port (full races in release builds),
+padding and adapter regressions, and `tests/race_oracle.rs`, which compiles `iroha_core_privacy`'s own `race.rs` and
 `environment.rs` and compares states tick by tick.
 
 ## Status
