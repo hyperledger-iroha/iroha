@@ -834,6 +834,10 @@ wallet dimensions the table occupies 8 MiB on Vesta and 4 MiB on Pallas per inst
 a table when the early and per-stage memory checks show enough headroom and retains it for the lifetime of that
 installation. A cold wallet below the preparation threshold continues with the ordinary fold.
 
+Against `f7a213db1c`, a fixed-entropy differential at both wallet widths reproduced all four opening proofs
+byte for byte. Each curve covered a first opening with no inherited claim and a second opening with one claim.
+The verifier checked each proof, and the next transcript challenge and blinding-stream scalar also matched.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
