@@ -510,7 +510,7 @@ mod generator_tests {
         let parent = Gens::<Vesta>::new(8);
         let prefix = parent.prefix(4);
         let independent = Gens::<Vesta>::new(4);
-        assert_eq!(prefix.g, independent.g);
+        assert_eq!(&prefix.g[..], &independent.g[..]);
         assert_eq!(prefix.h, parent.h);
         assert_eq!(prefix.u, parent.u);
         assert_ne!(prefix.h, independent.h);
