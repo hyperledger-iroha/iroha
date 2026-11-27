@@ -185,6 +185,8 @@ impl NativeStreamTokenObserverV1 {
         anchor: sorafs_manifest::signer::custody::SignerCustodyAnchorV1,
     ) -> Result<(), AttemptError> {
         // This fresh original view retires before a caller can wait on any refusal.
+        use iroha_torii::sorafs::token::paid_ready_diagnostic::{observer_floor_refusal, ObserverFloorRefusal};
+        let report = |kind| observer_floor_refusal(kind, anchor.height, request.minimum_anchor.height);
         let source = &self.source;
         let view = source.state.view();
         let floor =
@@ -193,9 +195,12 @@ impl NativeStreamTokenObserverV1 {
                 &source.binding,
                 request.minimum_anchor.height,
             )
+            .inspect_err(|_| report(ObserverFloorRefusal::Read))
             .map_err(|_| AttemptError::Terminal(Error::Refused))?
-            .ok_or(AttemptError::Terminal(Error::Refused))?;
+            .ok_or(AttemptError::Terminal(Error::Refused))
+            .inspect_err(|_| report(ObserverFloorRefusal::Absent))?;
         if floor.anchor != request.minimum_anchor || anchor.height < floor.anchor.height {
+            report(if floor.anchor != request.minimum_anchor { ObserverFloorRefusal::MinimumAnchor } else { ObserverFloorRefusal::CandidateBelowFloor });
             return Err(AttemptError::Terminal(Error::Refused));
         }
         iroha_core::query::signer_finality::verify_signer_finality_v1(
@@ -203,6 +208,7 @@ impl NativeStreamTokenObserverV1 {
             floor.anchor.height,
             floor.anchor.block_hash,
         )
+        .inspect_err(|_| report(ObserverFloorRefusal::Finality))
         .map_err(AttemptError::Native)?;
         Ok(())
     }

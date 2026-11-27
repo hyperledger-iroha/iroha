@@ -891,6 +891,22 @@ pub trait MusubiProviderAttestationInventoryReaderV1: Send + Sync + 'static {
             MusubiProviderAttestationInventoryErrorV1,
         >,
     >;
+    /// Read one exact entry from an already-admitted blocking worker.
+    ///
+    /// The worker retains its query permit and decoder across this call. Native file readers
+    /// can perform the bounded read on that worker. Asynchronous adapters use their normal
+    /// authenticated request and the supplied runtime.
+    fn get_on_blocking_worker(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> Result<
+        Option<MusubiProviderAttestationInventoryReadbackV1>,
+        MusubiProviderAttestationInventoryErrorV1,
+    > {
+        runtime.block_on(self.get(scope, key))
+    }
     /// Read the complete bounded provider-sorted inventory for one scope.
     fn inventory<'a>(
         &'a self,

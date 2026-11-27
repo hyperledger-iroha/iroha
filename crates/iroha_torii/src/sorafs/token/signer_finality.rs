@@ -70,6 +70,27 @@ pub(super) trait SignerFinalityV1: Send + Sync {
         observation: &SignerStreamTokenStateObservationBodyV1,
         completed: Option<&CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError>;
+    fn validate_floors(
+        &self,
+        minima: [SignerCustodyAnchorV1; 2],
+        candidate: SignerCustodyAnchorV1,
+        floor: FinalityFloorV1,
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
+    ) -> Result<(), StreamTokenIssuerError> {
+        for minimum in minima {
+            self.validate(
+                minimum,
+                candidate,
+                floor,
+                historical,
+                observation,
+                completed,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct CoreFinalityV1 {
@@ -144,13 +165,77 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         observation: &SignerStreamTokenStateObservationBodyV1,
         completed: Option<&CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError> {
+        self.validate_cut(
+            [minimum; 2],
+            candidate,
+            floor,
+            historical,
+            observation,
+            completed,
+        )
+    }
+    fn validate_floors(
+        &self,
+        minima: [SignerCustodyAnchorV1; 2],
+        candidate: SignerCustodyAnchorV1,
+        floor: FinalityFloorV1,
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
+    ) -> Result<(), StreamTokenIssuerError> {
+        if norito::core::decode_limits_active() {
+            // A finite outer decoder owns both original observations and their refusal order.
+            for minimum in minima {
+                self.validate(
+                    minimum,
+                    candidate,
+                    floor,
+                    historical,
+                    observation,
+                    completed,
+                )?;
+            }
+            return Ok(());
+        }
+        let initial_tip = self.state.latest_block_hash_fast();
+        self.validate_cut(minima, candidate, floor, historical, observation, completed)?;
+        if self.state.latest_block_hash_fast() != initial_tip {
+            // A newly committed block can change custody or registration. Give the
+            // serialized minimum its original independent observation on that tip.
+            self.validate(
+                minima[1],
+                candidate,
+                floor,
+                historical,
+                observation,
+                completed,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl CoreFinalityV1 {
+    fn validate_cut(
+        &self,
+        minima: [SignerCustodyAnchorV1; 2],
+        candidate: SignerCustodyAnchorV1,
+        floor: FinalityFloorV1,
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
+    ) -> Result<(), StreamTokenIssuerError> {
+        super::paid_ready_diagnostic::stage("cut_subject");
+        let [minimum, serialized] = minima;
         if let Some(proof) = completed {
             proof.validate(observation)?;
         } else {
             reject_unproved_completion(observation)?;
         }
         let view = self.state.view();
+        super::paid_ready_diagnostic::stage("cut_provider");
         check_registered_provider(&view, &self.pins)?;
+        super::paid_ready_diagnostic::stage("cut_historical_set");
         if historical.is_empty()
             || historical.len() > 3
             || !matches!(historical[0], HistoricalFinalityV1::Custody(anchor)
@@ -162,6 +247,7 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         // a reader for each endpoint would reverify the same prefix many times; retaining it
         // across calls would conceal changed durable evidence or current policy.
         let latest = u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())?;
+        super::paid_ready_diagnostic::heights(Some(candidate.height), floor.height, Some(latest));
         // Startup only qualifies custody; it grants no operation or serving authority. A
         // separately certified descendant may preserve that exact custody while this signed
         // reply is in flight. Every live operation/admission phase still requires the exact tip.
@@ -179,6 +265,9 @@ impl SignerFinalityV1 for CoreFinalityV1 {
             floor,
             HistoricalFinalityV1::Custody(candidate).coordinates(),
         ]);
+        if serialized != minimum {
+            targets.push(HistoricalFinalityV1::Custody(serialized).coordinates());
+        }
         targets.extend(historical.iter().map(|anchor| anchor.coordinates()));
         if startup_descendant {
             targets.push(FinalityFloorV1 {
@@ -190,12 +279,21 @@ impl SignerFinalityV1 for CoreFinalityV1 {
                     .ok_or_else(unavailable)?,
             });
         }
+        super::paid_ready_diagnostic::stage("cut_certified_targets");
         let verified = VerifiedFinalityTargetsV1::verify(&view, &targets)?;
+        super::paid_ready_diagnostic::stage("cut_minimum_anchor");
         verified.check_anchor(&self.pins, minimum)?;
+        if serialized != minimum {
+            super::paid_ready_diagnostic::stage("cut_serialized_anchor");
+            verified.check_anchor(&self.pins, serialized)?;
+        }
+        super::paid_ready_diagnostic::stage("cut_candidate_anchor");
         let current = verified.check_anchor(&self.pins, candidate)?;
+        super::paid_ready_diagnostic::stage("cut_observed_control");
         check_observed_control(&current, candidate, observation)?;
         for anchor in historical {
             if let HistoricalFinalityV1::Custody(anchor) = anchor {
+                super::paid_ready_diagnostic::stage("cut_historical_anchor");
                 verified.check_anchor(&self.pins, *anchor)?;
             }
         }
@@ -214,11 +312,25 @@ impl SignerFinalityV1 for CoreFinalityV1 {
             }
             check_observed_control(&latest_state, candidate, observation)?;
         }
-        if candidate.height < floor.height
-            || (candidate.height < latest && !startup_descendant)
-            || candidate.height < minimum.height
-            || (candidate.height == minimum.height && candidate != minimum)
+        if super::paid_ready_diagnostic::refused(candidate.height < floor.height, "candidate_below_floor")
+            || super::paid_ready_diagnostic::refused(candidate.height < minimum.height, "candidate_below_minimum")
+            || super::paid_ready_diagnostic::refused((candidate.height == minimum.height && candidate != minimum), "same_height_minimum_mismatch")
+            || super::paid_ready_diagnostic::refused(candidate.height < serialized.height, "candidate_below_serialized")
+            || super::paid_ready_diagnostic::refused((candidate.height == serialized.height && candidate != serialized), "same_height_serialized_mismatch")
         {
+            return Err(unavailable());
+        }
+        if candidate.height < latest && !startup_descendant {
+            if completed.is_none()
+                && observation.phase == SignerStreamTokenObservationPhaseV1::BeforeProvider
+                && matches!(
+                    observation.subject,
+                    SignerStreamTokenStateSubjectV1::CurrentCustody { .. }
+                )
+            {
+                return Err(StreamTokenIssuerError::BeforeProviderTipAdvanced);
+            }
+            super::paid_ready_diagnostic::stage("cut_candidate_precedes_latest");
             return Err(unavailable());
         }
         Ok(())

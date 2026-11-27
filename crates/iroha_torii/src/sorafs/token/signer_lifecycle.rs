@@ -65,6 +65,15 @@ struct QueryFloor {
     not_before: u64,
     challenge: [u8; 32],
 }
+// One paid grant cannot occupy the proof reader indefinitely on a continually advancing chain.
+const MAX_PAID_CURRENT_REFRESHES: usize = 8;
+
+enum Submission {
+    Sign,
+    Paid,
+    Recover,
+}
+
 pub(super) struct SignerDriverV1 {
     pins: StreamTokenSignerPinsV1,
     client: Arc<dyn StreamTokenSignerClientV1>,
@@ -136,7 +145,9 @@ impl SignerDriverV1 {
         let minimum = history.anchor;
         let not_before = now.max(history.trusted_at).max(history.observed_at);
         drop(history);
+        super::paid_ready_diagnostic::stage("query_floor_capture");
         let finality = self.finality.capture(minimum)?;
+        super::paid_ready_diagnostic::stage("query_floor_challenge");
         let challenge = self.clock.challenge()?;
         if challenge == [0; 32] {
             return Err(StreamTokenIssuerError::RuntimeSignerUnavailable);
@@ -157,68 +168,69 @@ impl SignerDriverV1 {
         token_window: Option<(u64, u64)>,
         completed: Option<&super::signer_completed_finality::CompletedFinalityV1>,
     ) -> Result<u64, StreamTokenIssuerError> {
+        super::paid_ready_diagnostic::stage("accept_handle");
         self.check_handles()?;
         let candidate = custody.current_anchor();
+        super::paid_ready_diagnostic::heights(Some(candidate.height), floor.finality.height, None);
         let observed_at = observation.observed_at_unix_ms;
+        super::paid_ready_diagnostic::stage("accept_history_lock");
         let mut history = self
             .history
             .lock()
             .map_err(|_| StreamTokenIssuerError::SignerStateChanged)?;
+        super::paid_ready_diagnostic::stage("accept_clock_read");
         let now = self.clock.now_unix_ms()?;
-        if now < history.trusted_at
-            || observed_at < history.observed_at
-            || observed_at > now
-            || candidate.height < history.anchor.height
-            || (candidate.height == history.anchor.height && candidate != history.anchor)
+        if super::paid_ready_diagnostic::refused(now < history.trusted_at, "trusted_clock_regressed")
+            || super::paid_ready_diagnostic::refused(observed_at < history.observed_at, "observation_clock_regressed")
+            || super::paid_ready_diagnostic::refused(observed_at > now, "observation_after_clock")
+            || super::paid_ready_diagnostic::refused(candidate.height < history.anchor.height, "candidate_below_history")
+            || super::paid_ready_diagnostic::refused((candidate.height == history.anchor.height && candidate != history.anchor), "same_height_history_mismatch")
         {
             return Err(StreamTokenIssuerError::SignerStateChanged);
         }
         // Reobserve local finality after evidence authentication and while serializing publication
         // against concurrent successful observations. No runtime client I/O occurs under this lock.
-        self.finality.validate(
-            floor.minimum,
+        super::paid_ready_diagnostic::stage("validate_floors");
+        self.finality.validate_floors(
+            [floor.minimum, history.anchor],
             candidate,
             floor.finality,
             historical,
             observation,
             completed,
         )?;
-        self.finality.validate(
-            history.anchor,
-            candidate,
-            floor.finality,
-            historical,
-            observation,
-            completed,
-        )?;
+        super::paid_ready_diagnostic::stage("post_finality_handles");
         self.check_handles()?;
+        super::paid_ready_diagnostic::stage("accept_clock");
         // Time is sampled again after potentially expensive durable finality reads. Every bound
         // below belongs to the same canonical observation already authenticated by the sole full
         // verifier; no Expected is reconstructed or reused to extend its lifetime.
+        super::paid_ready_diagnostic::stage("accept_clock_read");
         let now = self.clock.now_unix_ms()?;
-        if now < history.trusted_at || now < custody.verified_at_unix_ms() {
+        if super::paid_ready_diagnostic::refused(now < history.trusted_at, "trusted_clock_regressed") || super::paid_ready_diagnostic::refused(now < custody.verified_at_unix_ms(), "clock_before_verification") {
             return Err(StreamTokenIssuerError::SignerClockRollback);
         }
+        super::paid_ready_diagnostic::stage("accept_clock_bounds");
         let earliest = now
             .checked_sub(self.pins.clock_uncertainty_ms())
             .ok_or_else(evidence_error)?;
         let latest = now
             .checked_add(self.pins.clock_uncertainty_ms())
             .ok_or_else(evidence_error)?;
-        if earliest < custody.statement().issued_at_unix_ms
-            || earliest < self.pins.custody_trust().active_from_unix_ms
-            || earliest < self.pins.observer_trust().active_from_unix_ms
-            || latest >= custody.statement().expires_at_unix_ms
-            || latest >= self.pins.custody_trust().active_until_unix_ms
-            || latest >= self.pins.observer_trust().active_until_unix_ms
-            || latest >= observation.expires_at_unix_ms
-            || now < observed_at
-            || latest - observed_at > self.pins.custody_trust().max_anchor_age_ms
-            || latest - observed_at > self.pins.observer_trust().max_state_age_ms
+        if super::paid_ready_diagnostic::refused(earliest < custody.statement().issued_at_unix_ms, "custody_not_yet_valid")
+            || super::paid_ready_diagnostic::refused(earliest < self.pins.custody_trust().active_from_unix_ms, "custody_trust_not_yet_valid")
+            || super::paid_ready_diagnostic::refused(earliest < self.pins.observer_trust().active_from_unix_ms, "observer_trust_not_yet_valid")
+            || super::paid_ready_diagnostic::refused(latest >= custody.statement().expires_at_unix_ms, "custody_expired")
+            || super::paid_ready_diagnostic::refused(latest >= self.pins.custody_trust().active_until_unix_ms, "custody_trust_expired")
+            || super::paid_ready_diagnostic::refused(latest >= self.pins.observer_trust().active_until_unix_ms, "observer_trust_expired")
+            || super::paid_ready_diagnostic::refused(latest >= observation.expires_at_unix_ms, "observation_expired")
+            || super::paid_ready_diagnostic::refused(now < observed_at, "clock_before_observation")
+            || super::paid_ready_diagnostic::refused(latest - observed_at > self.pins.custody_trust().max_anchor_age_ms, "anchor_age")
+            || super::paid_ready_diagnostic::refused(latest - observed_at > self.pins.observer_trust().max_state_age_ms, "observer_state_age")
             || token_window.is_some_and(|(issued, expires)| {
-                latest >= expires
-                    || issued
-                        > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1)
+                super::paid_ready_diagnostic::refused(latest >= expires, "original_grant_expired")
+                    || super::paid_ready_diagnostic::refused(issued
+                        > (earliest / 1_000).saturating_add(STREAM_TOKEN_MAX_FUTURE_SKEW_SECS_V1), "original_grant_future")
             })
         {
             return Err(evidence_error());
@@ -233,7 +245,10 @@ impl SignerDriverV1 {
         phase: Phase,
         token_window: Option<(u64, u64)>,
     ) -> Result<(VerifiedStreamTokenSignerQualificationV1, u64), StreamTokenIssuerError> {
+        super::paid_ready_diagnostic::stage("query_floor_start");
         let floor = self.query_floor()?;
+        super::paid_ready_diagnostic::stage("current_expected");
+        super::paid_ready_diagnostic::heights(None, floor.finality.height, None);
         let mut attempt = SignerStreamTokenObservationExpectedV1::current(
             self.pins.binding(),
             phase,
@@ -244,15 +259,20 @@ impl SignerDriverV1 {
         .map_err(|error| evidence_admission_error(&error))?;
         // `attempt` is owned by this invocation and is dropped on transport failure; never cached,
         // reconstructed from a response or reused after any validation outcome.
+        super::paid_ready_diagnostic::stage("observer_call");
         let reply = self
             .observer
             .observe(attempt.request())
             .map_err(map_call_error)?;
+        super::paid_ready_diagnostic::stage("post_observer_handles");
         self.check_handles()?;
+        super::paid_ready_diagnostic::stage("current_reply_shape");
         let (record, observation) = reply.current_evidence().ok_or_else(evidence_error)?;
+        super::paid_ready_diagnostic::stage("current_reply_decode");
         let decoded_observation =
             SignerStreamTokenStateObservationV1::decode_canonical(observation)
                 .map_err(|error| evidence_admission_error(&error))?;
+        super::paid_ready_diagnostic::stage("current_reply_verify");
         let verified = verify_stream_token_signer_current_evidence_v1(
             record,
             observation,
@@ -263,6 +283,7 @@ impl SignerDriverV1 {
             self.now_unix_ms()?,
         )
         .map_err(|error| evidence_admission_error(&error))?;
+        super::paid_ready_diagnostic::stage("accept_handle");
         let validated_at = self.accept(
             verified.custody(),
             &decoded_observation.body,
@@ -298,24 +319,81 @@ impl SignerDriverV1 {
         &self,
         body: StreamTokenBodyV1,
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
+        self.complete(body, Submission::Sign)
+    }
+
+    /// Reopen only the existing exact signer receipt after a cancelled account delivery.
+    pub(super) fn recover_undelivered(
+        &self,
+        body: StreamTokenBodyV1,
+    ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
+        self.complete(body, Submission::Recover)
+    }
+
+    pub(super) fn sign_paid(
+        &self,
+        body: StreamTokenBodyV1,
+    ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
+        self.complete(body, Submission::Paid)
+    }
+
+    fn complete(
+        &self,
+        body: StreamTokenBodyV1,
+        submission: Submission,
+    ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
         let prepared = SignerStreamTokenExpectedV1::new(&body, self.pins.binding())
             .map_err(|_| evidence_error())?;
         // Production cannot make a signer reservation while the completed-operation proof
         // required for release has no authoritative source. This is before provider I/O.
         self.require_completed_proof_source()?;
-        let (original, _) = self.current(Phase::BeforeProvider, None)?;
+        // A paid worker still owns its one original and its permits here. If the certified
+        // tip moved while authenticating Current, obtain a fresh challenge before any Sign.
+        // Restart/recovery and every phase following dispatch keep their original behavior.
+        let began = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(body.ttl_epoch.saturating_sub(body.issued_at));
+        let grant_live = || -> Result<bool, StreamTokenIssuerError> {
+            Ok(began.elapsed() < window && self.now_unix_ms()? / 1000 < body.ttl_epoch)
+        };
+        let mut refreshes = 0;
+        let original = loop {
+            if refreshes != 0 && !grant_live()? {
+                return Err(StreamTokenIssuerError::SignerStateChanged);
+            }
+            match self.current(Phase::BeforeProvider, None) {
+                Ok((original, _)) => break original,
+                Err(StreamTokenIssuerError::BeforeProviderTipAdvanced) => {
+                    if !matches!(submission, Submission::Paid)
+                        || refreshes == MAX_PAID_CURRENT_REFRESHES
+                    {
+                        return Err(StreamTokenIssuerError::SignerFinalityUnavailable);
+                    }
+                    refreshes += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if refreshes != 0 && !grant_live()? {
+            return Err(StreamTokenIssuerError::SignerStateChanged);
+        }
         self.check_handles()?;
         // The exact body and prepared operation survive an ambiguous result. Recovery is one
         // read-only lookup, never a second reservation, signature or HTTP issuance.
-        let raw_receipt = match self.client.sign(&prepared, &body) {
-            Ok(receipt) => receipt,
-            Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion) => {
-                self.check_handles()?;
-                self.client
-                    .recover(&prepared, &body)
-                    .map_err(map_call_error)?
+        let raw_receipt = if matches!(submission, Submission::Recover) {
+            self.client
+                .recover(&prepared, &body)
+                .map_err(map_call_error)?
+        } else {
+            match self.client.sign(&prepared, &body) {
+                Ok(receipt) => receipt,
+                Err(StreamTokenSignerCallErrorV1::AmbiguousCompletion) => {
+                    self.check_handles()?;
+                    self.client
+                        .recover(&prepared, &body)
+                        .map_err(map_call_error)?
+                }
+                Err(error) => return Err(map_call_error(error)),
             }
-            Err(error) => return Err(map_call_error(error)),
         };
         self.check_handles()?;
         let claims = ReceiptClaims(

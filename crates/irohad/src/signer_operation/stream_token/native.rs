@@ -165,29 +165,10 @@ impl NativeStreamTokenSourceV1 {
         CapturedPhaseV1::capture(self, request.intent().operation_id)?
             .take_operation(request, reservation)
     }
-    fn mutate(
+    fn submit_mutation(
         &self,
-        action: Action,
-        operation_id: [u8; 32],
+        instruction: MutateSorafsStreamTokenAuthority,
     ) -> Result<[u8; 32], SignerOperationErrorV1> {
-        let current = self.capture(operation_id)?;
-        if current.operator != self.transactions.operator() {
-            return Err(SignerOperationErrorV1::CustodyChanged);
-        }
-        let sorafs_manifest::signer::protocol::SignerPurposeBindingV1::StreamToken { provider_id } =
-            self.binding.purpose
-        else {
-            return Err(SignerOperationErrorV1::InvalidOperation);
-        };
-        let instruction = MutateSorafsStreamTokenAuthority {
-            request: StreamTokenAuthorityRequestV1 {
-                network_id: self.binding.network_id,
-                provider_id: ProviderId::new(provider_id),
-                expected_control_revision: current.control_revision,
-                expected_control_digest: current.anchor.state_digest,
-                action,
-            },
-        };
         let deadline = self.transactions.start_deadline()?;
         let signed = self.transactions.sign(&instruction, false, deadline)?;
         self.transactions.submit_and_wait(&signed, deadline)?;
@@ -242,10 +223,9 @@ impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {
             review.reviewed(),
             Phase::Current(request.intent().previous_audit),
         )?)?;
-        let submitted = self.mutate(
-            Action::Reserve(*review.reviewed()),
-            request.intent().operation_id,
-        )?;
+        let reserve = CapturedPhaseV1::capture(self, request.intent().operation_id)?
+            .into_mutation(Action::Reserve(*review.reviewed()))?;
+        let submitted = self.submit_mutation(reserve)?;
         let row = self.operation(request, None)?;
         if row.operation.outcome != StreamTokenOutcomeV1::Reserved
             || row.reserved_execution.transaction_hash != submitted
@@ -268,37 +248,14 @@ impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {
         &self,
         request: &SignerOperationCommitRequestV1<'_>,
     ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1> {
-        let row = self.operation(
-            request.check().request(),
-            Some(request.check().reservation()),
+        let complete = self.prepare_complete(request)?;
+        let submitted = self.submit_mutation(complete)?;
+        let check = self.prepare_committed_transaction_check(
+            request,
+            SignerCommittedObservationPhaseV1::AfterCommit,
+            Some(submitted),
         )?;
-        if row.operation.outcome != StreamTokenOutcomeV1::Reserved
-            || row.operation.reviewed.request.original_custody != request.original_custody()
-        {
-            return Err(SignerOperationErrorV1::CustodyChanged);
-        }
-        let submitted = self.mutate(
-            Action::Complete(StreamTokenCompleteRequestV1 {
-                reviewed: row.operation.reviewed,
-                reservation: request.check().reservation(),
-                commitment: request.commitment(),
-                signatures_digest: request.signatures_digest(),
-            }),
-            row.operation.reviewed.request.operation_id,
-        )?;
-        let committed = self.operation(
-            request.check().request(),
-            Some(request.check().reservation()),
-        )?;
-        if committed
-            .terminal_execution
-            .as_ref()
-            .map(|execution| execution.transaction_hash)
-            != Some(submitted)
-        {
-            return Err(SignerOperationErrorV1::ReservationConflict);
-        }
-        self.observe_committed(request, SignerCommittedObservationPhaseV1::AfterCommit)
+        self.checked_context(&self.checked_prepared(check)?)
     }
     fn observe_committed(
         &self,

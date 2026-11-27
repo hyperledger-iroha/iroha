@@ -311,3 +311,51 @@ fn native_storage_decode_budget_matches_the_archive_ceiling() {
     );
     assert_eq!(limits.max_nesting_depth(), 64);
 }
+
+#[test]
+fn only_retaining_a_pin_signature_advances_again_in_the_same_call() {
+    use NativeMusubiPinPhaseV1::{Advance, Check, Initialize, Pin, RetainedPin};
+    for first in [Check, Initialize, Advance, Pin, RetainedPin] {
+        let mut phases = [first, RetainedPin].into_iter();
+        let progress = advance_past_retained_pin(|| {
+            Ok(NativeMusubiPinProgressV1::Pending(
+                phases.next().expect("at most two advances per call"),
+            ))
+        })
+        .unwrap();
+        assert_eq!(phases.len(), usize::from(first != RetainedPin));
+        assert!(matches!(progress, NativeMusubiPinProgressV1::Pending(phase) if phase == first));
+    }
+    let mut calls = 0;
+    assert!(
+        advance_past_retained_pin(|| {
+            calls += 1;
+            if calls == 1 {
+                Ok(NativeMusubiPinProgressV1::Pending(RetainedPin))
+            } else {
+                eyre::bail!("original deadline closed")
+            }
+        })
+        .is_err()
+    );
+    assert_eq!(calls, 2);
+}
+
+#[test]
+fn native_source_selection_rechecks_certified_registration_and_preserves_failure_class() {
+    let fixture = crate::musubi_publication_service::finality::tests::reader_fixture();
+    let request = from_source(fixture.query.clone());
+    let checked = |request: &MusubiStorageCoordinationRequestV1| {
+        norito::with_decode_limits_scope(decode_limits().unwrap(), || {
+            verified_source(&fixture.reader, request)
+        })
+    };
+    assert_eq!(checked(&request).unwrap(), fixture.query);
+    let mut changed = from_source(fixture.query.clone());
+    changed.finalized_registration.transaction_hash[0] ^= 1;
+    assert_eq!(checked(&changed).unwrap_err(), BackendError::Permanent);
+    let mut ahead = from_source(fixture.query.clone());
+    ahead.finalized_registration.snapshot.finalized_height += 1_000;
+    assert_eq!(checked(&ahead).unwrap_err(), BackendError::Retryable);
+    assert_eq!(checked(&request).unwrap(), fixture.query);
+}

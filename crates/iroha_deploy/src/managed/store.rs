@@ -1558,10 +1558,27 @@ fn exchange_optional(
         Err(transport::RequestFailure::Refused(error)) => Err(error.into()),
         Err(transport::RequestFailure::Unavailable(error)) => {
             let error = Error::from(error);
-            let _runtime = match acquire(directory, "runtime.lock", &context.name) {
-                Ok(runtime) => runtime,
-                Err(Error::Busy(_)) => return Err(error),
-                Err(refusal) => return Err(refusal),
+            // A closing supervisor can drop the authenticated stream just before its
+            // runtime gate. Observe that gate without resending Down or extending its deadline.
+            let stream_eof =
+                matches!(&error, Error::Io(io) if io.kind() == std::io::ErrorKind::UnexpectedEof);
+            let release_by = deadline.min(Instant::now() + STOP_REPLY_ALLOWANCE);
+            let _runtime = loop {
+                match acquire(directory, "runtime.lock", &context.name) {
+                    Ok(runtime) => break runtime,
+                    Err(Error::Busy(_)) if stream_eof && Instant::now() < release_by => {
+                        #[cfg(test)]
+                        pre_session_tests::before_wait();
+                        thread::sleep(
+                            POLL.min(release_by.saturating_duration_since(Instant::now())),
+                        );
+                        if Instant::now() >= release_by {
+                            return Err(error);
+                        }
+                    }
+                    Err(Error::Busy(_)) => return Err(error),
+                    Err(refusal) => return Err(refusal),
+                }
             };
             // Only a closed original owner may reconcile an unavailable peer. The admitted
             // session's native object, exact metadata and bytes must remain unchanged.

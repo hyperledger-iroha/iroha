@@ -21,7 +21,11 @@ use super::{
 use crate::runtime_credential::{load_bound_software_key_v1, load_bounded_runtime_credential_v1};
 use iroha_config::parameters::actual::MusubiPublication;
 use iroha_core::{
-    query::provider_admission::with_genesis_provider_admission_originals_v1, state::StateReadOnly,
+    query::provider_admission::{
+        GenesisProviderOriginalsReadErrorV1, classify_genesis_provider_admission_originals_v1,
+        with_genesis_provider_admission_originals_v1,
+    },
+    state::StateReadOnly,
 };
 use iroha_data_model::{account::AccountController, sorafs::capacity::ProviderId};
 use iroha_musubi_service::SoftwareMusubiSeedIngressReceiptSignerV1;
@@ -43,6 +47,88 @@ pub fn select_factory(
     cache: Option<Cache>,
     supplied: Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>,
     emergency_fast: bool,
+) -> Result<Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>, Error> {
+    select(config, context, cache, supplied, emergency_fast, None)
+}
+
+/// Only a managed launch can spend its original listener/worker deadline on one State publication.
+pub async fn select_factory_at_startup(
+    config: &MusubiPublication,
+    context: Option<&MusubiPublicationPrivateServiceContextV1>,
+    cache: Option<Cache>,
+    supplied: Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>,
+    emergency_fast: bool,
+    deadline_ns: Option<u128>,
+    shutdown: iroha_futures::supervisor::ShutdownSignal,
+) -> Result<Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>, Error> {
+    let Some((deadline, context)) = deadline_ns.zip(context) else {
+        return select_factory(config, context, cache, supplied, emergency_fast);
+    };
+    if emergency_fast
+        || config.installation.is_none()
+        || supplied.is_some()
+        || norito::core::decode_limits_active()
+    {
+        return select_factory(config, Some(context), cache, supplied, emergency_fast);
+    }
+    let mut ahead = None;
+    let first = select(
+        config,
+        Some(context),
+        cache.clone(),
+        None,
+        false,
+        Some(&mut ahead),
+    );
+    let Some(required) = ahead else {
+        return first;
+    };
+    drop(first);
+    let state = context.state();
+    wait_for_original_frontier(&state, required, deadline, &shutdown).await?;
+    let result = select_factory(config, Some(context), cache, None, false)?;
+    if shutdown.is_sent()
+        || iroha_managed_ipc::continuous_remaining(deadline)
+            .ok()
+            .flatten()
+            .is_none()
+    {
+        return Err(Error::Unqualified);
+    }
+    Ok(result)
+}
+
+async fn wait_for_original_frontier(
+    state: &iroha_core::state::State,
+    required: u64,
+    deadline: u128,
+    shutdown: &iroha_futures::supervisor::ShutdownSignal,
+) -> Result<(), Error> {
+    let remaining = || {
+        iroha_managed_ipc::continuous_remaining(deadline)
+            .ok()
+            .flatten()
+            .ok_or(Error::Unqualified)
+    };
+    let wait = tokio::time::timeout(remaining()?, state.wait_for_committed_height(required));
+    tokio::select! {
+        biased;
+        () = shutdown.receive() => return Err(Error::Unqualified),
+        result = wait => result.map_err(|_| Error::Unqualified)?,
+    }
+    if shutdown.is_sent() {
+        return Err(Error::Unqualified);
+    }
+    remaining().map(|_| ())
+}
+
+fn select(
+    config: &MusubiPublication,
+    context: Option<&MusubiPublicationPrivateServiceContextV1>,
+    cache: Option<Cache>,
+    supplied: Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>,
+    emergency_fast: bool,
+    ahead: Option<&mut Option<u64>>,
 ) -> Result<Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>, Error> {
     if emergency_fast {
         return Ok(None);
@@ -84,48 +170,112 @@ pub fn select_factory(
     let view = state.view();
     let chain = view.chain_id().to_string();
     let mut selected = None;
-    with_genesis_provider_admission_originals_v1(&view, 3, &budget, |originals| {
+    let consume = |originals: &[(
+        iroha_data_model::account::AccountId,
+        sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1,
+    )]| {
         let invalid = iroha_core::query::provider_admission::ProviderAdmissionErrorV1;
-        if originals.len() != 3 { return Err(invalid); }
+        if originals.len() != 3 {
+            return Err(invalid);
+        }
         // Two retained exact selections exist: the ordinary client and its native callback.
         // Admit their conservative nested material envelope before copying either one.
-        let retained_bytes = originals.iter().try_fold(0usize, |total, (owner, material)| {
-            let material_len = norito::canonical_frame_len(material).map_err(|_| invalid)?;
-            let owner_len = norito::canonical_frame_len(owner).map_err(|_| invalid)?;
-            total.checked_add(norito::canonical_decode_limits(material_len).max_total_allocated_bytes())
-                .and_then(|total| total.checked_add(owner_len)).ok_or(invalid)
-        })?.checked_mul(2).ok_or(invalid)?;
+        let retained_bytes = originals
+            .iter()
+            .try_fold(0usize, |total, (owner, material)| {
+                let material_len = norito::canonical_frame_len(material).map_err(|_| invalid)?;
+                let owner_len = norito::canonical_frame_len(owner).map_err(|_| invalid)?;
+                total
+                    .checked_add(
+                        norito::canonical_decode_limits(material_len).max_total_allocated_bytes(),
+                    )
+                    .and_then(|total| total.checked_add(owner_len))
+                    .ok_or(invalid)
+            })?
+            .checked_mul(2)
+            .ok_or(invalid)?;
         let layout = Layout::array::<u8>(retained_bytes).map_err(|_| invalid)?;
-        let selection_charge = budget.try_reserve(layout).map_err(|_| invalid)?
-            .try_split(layout).map_err(|_| invalid)?;
+        let selection_charge = budget
+            .try_reserve(layout)
+            .map_err(|_| invalid)?
+            .try_split(layout)
+            .map_err(|_| invalid)?;
         let mut transports = Vec::with_capacity(3);
         let mut tls = None;
         for (owner, material) in originals {
             let provider = ProviderId::new(material.proposal.provider_id);
-            transports.push(GeneratedLocalProviderTransportV1::select(
-                context.network_id(), &chain, provider, owner, material,
-            ).map_err(|_| invalid)?);
+            transports.push(
+                GeneratedLocalProviderTransportV1::select(
+                    context.network_id(),
+                    &chain,
+                    provider,
+                    owner,
+                    material,
+                )
+                .map_err(|_| invalid)?,
+            );
             if provider == installation.seed_provider {
-                if owner != &installation.ingress_broker || tls.is_some() { return Err(invalid); }
+                if owner != &installation.ingress_broker || tls.is_some() {
+                    return Err(invalid);
+                }
                 let endpoint = &material.proposal.endpoints[0];
                 let policy = sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1::from_capabilities(&material.proposal.capabilities)
                     .map_err(|_| invalid)?.ok_or(invalid)?;
                 if installation.tls_server_name != endpoint.endpoint.host_pattern
-                    || config.private_tls_bind.port() == policy.https_port { return Err(invalid); }
-                let maximum = iroha_config::parameters::defaults::torii::transport::https::MAX_DER_BYTES;
-                let certificate = load_bounded_runtime_credential_v1(&installation.tls_certificate_file, 1, maximum).map_err(|_| invalid)?;
-                let root = load_bounded_runtime_credential_v1(&installation.tls_root_certificate_file, 1, maximum).map_err(|_| invalid)?;
-                let key = load_bounded_runtime_credential_v1(&installation.tls_private_key_file, 1, maximum).map_err(|_| invalid)?;
+                    || config.private_tls_bind.port() == policy.https_port
+                {
+                    return Err(invalid);
+                }
+                let maximum =
+                    iroha_config::parameters::defaults::torii::transport::https::MAX_DER_BYTES;
+                let certificate = load_bounded_runtime_credential_v1(
+                    &installation.tls_certificate_file,
+                    1,
+                    maximum,
+                )
+                .map_err(|_| invalid)?;
+                let root = load_bounded_runtime_credential_v1(
+                    &installation.tls_root_certificate_file,
+                    1,
+                    maximum,
+                )
+                .map_err(|_| invalid)?;
+                let key = load_bounded_runtime_credential_v1(
+                    &installation.tls_private_key_file,
+                    1,
+                    maximum,
+                )
+                .map_err(|_| invalid)?;
                 if certificate.as_slice() != endpoint.attestation.leaf_certificate
                     || endpoint.attestation.intermediate_certificates.len() != 1
-                    || root.as_slice() != endpoint.attestation.intermediate_certificates[0] { return Err(invalid); }
-                tls = Some(iroha_torii::native_https_server_identity_v1(&[certificate.as_slice()], &key).map_err(|_| invalid)?);
+                    || root.as_slice() != endpoint.attestation.intermediate_certificates[0]
+                {
+                    return Err(invalid);
+                }
+                tls = Some(
+                    iroha_torii::native_https_server_identity_v1(&[certificate.as_slice()], &key)
+                        .map_err(|_| invalid)?,
+                );
             }
         }
-        let transports: [GeneratedLocalProviderTransportV1; 3] = transports.try_into().map_err(|_| invalid)?;
+        let transports: [GeneratedLocalProviderTransportV1; 3] =
+            transports.try_into().map_err(|_| invalid)?;
         selected = Some((transports, tls.ok_or(invalid)?, selection_charge));
         Ok(())
-    }).map_err(|_| Error::Unqualified)?;
+    };
+    if let Some(ahead) = ahead {
+        classify_genesis_provider_admission_originals_v1(&view, 3, &budget, consume).map_err(
+            |err| {
+                if let GenesisProviderOriginalsReadErrorV1::StateBehind(required) = err {
+                    *ahead = Some(required);
+                }
+                Error::Unqualified
+            },
+        )?;
+    } else {
+        with_genesis_provider_admission_originals_v1(&view, 3, &budget, consume)
+            .map_err(|_| Error::Unqualified)?;
+    }
     drop(view);
     let (transports, tls, selection_charge) = selected.ok_or(Error::Unqualified)?;
     let timeout = Duration::from_millis(installation.readback_request_timeout_ms);
@@ -164,17 +314,19 @@ pub fn select_factory(
         },
     )
     .map_err(|_| Error::Unqualified)?;
-    Ok(Some(Box::new(MusubiPublicationPrivateLocalFactoryV1::new(
-        settings,
-        Box::new(signer),
-        Box::new(storage),
-        readback,
-        cache,
-        Box::new(Ingress {
-            settings: MusubiPublicationPrivateTlsSettingsV1::from_config(config),
-            tls,
-        }),
-    ))))
+    Ok(Some(Box::new(
+        MusubiPublicationPrivateLocalFactoryV1::with_storage(
+            settings,
+            Box::new(signer),
+            super::local_factory::StorageBuilder::Native(Box::new(storage)),
+            readback,
+            cache,
+            Box::new(Ingress {
+                settings: MusubiPublicationPrivateTlsSettingsV1::from_config(config),
+                tls,
+            }),
+        ),
+    )))
 }
 
 // Bind only after the local factory has successfully opened every original durable owner.

@@ -1596,7 +1596,7 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
         finality_pending_once: true,
         substitute_readback: false,
         substitute_all_readbacks: false,
-        readback_backend_failure: None,
+        readback_backend_failures: Vec::new(),
         readback_providers: Vec::new(),
         submissions: 0,
     };
@@ -1649,7 +1649,7 @@ fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
         finality_pending_once: false,
         substitute_readback: true,
         substitute_all_readbacks: false,
-        readback_backend_failure: None,
+        readback_backend_failures: Vec::new(),
         readback_providers: Vec::new(),
         submissions: 0,
     };
@@ -1693,7 +1693,7 @@ fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutatio
         finality_pending_once: false,
         substitute_readback: false,
         substitute_all_readbacks: true,
-        readback_backend_failure: None,
+        readback_backend_failures: Vec::new(),
         readback_providers: Vec::new(),
         submissions: 0,
     };
@@ -1766,7 +1766,7 @@ fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
             finality_pending_once: false,
             substitute_readback: false,
             substitute_all_readbacks: true,
-            readback_backend_failure: Some((ProviderId::new([1; 32]), failure)),
+            readback_backend_failures: vec![(ProviderId::new([1; 32]), failure)],
             readback_providers: Vec::new(),
             submissions: 0,
         };
@@ -2386,4 +2386,104 @@ fn detached_operation_ids_are_canonical_nonzero_lowercase_hex() {
             .parse::<PublicationOperationIdV1>()
             .is_err()
     );
+}
+
+#[test]
+fn acknowledged_readback_and_independent_success_resume_without_opening_a_third_paid_provider() {
+    let temp = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+    let engine = PublicationEngine::new(&store);
+    let (request, broker) = request();
+    let operation_id = request.operation_id();
+    let source = BytesSource(b"canonical-car".to_vec());
+    let mut backend = CompleteBackend {
+        broker,
+        replication_pending_once: false,
+        finality_pending_once: false,
+        substitute_readback: false,
+        substitute_all_readbacks: false,
+        readback_backend_failures: vec![(
+            ProviderId::new([1; 32]),
+            PublicationBackendError::pending_native_operation(),
+        )],
+        readback_providers: Vec::new(),
+        submissions: 0,
+    };
+    let result = engine.publish(request, &source, &mut backend);
+    assert!(
+        matches!(result, Err(PublicationError::Backend(error)) if error.is_pending_native_operation())
+    );
+    let first = ProviderId::new([1; 32]);
+    let second = ProviderId::new([2; 32]);
+    assert_eq!(backend.readback_providers, [first, second]);
+    let pending = store.load(operation_id).unwrap();
+    assert_eq!(pending.phase, PublicationPhaseV1::Readback);
+    assert!(pending.readbacks.is_empty());
+    backend.readback_backend_failures.clear();
+    assert!(matches!(
+        engine.resume(operation_id, &source, &mut backend).unwrap(),
+        PublicationAdvanceV1::Complete(_)
+    ));
+    assert_eq!(backend.readback_providers, [first, second, first, second]);
+    let completed = store.load(operation_id).unwrap();
+    assert_eq!(
+        completed
+            .readbacks
+            .iter()
+            .map(|row| row.provider)
+            .collect::<Vec<_>>(),
+        [first, second]
+    );
+    completed.validate().unwrap();
+}
+
+#[test]
+fn acknowledged_readback_only_reports_pending_while_an_independent_quorum_is_possible() {
+    let temp = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+    let engine = PublicationEngine::new(&store);
+    let (request, broker) = request();
+    let operation = request.operation_id();
+    let source = BytesSource(b"canonical-car".to_vec());
+    let first = ProviderId::new([1; 32]);
+    let second = ProviderId::new([2; 32]);
+    let third = ProviderId::new([3; 32]);
+    let mut backend = CompleteBackend {
+        broker,
+        replication_pending_once: false,
+        finality_pending_once: false,
+        substitute_readback: false,
+        substitute_all_readbacks: false,
+        readback_backend_failures: vec![
+            (first, PublicationBackendError::pending_native_operation()),
+            (
+                second,
+                PublicationBackendError::retryable("READBACK_PROVIDER_TIMEOUT"),
+            ),
+            (
+                third,
+                PublicationBackendError::permanent("READBACK_AUTHENTICATION_FAILED"),
+            ),
+        ],
+        readback_providers: Vec::new(),
+        submissions: 0,
+    };
+    assert!(matches!(engine.publish(request, &source, &mut backend),
+        Err(PublicationError::Backend(error)) if error.is_pending_native_operation()));
+    assert_eq!(backend.readback_providers, [first, second, third]);
+    let journal = store.load(operation).unwrap();
+    assert_eq!(journal.phase, PublicationPhaseV1::Readback);
+    assert!(journal.readbacks.is_empty());
+    assert_eq!(backend.submissions, 0);
+    backend.readback_backend_failures[1].1 =
+        PublicationBackendError::permanent("READBACK_AUTHENTICATION_FAILED");
+    assert!(matches!(engine.resume(operation, &source, &mut backend),
+        Err(PublicationError::Backend(error)) if error.class()==PublicationBackendFailureClass::Permanent));
+    assert_eq!(backend.submissions, 0);
+    backend.readback_backend_failures.clear();
+    assert!(matches!(
+        engine.resume(operation, &source, &mut backend).unwrap(),
+        PublicationAdvanceV1::Complete(_)
+    ));
+    assert_eq!(store.load(operation).unwrap().readbacks.len(), 2);
 }

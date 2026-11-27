@@ -807,3 +807,57 @@ fn gateway_pair_preserves_active_decode_and_owned_producers() {
     }
     no_http(&peers);
 }
+
+#[test]
+fn observation_policies_reread_the_selected_bootstrap_and_release_its_lock() {
+    let _resources = crate::managed::native_test_guard();
+    let (_temporary, owner, peers) = fixture();
+    let prepared = &owner.authority.prepared;
+    let path = bootstrap_path(&owner);
+    assert!(!path.exists());
+    assert!(owner.selected_observation_policies(prepared).is_err());
+    assert!(!path.exists());
+
+    let expected = seed_bootstrap(&owner);
+    let ordinary = || owner.open_original_bootstrap(prepared)?.selected_policies();
+    let borrowed = || owner.selected_observation_policies(prepared);
+    let (policies, images) = crate::localnet::service_authorities::count_profile_images(borrowed);
+    let (_, original_images) = crate::localnet::service_authorities::count_profile_images(ordinary);
+    assert!(images < original_images);
+    assert_eq!(
+        norito::encode_canonical(&policies.unwrap()).unwrap(),
+        expected
+    );
+
+    let parent = owner.open_original_bootstrap(prepared).unwrap();
+    assert!(borrowed().is_err());
+    drop(parent);
+    let original = path.join("initial").join("original.nrt");
+    let bytes = std::fs::read(&original).unwrap();
+    std::fs::write(&original, [0xff]).unwrap();
+    assert_eq!(
+        borrowed().err().unwrap().to_string(),
+        ordinary().err().unwrap().to_string()
+    );
+    std::fs::write(original, bytes).unwrap();
+    assert_eq!(
+        norito::encode_canonical(&borrowed().unwrap()).unwrap(),
+        expected
+    );
+
+    for allowance in [64 * 1024 * 1024, 0] {
+        let limits = norito::DecodeLimits::new(64 << 20, 64 << 20, 64 << 20, allowance, 64);
+        let a = DecodeBudgetContext::new(limits);
+        let b = DecodeBudgetContext::new(limits);
+        let wire = |r: Result<GeneratedServicePolicies>| {
+            r.map(|p| norito::encode_canonical(&p).unwrap())
+                .map_err(|e| e.to_string())
+        };
+        let old = wire(a.with(ordinary));
+        let new = wire(b.with(borrowed));
+        assert_eq!(old.is_ok(), allowance > 0);
+        assert_eq!(new, old);
+        assert_eq!(a.consumed_allocated_bytes(), b.consumed_allocated_bytes());
+    }
+    no_http(&peers);
+}

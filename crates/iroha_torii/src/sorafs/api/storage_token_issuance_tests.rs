@@ -85,6 +85,7 @@ async fn storage_token_runtime_signer_failures_are_payload_free_and_fail_closed(
             "gateway-runtime-signer-test",
         );
         let request = StreamTokenRequestDto {
+            paid_readback: None,
             manifest_id_hex: context.manifest_id_hex,
             provider_id_hex: context.provider_id_hex,
             ttl_secs: None,
@@ -188,6 +189,7 @@ async fn storage_token_rejects_provider_mismatch_and_unsafe_overrides() {
         headers
     };
     let request = |provider_id_hex: String, overrides: TokenOverrides| StreamTokenRequestDto {
+        paid_readback: None,
         manifest_id_hex: context.manifest_id_hex.clone(),
         provider_id_hex,
         ttl_secs: overrides.ttl_secs,
@@ -410,6 +412,7 @@ async fn storage_token_returns_not_found_when_disabled() {
     insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-disabled");
     insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-disabled");
     let request = StreamTokenRequestDto {
+        paid_readback: None,
         manifest_id_hex,
         provider_id_hex: hex::encode([0xEF; 32]),
         ttl_secs: None,
@@ -431,6 +434,7 @@ async fn storage_token_requires_client_header() {
     let mut headers = HeaderMap::new();
     insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-test");
     let request = StreamTokenRequestDto {
+        paid_readback: None,
         manifest_id_hex: manifest_id,
         provider_id_hex: hex::encode([0x55; 32]),
         ttl_secs: None,
@@ -456,6 +460,7 @@ async fn storage_token_emits_expected_headers() {
     insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
 
     let request = StreamTokenRequestDto {
+        paid_readback: None,
         manifest_id_hex: manifest_id,
         provider_id_hex: hex::encode([0x66; 32]),
         ttl_secs: Some(900),

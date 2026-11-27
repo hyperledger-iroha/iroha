@@ -349,15 +349,32 @@ impl MusubiPublicationPinTransactionSignerV1 {
         );
         let instruction: iroha_data_model::isi::InstructionBox =
             decode_frame(&request.instruction)?;
+        // A lost local order slot cannot yield a second payable envelope. The approved
+        // schedule, attempt's immutable expiry and fee intent select every signed byte.
+        let start_ms = if request.kind == SlotKind::ArchiveOrder {
+            let start = request.order_creation_time_ms()?;
+            eyre::ensure!(
+                start <= now_ms,
+                "native archive order issue time is ahead of this clock"
+            );
+            start
+        } else {
+            now_ms
+        };
+        let initial_fee = if request.kind == SlotKind::ArchiveOrder {
+            request.authorization.per_transaction.clone()
+        } else {
+            FeePaymentIntent::authority(Vec::new(), None)
+        };
         let mut draft = TransactionBuilder::new_with_time_source(
             self.network_id,
             self.authority.clone(),
-            &TimeSource::new_fixed(Duration::from_millis(now_ms)),
-            FeePaymentIntent::authority(Vec::new(), None),
+            &TimeSource::new_fixed(Duration::from_millis(start_ms)),
+            initial_fee,
         )
         .with_instructions([instruction]);
         draft.set_ttl(
-            Duration::from_millis(request.authorization.deadline_unix_ms - now_ms)
+            Duration::from_millis(request.authorization.deadline_unix_ms - start_ms)
                 .min(DEFAULT_TRANSACTION_TIME_TO_LIVE),
         );
         let route = self
@@ -374,19 +391,36 @@ impl MusubiPublicationPinTransactionSignerV1 {
         let next_height = u64::try_from(view.block_hashes().len())?
             .checked_add(1)
             .ok_or_else(|| eyre::eyre!("native control height overflow"))?;
-        let quote = quote_nexus_fee_admission_draft(
-            view.world(),
-            &view.nexus,
-            &view.pipeline,
-            &view.zk.gas,
-            draft.payload(),
-            observed,
-            iroha_core::smartcontracts::isi::sccp::hold::committed_time_ms(&view).map_err(
-                |error| eyre::eyre!("native control has invalid committed time: {error:?}"),
-            )?,
-            next_height,
-            Some(route.route.dataspace_id),
-        )
+        let committed_time = iroha_core::smartcontracts::isi::sccp::hold::committed_time_ms(&view)
+            .map_err(|error| eyre::eyre!("native control has invalid committed time: {error:?}"))?;
+        let dataspace = Some(route.route.dataspace_id);
+        let (quote, fee) = if request.kind == SlotKind::ArchiveOrder {
+            iroha_core::executor::quote_nexus_fee_admission_payload(
+                view.world(),
+                &view.nexus,
+                &view.pipeline,
+                &view.zk.gas,
+                draft.payload(),
+                observed,
+                committed_time,
+                next_height,
+                dataspace,
+            )
+            .map(|quote| (quote, request.authorization.per_transaction.clone()))
+        } else {
+            quote_nexus_fee_admission_draft(
+                view.world(),
+                &view.nexus,
+                &view.pipeline,
+                &view.zk.gas,
+                draft.payload(),
+                observed,
+                committed_time,
+                next_height,
+                dataspace,
+            )
+            .map(|draft| (draft.quote, draft.recommended_intent))
+        }
         .map_err(|error| match error {
             iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original) => {
                 eyre::Report::new(original)
@@ -396,12 +430,11 @@ impl MusubiPublicationPinTransactionSignerV1 {
             }
         })?;
         eyre::ensure!(
-            quote.quote.debit_source == FeeDebitSource::Account(self.authority.clone()),
+            quote.debit_source == FeeDebitSource::Account(self.authority.clone()),
             "native control fee payer differs"
         );
-        for charge in &quote.quote.charges {
+        for charge in &quote.charges {
             let asset = quote
-                .quote
                 .authority_charge_assets
                 .get(&charge.kind)
                 .ok_or_else(|| eyre::eyre!("native control fee asset is unavailable"))?;
@@ -419,18 +452,58 @@ impl MusubiPublicationPinTransactionSignerV1 {
                 "native control fee funding is unavailable"
             );
         }
-        let payload = draft
-            .with_fee_payment_intent(quote.recommended_intent)
-            .into_payload()?;
         request.authorization.reserve_payload(
             &super::native_pin::ReservedFeesV1::default(),
-            &payload.fee_payment,
+            &fee,
             matches!(request.kind, SlotKind::Check(_)),
         )?;
+        let payload = draft.with_fee_payment_intent(fee).into_payload()?;
         Ok(payload)
     }
 
-    /// The only production signature path consumes the immutable payload retained by its
+    /// Re-derive the sole permitted order on the certified pin and seed before signing.
+    pub(super) fn sign_archive_order(
+        &self,
+        slot: &mut super::native_pin::slot::Slot,
+        pin: &super::NativeMusubiFinalizedPinV1,
+        seed: iroha_data_model::sorafs::capacity::ProviderId,
+        clock: &mut dyn MusubiPublicationServiceClockV1,
+        deadline: std::time::Instant,
+    ) -> eyre::Result<()> {
+        use super::native_pin::slot::{SlotKind, encode_frame};
+        let request = slot.request();
+        eyre::ensure!(
+            request.kind == SlotKind::ArchiveOrder
+                && request.network == self.network_id
+                && request.authority == self.authority
+                && request.operation == pin.operation_id(),
+            "native archive order signer binding differs"
+        );
+        let now = request
+            .authorization
+            .check_effect_boundary(clock, deadline)?;
+        let plan =
+            iroha_core::query::native_musubi_storage::plan_native_musubi_replication_order_v1(
+                &self.state.view(),
+                &self.authority,
+                (
+                    pin.query().source.registration.archive_id,
+                    pin.query().manifest_digest,
+                    pin.query().finalized_height,
+                ),
+                seed,
+                now / 1_000,
+            )?
+            .ok_or_else(|| eyre::eyre!("native archive order already issued"))?;
+        let instruction: iroha_data_model::isi::InstructionBox = plan.into();
+        eyre::ensure!(
+            request.instruction == encode_frame(&instruction)?,
+            "native archive order plan changed"
+        );
+        slot.sign_original(&self.key_pair, clock, deadline)
+    }
+
+    /// The pin and outbox control signer consumes the immutable payload retained by its
     /// fixed-purpose slot. The slot caches the signed graph before any later fallible work.
     pub(super) fn sign_retained(
         &self,
@@ -447,6 +520,10 @@ impl MusubiPublicationPinTransactionSignerV1 {
         eyre::ensure!(
             slot.request().network == self.network_id && slot.request().authority == self.authority,
             "native signer original identity differs"
+        );
+        eyre::ensure!(
+            slot.request().kind != SlotKind::ArchiveOrder,
+            "archive order needs its certified plan"
         );
         let archive = if slot.request().kind == SlotKind::Pin {
             Some(self.finalized_reader.read_current_archive(

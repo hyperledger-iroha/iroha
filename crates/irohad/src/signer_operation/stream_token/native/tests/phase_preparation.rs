@@ -464,3 +464,103 @@ fn later_phase_cannot_reuse_a_capture_after_its_durable_finality_disappears() {
         Err(SignerOperationErrorV1::StateUnavailable)
     ));
 }
+
+#[test]
+fn complete_preparation_binds_reserved_row_and_control_before_signing() {
+    let mut case = OperationCase::reserved();
+    let current = case
+        .source
+        .capture(case.reviewed.request.operation_id)
+        .unwrap();
+    let request = case.commit_request();
+    let (prepared, reads) = capture_counts::measure(|| case.source.prepare_complete(&request));
+    let prepared = prepared.unwrap();
+    assert_eq!(reads, [current.floor.height]);
+    assert_eq!(
+        prepared.request.expected_control_digest,
+        current.anchor.state_digest
+    );
+    assert_eq!(
+        prepared.request.expected_control_revision,
+        current.control_revision
+    );
+    assert_eq!(prepared.request.provider_id, case.fixture.provider);
+    assert_eq!(
+        prepared.request.action,
+        Action::Complete(StreamTokenCompleteRequestV1 {
+            reviewed: case.reviewed,
+            reservation: case.reservation,
+            commitment: request.commitment(),
+            signatures_digest: request.signatures_digest(),
+        })
+    );
+    let ceiling = 64 * 1024 * 1024;
+    let limits = norito::DecodeLimits::new(ceiling, ceiling, ceiling, ceiling, 64);
+    let (scoped, physical) = norito::core::with_decode_limits_scope(limits, || {
+        capture_counts::measure(|| case.source.prepare_complete(&request))
+    });
+    assert_eq!(scoped.unwrap(), prepared);
+    assert_eq!(physical, [current.floor.height, current.floor.height]);
+
+    let mut wrong = case.commit_request();
+    wrong.check.reservation.fence += 1;
+    assert!(matches!(
+        case.source.prepare_complete(&wrong),
+        Err(SignerOperationErrorV1::CustodyChanged)
+    ));
+    case.complete();
+    assert!(matches!(
+        case.source.prepare_complete(&case.commit_request()),
+        Err(SignerOperationErrorV1::CustodyChanged)
+    ));
+}
+
+#[test]
+fn submitted_stream_token_complete_requires_its_exact_execution_before_the_next_check() {
+    let mut case = OperationCase::reserved();
+    let phase = SignerCommittedObservationPhaseV1::AfterCommit;
+    assert!(matches!(
+        case.source.prepare_committed_transaction_check(
+            &case.commit_request(),
+            phase,
+            Some([37; 32])
+        ),
+        Err(SignerOperationErrorV1::ReservationConflict)
+    ));
+    case.complete();
+    let current = case
+        .source
+        .capture(case.reviewed.request.operation_id)
+        .unwrap();
+    let submitted = current
+        .operation
+        .unwrap()
+        .operation
+        .terminal_execution
+        .unwrap()
+        .transaction_hash;
+    let request = case.commit_request();
+    let prepare = || {
+        capture_counts::measure(|| {
+            case.source
+                .prepare_committed_transaction_check(&request, phase, Some(submitted))
+        })
+    };
+    let (ordinary, reads) = prepare();
+    assert!(ordinary.is_ok());
+    assert_eq!(reads, [current.floor.height]);
+    let finite = 64 * 1024 * 1024;
+    let (scoped, reads) = norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(finite, finite, finite, finite, 64),
+        prepare,
+    );
+    assert!(scoped.is_ok());
+    assert_eq!(reads, [current.floor.height, current.floor.height]);
+    let mut foreign = submitted;
+    foreign[0] ^= 1;
+    assert!(matches!(
+        case.source
+            .prepare_committed_transaction_check(&request, phase, Some(foreign)),
+        Err(SignerOperationErrorV1::ReservationConflict)
+    ));
+}

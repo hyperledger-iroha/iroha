@@ -112,6 +112,17 @@ impl ManagedGatewayCompliance {
         Self::from_authority(authority)
     }
 
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        Self::from_authority(ServiceAuthority::open_provider_from_original(
+            parent,
+            provider,
+            ProviderPurpose::GatewayCompliance,
+        )?)
+    }
+
     /// Reopen the existing private catalog writer lock to authenticate its serving head.
     /// A missing journal cannot satisfy a maintenance read.
     pub(super) fn read_from_original(
@@ -434,7 +445,7 @@ impl ManagedGatewayCompliance {
             super::provider_round::run(
                 owners.each_ref(),
                 true,
-                |owner| owner.validate_material(deadline),
+                |owner| owner.validate_catalog_read_material(deadline),
                 || invalid("catalog material validation worker failed"),
             )?;
             bind(owners.each_ref().map(|owner| &owner.plan))?;
@@ -470,6 +481,23 @@ impl ManagedGatewayCompliance {
     fn validate_material(&self, deadline: Instant) -> Result<()> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
+        self.validate_original_plan()
+    }
+
+    fn validate_catalog_read_material(&self, deadline: Instant) -> Result<()> {
+        if !self.authority.shares_original_for_read() {
+            return self.validate_material(deadline);
+        }
+        require_deadline(deadline)?;
+        // Only the in-memory provider ID separates these custody checks from the
+        // resolver's full original-image check. Each joined GET fence starts afresh.
+        // A source changed and restored before that read can go unseen. The held
+        // operation lock, provider scope and plan still use their physical checks.
+        self.authority.validate_scoped_operation_custody()?;
+        self.validate_original_plan()
+    }
+
+    fn validate_original_plan(&self) -> Result<()> {
         let current = self
             .authority
             .gateway_compliance_plan(self.authority.provider_id()?)?;

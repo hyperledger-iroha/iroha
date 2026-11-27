@@ -486,6 +486,50 @@ fn down_waits_for_delayed_terminal_reply_and_original_owner_release() {
     assert!(!runtime_owned(&directory).unwrap());
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn down_reconciles_terminal_eof_only_after_the_admitted_owner_releases() {
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, mut terminal, token) =
+        deadline_session(&temporary.path().join("managed"));
+    terminal.phase = ManagedPhase::Failed;
+    terminal.failure = Some("original service expired".into());
+    let runtime = acquire(&directory, "runtime.lock", "local").unwrap();
+    let listener = transport::Listener::bind(&directory).unwrap();
+    let owned = directory.retain().unwrap();
+    let expected = terminal.clone();
+    let (release, after_eof) = mpsc::channel();
+    BEFORE_WAIT.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || release.send(()).unwrap()));
+    });
+    let _hook = ClearHook;
+    let worker = thread::spawn(move || {
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut connection = loop {
+            if let Some(connection) = listener.accept().unwrap() {
+                break connection;
+            }
+            assert!(Instant::now() < end);
+            thread::sleep(Duration::from_millis(1));
+        };
+        let request = connection.receive().unwrap();
+        assert_eq!(request.action, ControlAction::Down);
+        assert_eq!(request.token, token);
+        owned
+            .write_atomic(STATUS, &encode(&terminal).unwrap(), PublishMode::Replace)
+            .unwrap();
+        drop(connection);
+        after_eof.recv_timeout(Duration::from_secs(10)).unwrap();
+        drop(listener);
+        drop(runtime);
+    });
+    let result = store.down("local");
+    worker.join().unwrap();
+    assert_eq!(result.unwrap(), expected);
+    assert!(!runtime_owned(&directory).unwrap());
+}
+
 #[test]
 fn late_terminal_reply_cannot_extend_down_observation_or_prove_cleanup() {
     let _resources = crate::managed::native_test_guard();
