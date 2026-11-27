@@ -15,6 +15,7 @@ from norito.errors import (
     SchemaMismatchError,
     UnsupportedVersionError,
 )
+from norito.header import WireLayout
 
 from iroha_python import KotodamaQuantity, LocalSigningContext, ToriiClient
 from iroha_python.crypto import NetworkId
@@ -169,6 +170,20 @@ def test_preparation_frames_reject_bad_identity_layout_padding_crc_truncation_an
             decode(StakingPreparationV1, bad)
     with pytest.raises(ValueError, match="positive"):
         replace(request, valid_for_blocks=0)
+
+
+def test_preparation_rejects_dense_request_and_response_with_valid_dense_flags():
+    _, _, request_frame, response_frame = fixture()
+    for kind, frame in (
+        (StakingPreparationRequestV1, request_frame),
+        (StakingPreparationV1, response_frame),
+    ):
+        changed = bytearray(frame)
+        changed[5] = WireLayout.DENSE.value
+        changed[39] = 0
+        with pytest.raises(UnsupportedVersionError) as exc:
+            decode(kind, bytes(changed))
+        assert (exc.value.major, exc.value.minor) == (frame[4], WireLayout.DENSE.value)
 
 
 def test_preparation_binding_rejects_changed_request_network_xor_effects_and_balance_set():

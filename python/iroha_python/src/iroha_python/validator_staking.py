@@ -824,8 +824,8 @@ def encode_staking_preparation_frame_v1(
 
 
 def decode_staking_preparation_frame_v1(kind, frame: bytes):
-    """Reject alternate schema/layout/padding, truncation and oversized observations."""
-    from norito.header import NoritoHeader
+    """Decode a canonical V1 preparation, raising UnsupportedVersionError for other layouts."""
+    from norito.header import NoritoHeader, WireLayout
 
     if kind not in _PREPARATION_FRAMES:
         raise TypeError("expected preparation request or response type")
@@ -834,7 +834,10 @@ def decode_staking_preparation_frame_v1(kind, frame: bytes):
     if len(frame) > _PREPARATION_FRAMES[kind][1]:
         raise ValueError("staking preparation exceeds its frame bound")
     header, payload = NoritoHeader.decode(
-        frame, expected_schema_hash=_preparation_schema(kind), expected_flags=COMPACT_LEN
+        frame,
+        expected_layout=WireLayout.CURRENT,
+        expected_schema_hash=_preparation_schema(kind),
+        expected_flags=COMPACT_LEN,
     )
     if header.compression != 0 or len(frame) != 40 + header.payload_length:
         raise ValueError("preparation requires the exact uncompressed frame")
