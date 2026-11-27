@@ -785,6 +785,11 @@ through final Receive averaged 39.849 and 39.621 s respectively. In a separate i
 primary proving accounted for 81.1 CPU-seconds, including 44.9 in the opening. Generator-claim folds took
 40.0 CPU-seconds across the seven operations.
 
+Four more pairs compared the integrated arithmetic commit `39d6b21d92` with its shipping parent `3efd797b23`
+on the same build lane. Mean elapsed fell from 220.449 to 205.936 s and mean process CPU from 378.343 to
+311.549 s. The integrated commit finished sooner in three pairs. Its runs ranged from 71.410 to 574.175 s
+as host load and swap varied, so these measurements do not establish a repeatable wall-time gain.
+
 The wallet verifier can also retain the partial sums it checks. Split the IPA challenge vector into a four-word
 prefix and a suffix. For each contiguous generator block `G_j`, compute `B_j = ⟨s(suffix), G_j⟩` and require
 `Σ_j s(prefix)[j] B_j` to equal the claimed generator. The wallet retains 16 points per claim, about 4 KiB
@@ -794,6 +799,12 @@ from all four sources. Once the fold matches the incoming Send's own and inherit
 the witness reuses those four generator verdicts. It evaluates both matrices and parses the incoming bytes
 independently. The verifier and recursive trace also evaluate the folded opening weight directly from
 its public slot factors. The prover still materializes the column weights needed for the individual L/R sums.
+
+Four fresh-process pairs compared the retained blocks and factored openings at `67caea8965` with their
+parent `39d6b21d92`. Average CPU fell from 309.736 to 277.983 s (10.25%). Average elapsed rose from
+111.037 to 121.082 s (9.05%). The first two pairs averaged 141.005 to 124.045 s. After a host restart,
+the last two averaged 81.069 to 118.121 s. Each pair ran entirely within one host session, and each
+recipient independently verified its incoming Payment in all eight runs.
 
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 

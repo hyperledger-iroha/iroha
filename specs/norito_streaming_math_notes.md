@@ -34,18 +34,28 @@ the top-left, top-right, bottom-left and bottom-right samples of one such
 quartet. For frequency indices `u,v`, an 8×8 projection uses a 4×4 array
 with entries `a + (-1)^v b + (-1)^u c + (-1)^(u+v) d`. The encoder forms
 the four arrays once and evaluates each frequency from its parity group.
-Mirror symmetry is exact in the Q15 table. All folds are exact integers,
-and the two Q15 passes round only the final 64-bit sum.
+The encoder folds directly from the source and collocated prediction rows. At
+nonzero quantizers the band moments already supply the DC sum. AArch64 NEON
+widening subtraction produces the eight signed residuals of each predicted row
+directly from the two byte planes. Intra rows use unsigned widening. The 16 weights
+of each projection are the outer product of the vertical and
+horizontal basis factors. In the Q15 transform these products are exact Q30
+integers. A signed 64-bit dot product accumulates all terms before rounding.
+Scalar code and AArch64 NEON use this same integer sum.
 [Feig and Winograd, Fast Algorithms for the Discrete Cosine Transform](https://research.ibm.com/publications/fast-algorithms-for-the-discrete-cosine-transform)
 
-In the floating-point table the reflected factors differ by at most
-`1e-15` after applying the parity sign. Over a full-range 16-bit block,
-replacing both factors perturbs a projection by less than `2.2e-9`.
-The absolute-product sum is at most `64 * 32768 * 0.5² = 524288`.
-The direct and folded evaluation errors together are bounded by
-`524288 * (γ₆₆ + γ₁₈)`, where `γₙ = n*u/(1-n*u)` and `u = 2^-53`.
-Within `2e-8` of a rounding midpoint the encoder evaluates the original
-table in reference summation order.
+For the binary64 transform, each outer-product weight is rounded to the
+nearest multiple of 2⁻³². For 16-bit input, the sum of absolute folded
+samples in a group is at most `64 × 32768 = 2²¹`, so weight quantization
+contributes at most 2²⁰ units in the Q32 accumulator. The tabulated mirror
+pairs differ by at most `1e-15` after applying the parity sign. Replacing
+both factors perturbs a full projection by less than `2.2e-9`. The
+absolute-product sum is at most `64 × 32768 × 0.5² = 524288`. The error
+from forming the binary64 weight products and from direct reference evaluation
+is at most `524288 × (γ₁ + γ₆₆)`, where `γₙ = n·u/(1−n·u)` and
+`u = 2⁻⁵³`. Together these last errors fit within 128 Q32 units. When
+the integer sum is within `2²⁰ + 128` units of a half-integer, the
+encoder evaluates that coefficient in the original binary64 order.
 [Higham, Accuracy and Stability of Numerical Algorithms, ch. 3](https://eprints.maths.manchester.ac.uk/238/)
 
 At nonzero quantizers the encoder can prove that all 63 AC levels will be zero
@@ -76,8 +86,50 @@ so `ceil(L/4) + 2` gives a second bound for that group's AC coefficients.
 In the even/even group the encoder subtracts the integer mean of the 16
 folded entries for this bound, since a constant contributes only to DC up to
 the table error above. The tighter of the two bounds determines which
-weights to evaluate. Every retained AC coefficient keeps its reference
-value for RDO.
+weights to evaluate. Each group's projections are stored in ascending weight
+order. The first weight above the threshold ends that group. The default
+path quantizes each visited projection immediately. For step `s` and integer
+coefficient magnitude `m`, the first nonzero level has magnitude one when
+`floor(s/2) < m < 2s − floor(s/2)`. The encoder restores its sign directly.
+RDO receives the reference coefficient before selecting levels.
+
+For the binary64 quantizer, AArch64 dot-product instructions test four
+projections together. Round the 16 basis weights to signed Q9 and shift each
+folded sample right by the smallest common shift `k` that fits all samples
+in signed bytes. If `L` is their pre-shift absolute sum after centering, the
+Q9 dot product rescaled by `2ᵏ` has error at most
+`ceil(L/2) + 16 × 128 × (2ᵏ − 1) + 1` Q9 units. The first term covers
+weight rounding, the second bounds discarded sample bits, and the last covers
+binary64 evaluation and the centered basis error. Only an interval strictly
+inside the zero or signed unit quantization bin determines a level. Other
+projections use the Q32 accumulator and its reference-order midpoint check.
+A zigzag bitmask records each nonzero AC level as it is produced.
+
+For the default Q16, let `L` be the energy-based matrix weight cutoff and
+`N = sqrt(E/64)` the centered spatial norm. Before the cutoff saturates,
+`N < 8(L+1)`. At `L ≤ 29` even the smallest step (160) cannot produce
+an AC level of magnitude two. Only kernels of weight at most `L` need
+evaluation. Their signed Q9 weights have exactly zero sum, checked when the
+table is built. Intra samples can therefore be biased by 128. Predicted
+samples use the integer block mean. For `L ≤ 15`, the original energy bound
+`ceil(65 × (isqrt(E)+1) / 512) + 2 < 128` keeps every centered sample in
+a signed byte. For larger cutoffs through 29, halving the residual before
+centering preserves that range.
+
+The Q9 weight error is at most `½ × 8N < 32(L+1)` units by Cauchy–Schwarz.
+Halving a signed residual discards either zero or one before rescaling.
+Since the weight sum is zero, this costs at most half the sum of the absolute
+integer weights. A further Q9 unit covers the tabulated basis and binary64
+evaluation errors. A projection interval crossing the first quantizer
+boundary uses the reference calculation.
+
+The orthonormal DCT bounds the sum of squared AC projections by the centered
+spatial energy. The encoder starts with `ceil(E/64) + 1` squared units.
+The one-unit allowance covers basis and evaluation errors for byte samples.
+Subtracting the square of an integer lower bound on each measured magnitude
+keeps this an upper bound for all unvisited projections. When it falls below
+or equals the square of the next half-step, the remaining sorted kernels
+all quantize to zero.
 
 Each block needs two integer moments, the sum of the residuals and their
 squared sum. The encoder computes one band of eight scanlines before writing
@@ -86,7 +138,9 @@ a 16-byte load spans two adjacent blocks. The dot product of pixel bytes
 with ones gives their sum. Subtracting the predictor sum gives the signed
 residual sum. The dot product of the absolute differences with themselves
 gives the squared sum. Each four-byte lane belongs entirely to one block.
-The final pairwise addition produces both block results. An unpaired block
+For a predicted pair with squared sums `T`, the inequalities
+`E ≤ 64T` and `sum(x)² ≤ 64T` can certify both blocks as all-zero before
+computing their signed sums. Other pairs retain both exact moments. An unpaired block
 uses the scalar calculation.
 [Arm, integer dot products with Rust SIMD intrinsics](https://learn.arm.com/learning-paths/cross-platform/simd-on-rust/simd-on-rust-part2/)
 
@@ -101,21 +155,43 @@ the reference summation order at those boundaries and otherwise restores
 the sign to the integer quotient. Predicted blocks with
 all zero levels retain their pixels in place. With RDO disabled, successive
 such blocks share a bulk write of the standard DC-delta and end-marker
-records. At Q0 the early copy requires every predicted pixel to match.
+records. At Q0 the early copy requires every predicted pixel to match. Reconstruction uses the collocated
+pixel before overwriting it. The encoder can retain the three plane buffers
+between segments because the first Intra frame ignores prior pixels and
+writes every sample needed by the following frame.
 
-A common sparse block has nonzero AC levels only at the first horizontal
-and vertical frequencies, each in `{-1, 0, 1}`. For these nine cases the
-ordered entropy records depend only on those two levels, the repeating 8×8
-block position, frame class and whether DC is zero. Within a segment the
-recorder reuses the first emitted sequence for each such pattern. Its
-histogram and context-switch counts add once per occurrence, and each block
-still contributes its own ordered tokens. The recorder stores one key per
-repeat and the literal spans between runs. Each pattern includes at least
-one significance-RLE record, so
-the entropy stream in that segment is the masked symbol byte of each record.
-This projection distributes over concatenation. The encoder projects each
-literal once, then copies its records and symbol bytes in block order to
-produce the complete telemetry before returning the segment.
+When each of the first five zigzag AC levels lies in `{-1, 0, 1}` and
+all higher AC levels are zero, five base-three digits identify one of 243
+patterns. Together with the 8×8 tile position, frame class and DC significance,
+these digits determine the block's ordered entropy records. The recorder
+counts repeated patterns by multiplicity and emits each block's ordered
+tokens. For unmapped contexts, changing the signs of occupied ternary AC
+positions preserves the context sequence, symbol widths and zero runs. An
+encoder therefore keeps one prefix per five-bit occupancy mask, tile, frame
+class and DC significance. It flips the sign bit at the affected nonzero
+records when it copies a prefix. Per-segment histograms count the resulting
+signed records. The table has at most 32 × 256 entries of at most 25 records. The same support bound limits the run/level writer's zigzag scan.
+
+Each repeated pattern contains a significance-RLE record, so the segment's
+entropy stream is the masked symbol byte of each record. The recorder projects
+literal records once and expands repeats in block order. An aligned 63-record
+span can retain both arrays from the preceding report when its canonical key
+matches. When just the neutral suffix matches at the same offset, only the
+prefix needs to be written. The canonical keys are independent of the order
+in which patterns first appear in either segment.
+
+On the first occurrence of an unmapped ternary pattern, the five AC occupancy
+bits and the DC significance bit select the neighbor counts and preceding
+magnitudes for its prefix. The recorder finishes the ordinary context hash
+for each position and merges adjacent zeros with the same context, up to the
+symbol-width limit. A block with 63 records has one record per AC position.
+All its zero positions therefore project to symbol 1. A fresh report fills
+that symbol once across the output, then overwrites the literal spans and
+occupied prefixes. In a row of DC-only blocks with the same DC significance, the eight
+tile keys repeat. For frequently used rows with 63 records per template, the
+encoder builds a contiguous seed spanning 32 blocks at every starting phase.
+A longer run doubles the portion already written. Remapped or shorter templates
+can be expanded individually using their actual record counts.
 
 For unmapped contexts, blocks supported in the upper-left 3×3 share one
 more sequence per tile and frame class. From zigzag order 26 onward, the
@@ -123,7 +199,26 @@ coefficient, preceding coefficient and every neighbor used in the context
 are zero. Orders 25 and 26 have the same context inputs except for their
 distinct final order bits, so a zero run ends at the boundary. Reusing
 the suffix preserves record order. Its histogram and the switch from the
-prefix add once per occurrence.
+prefix add once per occurrence. When only DC and the first horizontal and
+vertical frequencies are present, orders 11 and 12 are already neutral and
+differ only in order. In this case the common suffix starts at order 12.
+Eight successive predicted zero blocks in a raster row visit each tile
+column once, so their template and end-marker counts can be added by cycle.
+
+For the context hash, the encoder tabulates the FNV-1 prefix through frame
+class modulo 2¹⁶. Multiplication and exclusive-or commute with truncation
+to the low 16 bits. The remaining tile, significance and order fields
+therefore produce the same context ID. Neighbor counts use eight unsigned
+byte lanes per row. Adding the left, upper-left, upper and upper-right
+occupancies gives at most four in a lane, which prevents carries between
+pixels. A one-zero run of the configured width contributes one record, a
+known bit length and one count for symbol 1. Its multiplicity is sufficient
+to reconstruct those fields in each context histogram. For a context with
+`N` records, the observed outgoing switch count is `N − S − E − U`, where
+`S` counts consecutive records in that same context, `E` counts block
+terminators attributed to it, and `U` is one if its record ends an
+unterminated stream. Explicit flush reasons are added separately.
+[FNV-1 recurrence, RFC 9923 §2](https://www.rfc-editor.org/rfc/rfc9923.html#section-2)
 
 A zero residual transforms to 64 zeros. When only the DC coefficient survives
 quantization, its inverse transforms to the same sample at all 64 positions.

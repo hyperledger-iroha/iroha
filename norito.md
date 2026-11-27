@@ -1870,9 +1870,26 @@ coefficients by reconstruction gain per block record. A centered-energy bound
 lets the encoder emit the DC delta and end marker directly when every AC
 level must quantize to zero. It computes the residual sums and squared sums
 for one row of blocks at a time. The forward transform folds the block into four
-reflection groups. The encoder uses a magnitude bound for each group to skip
-additional frequencies whose quantization steps guarantee zero. Prediction
+reflection groups. Within each group it evaluates frequencies in order of quantization weight
+and stops when the remaining levels are provably zero. Integer dot products
+produce the retained coefficients directly from the source and predictor rows,
+with reference-order evaluation at ambiguous binary64 rounding boundaries. On
+AArch64, bounded eight-bit dot products can certify four low-magnitude levels
+at a time. At Q16, a block whose energy permits only zero or unit AC levels
+can use signed-byte projections directly on its source rows. The encoder stops
+when the remaining energy cannot support the next frequency. The transform carries the positions of surviving AC levels directly
+into the run/level writer. Prediction
 reuses the reference pixels when all residual levels quantize to zero.
+The bundled entropy recorder counts repeated low-frequency patterns and neutral
+zero suffixes by multiplicity. A suffix starts once the occupied coefficients
+can no longer affect a neighbor or preceding-level context. The recorder
+tabulates singleton context IDs and accounts for a suffix once per tile and
+frame class. Unmapped sparse prefixes with the same occupied
+AC positions share their context sequence across signs. On a fresh report the
+recorder fills singleton zero symbols together and expands runs of DC blocks
+with equal significance from contiguous periods of eight tiles. Matching aligned spans in successive reports
+reuse both the records and their projected symbols. The encoder writes luma
+and chroma run/level records directly into the frame buffer.
 Reconstruction sums the contributions of the nonzero coefficients in raster
 order. The native audio encoder scores step
 sizes against the receiver's reconstructed samples.

@@ -934,6 +934,816 @@ fn repeated_sparse_blocks_match_individual_bundle_accounting() {
 }
 
 #[test]
+fn packed_neighbor_counts_match_every_block_edge() {
+    for active in 0..=BLOCK_PIXELS {
+        let levels = std::array::from_fn(|i| {
+            if i == active || active == BLOCK_PIXELS {
+                i16::MIN
+            } else {
+                0
+            }
+        });
+        let counts = neighbor_counts(&levels);
+        for (i, &count) in counts.iter().enumerate() {
+            let (x, y) = ((i % BLOCK_SIZE) as isize, (i / BLOCK_SIZE) as isize);
+            let mut expected = 0;
+            for (dx, dy) in [(-1, 0), (-1, -1), (0, -1), (1, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if (0..8).contains(&nx)
+                    && (0..8).contains(&ny)
+                    && levels[(ny * 8 + nx) as usize] != 0
+                {
+                    expected += 1;
+                }
+            }
+            assert_eq!(count, expected, "slot {i}, active {active}");
+        }
+    }
+}
+
+#[test]
+fn context_prefixes_match_full_width_hash() {
+    let mut slots = Vec::new();
+    let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
+        3,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    for quantizer_bucket in 0..4 {
+        recorder.quantizer_bucket = quantizer_bucket;
+        for frame in [FrameType::Intra, FrameType::Predicted] {
+            for kind in [
+                BundleType::SignificanceOnly,
+                BundleType::SignAndMagnitude,
+                BundleType::SignParity,
+                BundleType::SignParityLevel,
+                BundleType::SignificanceRle,
+            ] {
+                for (order, &slot) in ZIG_ZAG.iter().enumerate().skip(1) {
+                    for neighbors in 0..=4 {
+                        for previous in [0, 1, 2, 255] {
+                            for (tile, coeff) in [(0, 0), (15, -7), (63, 2)] {
+                                let fields = [
+                                    kind.as_u8(),
+                                    subband_class(slot),
+                                    position_class(order),
+                                    neighbors.min(3),
+                                    level_bucket(previous),
+                                    quantizer_bucket,
+                                    frame.as_byte(),
+                                    tile,
+                                    u8::from(coeff != 0),
+                                    order as u8,
+                                ];
+                                let hash = fields.into_iter().fold(0x811c9dc5u32, |h, v| {
+                                    h.wrapping_mul(16777619) ^ u32::from(v)
+                                });
+                                assert_eq!(
+                                    recorder
+                                        .compute_context(
+                                            kind, tile, order, neighbors, coeff, previous, frame
+                                        )
+                                        .0,
+                                    hash as u16
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn width_two_tile_hash_matches_every_context_prefix() {
+    for (frame, tiles) in Q16_TILE_HASH.iter().enumerate() {
+        for (tile, forms) in tiles.iter().enumerate() {
+            for (occupied, offsets) in forms.iter().enumerate() {
+                for (idx, &hash) in offsets.iter().enumerate() {
+                    let prefix = CONTEXT_PREFIX[2 + frame][occupied][idx];
+                    for z in [1, 17, 63] {
+                        assert_eq!(
+                            BundleContextId(hash ^ z as u16),
+                            finish_context(prefix, tile as u8, occupied != 0, z)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn neutral_suffix_cutoffs_preserve_literal_contexts() {
+    let mut slots = [Vec::new(), Vec::new()];
+    let [mut compact, mut direct] = slots.each_mut().map(|s| {
+        BundleStreamRecorder::new(
+            s,
+            2,
+            FrameDimensions::new(200, 32),
+            16,
+            default_bundle_tables(),
+            BundleAcceleration::None,
+            0,
+            None,
+        )
+    });
+    for frame in [FrameType::Intra, FrameType::Predicted] {
+        for z in 1..64 {
+            for next in [z, (z + 3).min(63)] {
+                let mut levels = [0; 64];
+                levels[0] = 7;
+                levels[ZIG_ZAG[z]] = -3;
+                levels[ZIG_ZAG[next]] = 2;
+                let tile = compact.tile(z);
+                compact.record_block(z, &levels, frame);
+                direct.record_ac_range_impl::<false>(tile, &levels, frame, 1..64);
+                compact.record_eob();
+                direct.record_eob();
+            }
+        }
+    }
+    assert_eq!(
+        crate::core::to_bytes(&compact.finish(None)).unwrap(),
+        crate::core::to_bytes(&direct.finish(None)).unwrap()
+    );
+}
+
+#[test]
+fn repeated_report_reuses_only_equal_aligned_patterns() {
+    let mut previous: Option<RecordedSegment> = None;
+    for (phase, blocks) in [(0, 96), (1, 96), (2, 37), (2, 37), (0, 96)] {
+        let mut slots = Vec::new();
+        let mut direct_slots = Vec::new();
+        let make = |slots| {
+            BundleStreamRecorder::new(
+                slots,
+                3,
+                FrameDimensions::new(8, 8),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        };
+        let mut cached = make(&mut slots);
+        let mut direct = make(&mut direct_slots);
+        for i in 0..blocks {
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = (i % 2) as i16;
+            levels[1] = if i % 5 == 0 && phase == 1 { -1 } else { 1 };
+            if i % 13 == 0 {
+                levels[10] = 2;
+            }
+            if i % 17 == phase {
+                levels[63] = -3;
+            }
+            cached.record_block(i, &levels, FrameType::Intra);
+            direct.record_ac_range(cached.tile(i), &levels, FrameType::Intra, 1..BLOCK_PIXELS);
+            for recorder in [&mut cached, &mut direct] {
+                recorder.record_eob();
+            }
+        }
+        let keys = previous
+            .as_ref()
+            .map(|p| p.repeat_keys.clone())
+            .unwrap_or_default();
+        let actual = cached.finish_segment(previous);
+        if phase == 1 {
+            assert!(
+                keys.iter()
+                    .zip(&actual.repeat_keys)
+                    .any(|(a, b)| a == b && *a != u16::MAX)
+            );
+            assert!(keys.iter().zip(&actual.repeat_keys).any(|(a, b)| a != b));
+        }
+        assert_eq!(
+            crate::core::to_bytes(&actual.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        previous = Some(actual);
+    }
+}
+
+#[test]
+fn five_ac_templates_preserve_rle_and_reports_across_key_allocation_orders() {
+    let mut previous = None;
+    let mut prefixes = SparsePrefixes::default();
+    for phase in [0, 37, 242] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut cached, mut direct] = slots.each_mut().map(|slots| {
+            BundleStreamRecorder::new(
+                slots,
+                4,
+                FrameDimensions::new(8, 8),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        cached.cached_prefixes = Some(&mut prefixes);
+        let (mut payload, mut reference) = (Vec::new(), Vec::new());
+        let (mut prev_dc, mut reference_dc) = (0, 0);
+        for i in 0..3 * FIRST_FIVE_CLASSES {
+            let mut digits = (i + phase) % FIRST_FIVE_CLASSES;
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = -7;
+            for &slot in &ZIG_ZAG[1..6] {
+                levels[slot] = [0, 1, -1][digits % 3];
+                digits /= 3;
+            }
+            // Alternate whole templates, shared suffixes and literal high frequencies.
+            if i >= FIRST_FIVE_CLASSES && i % 11 == 0 {
+                levels[18] = i16::MAX;
+            } else if i >= FIRST_FIVE_CLASSES && i % 17 == 0 {
+                levels[63] = i16::MIN;
+            }
+            encode_block_rle(
+                &levels,
+                &mut prev_dc,
+                &mut payload,
+                &mut cached,
+                0,
+                FrameType::Predicted,
+            );
+            encode_block_rle(
+                &levels,
+                &mut reference_dc,
+                &mut reference,
+                &mut NoopBundledHooks,
+                0,
+                FrameType::Predicted,
+            );
+            direct.record_ac_range(0, &levels, FrameType::Predicted, 1..BLOCK_PIXELS);
+            direct.record_dc(if i == 0 { -7 } else { 0 });
+            let mut zeros = 0;
+            for &slot in &ZIG_ZAG[1..] {
+                if levels[slot] == 0 {
+                    zeros += 1;
+                } else {
+                    direct.record_ac(zeros, levels[slot]);
+                    zeros = 0;
+                }
+            }
+            direct.record_eob();
+        }
+        assert_eq!(payload, reference);
+        assert!(cached.omitted_tail_records > 0);
+        let report = cached.finish_segment(previous);
+        assert!(
+            report
+                .repeat_keys
+                .iter()
+                .any(|&k| (TAIL_KEY..u16::MAX).contains(&k))
+        );
+        assert_eq!(
+            crate::core::to_bytes(&report.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        previous = Some(report);
+        assert_eq!(
+            prefixes
+                .pages
+                .iter()
+                .flatten()
+                .filter(|span| span.len != 0)
+                .count(),
+            32
+        );
+    }
+}
+
+#[test]
+fn synthesized_prefix_matches_direct_contexts_in_all_quantizer_buckets() {
+    for (width, quantizer) in [(1, 0), (2, 16), (3, 32), (4, 255)] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut fast, mut direct] = slots.each_mut().map(|s| {
+            BundleStreamRecorder::new(
+                s,
+                width,
+                FrameDimensions::new(64, 64),
+                quantizer,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        for (class, &(support, signs)) in SPARSE_MASKS.iter().enumerate() {
+            let mut levels = [0; BLOCK_PIXELS];
+            for (i, &slot) in ZIG_ZAG[1..6].iter().enumerate() {
+                levels[slot] = if support & (1 << i) == 0 {
+                    0
+                } else if signs & (1 << i) == 0 {
+                    1
+                } else {
+                    -1
+                };
+            }
+            let tile = (class % 64) as u8;
+            let end = if class < 9 {
+                FIRST_AC_TAIL_ORDER
+            } else {
+                ZERO_TAIL_ORDER
+            };
+            for dc in [false, true] {
+                levels[0] = i16::from(dc);
+                for frame in [FrameType::Intra, FrameType::Predicted] {
+                    direct.bundles.clear();
+                    direct.record_ac_range(tile, &levels, frame, 1..end);
+                    fast.bundles.clear();
+                    fast.write_sparse_prefix(tile, frame, support, signs, dc, end);
+                    assert_eq!(fast.bundles.len(), direct.bundles.len());
+                    for (a, b) in fast.bundles.iter().zip(&direct.bundles) {
+                        assert_eq!(
+                            (a.bundle_type.as_u8(), a.context, a.bits, a.bit_len, a.flush),
+                            (b.bundle_type.as_u8(), b.context, b.bits, b.bit_len, b.flush)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sparse_prefix_signs_match_the_direct_recorder_at_every_width() {
+    for width in 1..=4 {
+        let mut cache = SparsePrefixes::default();
+        let mut slots = Vec::new();
+        let mut direct = BundleStreamRecorder::new(
+            &mut slots,
+            width,
+            FrameDimensions::new(64, 64),
+            16,
+            default_bundle_tables(),
+            BundleAcceleration::None,
+            0,
+            None,
+        );
+        for class in (0..FIRST_FIVE_CLASSES).rev() {
+            let mut digits = class;
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = 4;
+            for &slot in &ZIG_ZAG[1..6] {
+                levels[slot] = [0, 1, -1][digits % 3];
+                digits /= 3;
+            }
+            let tile = 9;
+            let end = if class < 9 {
+                FIRST_AC_TAIL_ORDER
+            } else {
+                ZERO_TAIL_ORDER
+            };
+            let start = direct.bundles.len();
+            direct.record_ac_range(tile, &levels, FrameType::Intra, 1..end);
+            direct.record_eob();
+            let reference = &direct.bundles[start..];
+            let (support, signs) = SPARSE_MASKS[class];
+            let key = usize::from(support) * 256 + 128 + usize::from(tile);
+            let mut restored = Vec::new();
+            if cache.append(key, signs, width, &mut restored).is_none() {
+                cache.insert(key, signs, reference);
+                assert!(cache.append(key, signs, width, &mut restored).is_some());
+            }
+            assert_eq!(
+                crate::core::to_bytes(&restored).unwrap(),
+                crate::core::to_bytes(&reference.to_vec()).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn segment_retries_and_plane_changes_match_a_fresh_encoder() {
+    let dims = FrameDimensions::new(30, 18);
+    let make_plane = |n: usize, seed: usize| -> Vec<u8> {
+        (0..n)
+            .map(|i| (i * (11 + seed) + (i >> 3) * 31 + seed) as u8)
+            .collect()
+    };
+    let frames = (1..=3)
+        .map(|s| RawFrame::new(dims, make_plane(dims.pixel_count(), s)).unwrap())
+        .collect::<Vec<_>>();
+    let colors = (1..=3)
+        .map(|s| {
+            Chroma420Frame::new(
+                dims,
+                make_plane(dims.pixel_count() / 4, s),
+                make_plane(dims.pixel_count() / 4, 7 + s),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for quantizer in [0, 16] {
+        let config = BaselineEncoderConfig {
+            frame_dimensions: dims,
+            quantizer,
+            ..BaselineEncoderConfig::default()
+        };
+        let mut warm = BaselineEncoder::new(config.clone());
+        for (step, (count, color)) in [(1, false), (3, true), (2, false), (1, true), (3, true)]
+            .into_iter()
+            .enumerate()
+        {
+            if step == 3 {
+                let mut invalid = frames.clone();
+                invalid[1].luma.pop();
+                assert!(
+                    warm.encode_segment_with_chroma(0, 0, 3, &invalid, Some(&colors), None)
+                        .is_err()
+                );
+            }
+            // The first Intra frame must overwrite storage from any previous segment.
+            for plane in &mut warm.reconstruction {
+                plane.fill(0xb5);
+            }
+            let chroma = color.then_some(&colors[..count]);
+            let actual = warm
+                .encode_segment_with_chroma(4, 0, 3, &frames[..count], chroma, None)
+                .unwrap();
+            let mut fresh = BaselineEncoder::new(config.clone());
+            let expected = fresh
+                .encode_segment_with_chroma(4, 0, 3, &frames[..count], chroma, None)
+                .unwrap();
+            assert_eq!(actual.chunks, expected.chunks);
+            assert_eq!(
+                crate::core::to_bytes(warm.bundled_telemetry().unwrap()).unwrap(),
+                crate::core::to_bytes(fresh.bundled_telemetry().unwrap()).unwrap()
+            );
+            if count == 1 {
+                assert!(fresh.reconstruction.iter().all(Vec::is_empty));
+            }
+        }
+    }
+}
+
+#[test]
+fn ac_magnitude_one_shortcut_agrees_at_quantization_boundaries() {
+    for q in 1..=255 {
+        for w in BASELINE_QUANT_MATRIX {
+            let step = q * i32::from(w);
+            let h = step / 2;
+            for boundary in [h, step * 2 - h, step * 3 - h] {
+                for x in boundary - 1..=boundary + 1 {
+                    for v in [x, -x, i32::MIN, i32::MAX] {
+                        let expected = if v.unsigned_abs() <= h as u32 {
+                            0
+                        } else {
+                            quantize_level(v, step)
+                        };
+                        assert_eq!(quantize_ac(v, step), expected);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn last_predicted_tile_replaces_an_unkeyed_literal_with_its_shared_suffix() {
+    let mut previous = None;
+    for replace_literal in [false, true] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut cached, mut direct] = slots.each_mut().map(|slots| {
+            BundleStreamRecorder::new(
+                slots,
+                3,
+                FrameDimensions::new(64, 64),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        for block in 0..3 {
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[18] = 2;
+            if block == 2 && !replace_literal {
+                levels[63] = -3;
+            }
+            cached.record_block(63, &levels, FrameType::Predicted);
+            direct.record_ac_range(63, &levels, FrameType::Predicted, 1..BLOCK_PIXELS);
+            cached.record_eob();
+            direct.record_eob();
+        }
+        let report = cached.finish_segment(previous);
+        assert_eq!(
+            crate::core::to_bytes(&report.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        assert_eq!(report.repeat_keys[2] == u16::MAX, !replace_literal);
+        previous = Some(report);
+    }
+}
+
+#[test]
+fn implicit_switch_counts_exclude_unterminated_and_same_context_records() {
+    let mut slots = Vec::new();
+    let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
+        3,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    for (id, flush) in [
+        (9, BundleFlushReason::TypeComplete),
+        (9, BundleFlushReason::ContextSwitch),
+        (3, BundleFlushReason::TypeComplete),
+        (3, BundleFlushReason::EndOfBlock),
+    ] {
+        recorder.record_bundle(BundleType::SignParity, BundleContextId(id), 5, 3, flush);
+    }
+    let report = recorder.finish(None);
+    // One observed 9 -> 3 transition and one explicit switch flush on context 9.
+    assert_eq!(report.stats.flush_context_switch, 2);
+    assert_eq!(report.context_stats[0].flush_context_switch, 0);
+    assert_eq!(report.context_stats[1].flush_context_switch, 2);
+    assert_eq!(report.context_stats[0].flush_end_of_block, 1);
+}
+
+#[test]
+fn cold_dc_cycles_materialize_records_symbols_and_reusable_keys() {
+    // A long row has multiple complete tile cycles and a partial final cycle.
+    let dims = FrameDimensions::new(8 * 101, 8);
+    let mut previous = None;
+    for exceptional in [29, 67, 67] {
+        let mut slots = [Vec::new(), Vec::new()];
+        let [mut cached, mut direct] = slots.each_mut().map(|s| {
+            BundleStreamRecorder::new(
+                s,
+                4,
+                dims,
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        });
+        for i in 0..101 {
+            let mut levels = [0; BLOCK_PIXELS];
+            levels[0] = 7;
+            if i == exceptional {
+                levels[ZIG_ZAG[5]] = -1;
+            }
+            cached.record_block(i, &levels, FrameType::Intra);
+            direct.record_ac_range(cached.tile(i), &levels, FrameType::Intra, 1..BLOCK_PIXELS);
+            cached.record_eob();
+            direct.record_eob();
+        }
+        let actual = cached.finish_segment(previous);
+        for i in 8..101 {
+            if i != exceptional {
+                assert_eq!(actual.repeat_keys[i], 128 + (i % 8) as u16);
+            }
+        }
+        assert_eq!(
+            crate::core::to_bytes(&actual.telemetry).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+        previous = Some(actual);
+    }
+}
+
+#[test]
+fn raster_dc_spans_match_literal_reports_with_remapped_and_unmapped_contexts() {
+    let width = 71;
+    let dims = FrameDimensions::new(8 * width, 24);
+    for remap in [
+        None,
+        Some(Arc::new(BundleContextRemap::new(
+            BTreeMap::new(),
+            BundleContextId(91),
+            0,
+            0,
+        ))),
+    ] {
+        let mut previous = None;
+        for split in [44, 52, 52] {
+            let mut slots = [Vec::new(), Vec::new()];
+            let [mut cached, mut direct] = slots.each_mut().map(|s| {
+                BundleStreamRecorder::new(
+                    s,
+                    4,
+                    dims,
+                    16,
+                    default_bundle_tables(),
+                    BundleAcceleration::None,
+                    0,
+                    remap.clone(),
+                )
+            });
+            let mut previous_dc = 0;
+            for index in 0..dims.block_count() {
+                let kind = if index < 103 {
+                    FrameType::Intra
+                } else {
+                    FrameType::Predicted
+                };
+                let mut levels = [0; BLOCK_PIXELS];
+                levels[0] = if (89..123).contains(&index) {
+                    0
+                } else {
+                    [7, -2, 1][index % 3]
+                };
+                let diff = levels[0] - previous_dc;
+                previous_dc = levels[0];
+                if index == split || index == 131 {
+                    levels[ZIG_ZAG[19]] = -3;
+                    cached.record_masked_block(index, &levels, kind, ac_support(&levels));
+                    cached.record_dc(diff);
+                    cached.record_ac(18, -3);
+                    cached.record_eob();
+                } else {
+                    cached.record_dc_only(&levels, diff, index, kind);
+                }
+                direct.record_ac_range(direct.tile(index), &levels, kind, 1..BLOCK_PIXELS);
+                direct.record_dc(diff);
+                if levels[ZIG_ZAG[19]] != 0 {
+                    direct.record_ac(18, -3);
+                }
+                direct.record_eob();
+            }
+            let actual = cached.finish_segment(previous);
+            assert_eq!(
+                crate::core::to_bytes(&actual.telemetry).unwrap(),
+                crate::core::to_bytes(&direct.finish(None)).unwrap()
+            );
+            previous = Some(actual);
+        }
+    }
+}
+
+#[test]
+fn zero_pattern_cycles_preserve_partial_rows_and_terminal_contexts() {
+    for width in [8, 136, 160] {
+        let mut slots = Vec::new();
+        let mut reference_slots = Vec::new();
+        let make = |slots| {
+            BundleStreamRecorder::new(
+                slots,
+                4,
+                FrameDimensions::new(width, 8),
+                16,
+                default_bundle_tables(),
+                BundleAcceleration::None,
+                0,
+                None,
+            )
+        };
+        let mut cached = make(&mut slots);
+        let mut direct = make(&mut reference_slots);
+        // Warm all tile classes, then start and stop inside a non-aligned row.
+        for range in [0..(usize::from(width) * 2), 5..(usize::from(width) + 11)] {
+            cached.record_zero_run(range.clone(), -9);
+            for (n, i) in range.enumerate() {
+                direct.record_dc_only(
+                    &[0; BLOCK_PIXELS],
+                    if n == 0 { -9 } else { 0 },
+                    i,
+                    FrameType::Predicted,
+                );
+            }
+        }
+        assert_eq!(
+            crate::core::to_bytes(&cached.finish(None)).unwrap(),
+            crate::core::to_bytes(&direct.finish(None)).unwrap()
+        );
+    }
+}
+
+#[test]
+fn compact_context_tally_combines_single_zeros_and_exceptional_symbols() {
+    let mut slots = Vec::new();
+    let mut recorder = BundleStreamRecorder::new(
+        &mut slots,
+        3,
+        FrameDimensions::new(8, 8),
+        16,
+        default_bundle_tables(),
+        BundleAcceleration::None,
+        0,
+        None,
+    );
+    let id = BundleContextId(91);
+    for (kind, bits, width) in [
+        (BundleType::SignificanceRle, 1, 3),
+        (BundleType::SignParity, 5, 3),
+        (BundleType::SignificanceRle, 3, 3),
+        (BundleType::SignificanceRle, 1, 3),
+    ] {
+        recorder.record_bundle(kind, id, bits, width, BundleFlushReason::TypeComplete);
+    }
+    recorder.record_eob();
+    let result = recorder.finish(None);
+    let stats = &result.context_stats[0];
+    let freq = &result.context_frequencies[0];
+    assert_eq!(
+        (
+            stats.bundles_total,
+            stats.type_significance_rle,
+            stats.type_sign_parity
+        ),
+        (4, 3, 1)
+    );
+    assert_eq!(
+        (
+            stats.flush_type_complete,
+            stats.flush_context_switch,
+            stats.flush_end_of_block
+        ),
+        (4, 0, 1)
+    );
+    assert_eq!((freq.bundles, freq.total_bits), (4, 12));
+    assert_eq!(
+        (
+            freq.symbol_counts[1],
+            freq.symbol_counts[3],
+            freq.symbol_counts[5]
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(
+        (
+            result.stats.bundles_total,
+            result.stats.significance_rle,
+            result.stats.flush_end_of_block
+        ),
+        (4, 3, 1)
+    );
+}
+
+#[test]
+fn dc_only_after_quantization_matches_full_block_coding() {
+    let dims = FrameDimensions::new(8, 8);
+    let mut frame = vec![100; BLOCK_PIXELS];
+    frame[0] = 200;
+    let prior = vec![100; BLOCK_PIXELS];
+    for (kind, reference) in [
+        (FrameType::Intra, None),
+        (FrameType::Predicted, Some(prior.clone())),
+    ] {
+        let moments = reference_moments(&frame, reference.as_deref(), dims, 0);
+        assert!(matches!(
+            BlockQuantization::new(16).classify(&frame, reference.as_deref(), dims, 0, moments),
+            BlockSpectrum::WeightsThrough(_)
+        ));
+        let (residual, predictor) =
+            build_residual_block(&frame, reference.as_deref(), dims, 0, kind);
+        let levels = quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), 16);
+        assert!(levels[1..].iter().all(|&v| v == 0));
+        let mut expected = Vec::new();
+        encode_block_rle(
+            &levels,
+            &mut 0,
+            &mut expected,
+            &mut NoopBundledHooks,
+            0,
+            kind,
+        );
+        let mut pixels = vec![0; BLOCK_PIXELS];
+        write_reconstructed_block(
+            &mut pixels,
+            &inverse_dct_full(&dequantize_coeffs(&levels, 16)),
+            &predictor,
+            dims,
+            0,
+        );
+        let mut payload = vec![0xeb; FRAME_HEADER_LEN];
+        let mut recon = reference.unwrap_or_default();
+        BaselineEncoder::encode_frame_payload(
+            &mut payload,
+            &frame,
+            kind,
+            &mut recon,
+            dims,
+            16,
+            true,
+            &mut NoopBundledHooks,
+            None,
+        );
+        assert_eq!(payload[..FRAME_HEADER_LEN], [0xeb; FRAME_HEADER_LEN]);
+        assert_eq!(payload[FRAME_HEADER_LEN..], expected);
+        assert_eq!(recon, pixels);
+    }
+}
+
+#[test]
 fn recorder_orders_contexts_and_attributes_flushes_to_the_previous_context() {
     let mut slots = Vec::new();
     let mut recorder = BundleStreamRecorder::new(
@@ -1979,11 +2789,12 @@ fn verify_segment_rejects_audio_skew_beyond_tolerance() {
 }
 #[test]
 fn frame_packing_requires_a_size_win_and_preserves_the_header() {
+    let mut compressor = None;
     for len in [MIN_FRAME_COMPRESSION_BYTES - 1, MIN_FRAME_COMPRESSION_BYTES] {
         let mut chunk = vec![0; FRAME_HEADER_LEN + len];
         chunk[12] = FrameType::Predicted.as_byte();
         let original = chunk.clone();
-        compress_frame_body(&mut chunk).unwrap();
+        let chunk = compress_frame_body(&mut chunk, &mut compressor).unwrap();
         if len < MIN_FRAME_COMPRESSION_BYTES {
             assert_eq!(chunk, original);
         } else {
@@ -2001,7 +2812,7 @@ fn frame_packing_requires_a_size_win_and_preserves_the_header() {
     // A sequence of distinct literals is cheaper to transmit directly at this length.
     literal.extend(0..=255);
     let original = literal.clone();
-    compress_frame_body(&mut literal).unwrap();
+    let literal = compress_frame_body(&mut literal, &mut compressor).unwrap();
     assert_eq!(literal, original);
 }
 
@@ -2035,15 +2846,15 @@ fn compressed_payload_requires_one_sized_frame_within_the_block_budget() {
 #[test]
 fn sparse_dct_paths_match_the_full_kernels() {
     let mut residual = [0; BLOCK_PIXELS];
-    assert_eq!(
-        forward_dct(&residual, u8::MAX, 0),
-        separable_dct(&residual, u8::MAX, 0)
-    );
+    assert_eq!(forward_dct(&residual, u8::MAX, 0), [0; BLOCK_PIXELS]);
     residual[BLOCK_PIXELS - 1] = -255;
-    assert_eq!(
-        forward_dct(&residual, u8::MAX, 0),
-        separable_dct(&residual, u8::MAX, 0)
-    );
+    for quantizer in [0, 1, 16, 255] {
+        let geometry = BlockQuantization::new(quantizer);
+        assert_eq!(
+            quantize_test_block(&geometry, &residual, u8::MAX),
+            quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), quantizer)
+        );
+    }
 
     let mut coeffs = [0; BLOCK_PIXELS];
     for dc in (-36..=36).chain([
@@ -2141,7 +2952,7 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
                 ),
                 BlockSpectrum::DcLevel(_)
             ));
-            let levels = quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), 16);
+            let levels = quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), 16);
             encode_block_rle(
                 &levels,
                 &mut dc,
@@ -2153,17 +2964,20 @@ fn certified_blocks_match_full_transform_payload_and_reference() {
             let spatial = inverse_dct_full(&dequantize_coeffs(&levels, 16));
             write_reconstructed_block(&mut pixels, &spatial, &predictor, dims, i);
         }
-        let encoded = BaselineEncoder::encode_frame_payload(
+        let mut payload = Vec::new();
+        let mut recon = reference.unwrap_or_default().to_vec();
+        BaselineEncoder::encode_frame_payload(
+            &mut payload,
             &frame,
             kind,
-            reference.map(<[u8]>::to_vec),
+            &mut recon,
             dims,
             16,
             true,
             &mut NoopBundledHooks,
             None,
         );
-        assert_eq!(encoded, (expected, Some(pixels)));
+        assert_eq!((payload, recon), (expected, pixels));
     }
 }
 
@@ -2177,22 +2991,26 @@ fn terminal_planes_emit_identical_payloads_without_a_prediction_reference() {
         (FrameType::Predicted, Some(previous.as_slice())),
     ] {
         let encode = |retain| {
+            let mut payload = Vec::new();
+            let mut recon = reference.unwrap_or_default().to_vec();
             BaselineEncoder::encode_frame_payload(
+                &mut payload,
                 &plane,
                 kind,
-                reference.map(<[u8]>::to_vec),
+                &mut recon,
                 dims,
                 16,
                 retain,
                 &mut NoopBundledHooks,
                 None,
-            )
+            );
+            (payload, recon)
         };
         let (with_reference, pixels) = encode(true);
         let (terminal, discarded) = encode(false);
         assert_eq!(terminal, with_reference);
-        assert_eq!(pixels.unwrap().len(), dims.pixel_count());
-        assert!(discarded.is_none());
+        assert_eq!(pixels.len(), dims.pixel_count());
+        assert_eq!(discarded, reference.unwrap_or_default());
     }
 }
 
@@ -2207,7 +3025,7 @@ fn centered_energy_bound_preserves_quantized_levels() {
             })
     };
     let check = |block: &[i16; BLOCK_PIXELS], qp| {
-        let full = separable_dct(block, u8::MAX, 0);
+        let full = forward_dct(block, u8::MAX, 0);
         let levels = quantize_coeffs(&full, qp);
         let (sum, squares) = moments(block);
         match BlockQuantization::new(qp).ac_limit(sum, squares) {
@@ -2232,7 +3050,7 @@ fn centered_energy_bound_preserves_quantized_levels() {
     // At Q16, alternating +/-9 lies just below the threshold and +/-10 above it.
     for (swing, skipped) in [(9, true), (10, false)] {
         let block = std::array::from_fn(|i| if i % 2 == 0 { 120 + swing } else { 120 - swing });
-        let full = separable_dct(&block, u8::MAX, 0);
+        let full = forward_dct(&block, u8::MAX, 0);
         assert!(full[1..].iter().any(|&v| v != 0));
         let (sum, squares) = moments(&block);
         assert_eq!(
@@ -2327,6 +3145,106 @@ fn band_moments_match_materialized_blocks() {
     }
 }
 
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[test]
+fn predicted_pair_moments_only_replace_proven_zero_blocks() {
+    if !std::arch::is_aarch64_feature_detected!("dotprod") {
+        return;
+    }
+    let dims = FrameDimensions::new(40, 8);
+    let stride = usize::from(dims.width);
+    let previous = vec![97; dims.pixel_count()];
+    for qp in [1, 2, 16, 37, 255] {
+        let g = BlockQuantization::new(qp);
+        for amplitude in [0, 1, 7, 8, 15, 64, 95] {
+            let frame: Vec<_> = previous
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| {
+                    if i % stride < 16 {
+                        p + amplitude
+                    } else if i % 3 == 0 {
+                        p - amplitude
+                    } else {
+                        p
+                    }
+                })
+                .collect();
+            let mut row = [(0, 0); 5];
+            // SAFETY: dotprod was detected and both inputs contain all eight rows.
+            unsafe {
+                predicted_moments(&frame, &previous, stride, g.zero_squares, &mut row);
+            }
+            for (col, actual) in row.into_iter().enumerate() {
+                let exact = block_moments(&frame, Some(&previous), stride, col);
+                if actual != exact {
+                    assert_eq!(actual, (0, 0));
+                    assert!(matches!(
+                        g.classify(&frame, Some(&previous), dims, col, exact),
+                        BlockSpectrum::DcLevel(0)
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn predicted_selection_mask_matches_block_certificates_at_every_offset() {
+    let dims = FrameDimensions::new(64 * 8, 8);
+    let stride = usize::from(dims.width);
+    let previous = vec![123; dims.pixel_count()];
+    let frame: Vec<_> = (0..dims.pixel_count())
+        .map(|i| {
+            let block = (i % stride) / 8;
+            match block % 4 {
+                0 => 123,
+                1 => 124,
+                2 => 200,
+                _ => ((i * 19 + i / stride * 11) % 256) as u8,
+            }
+        })
+        .collect();
+    let exact: Vec<_> = (0..64)
+        .map(|col| block_moments(&frame, Some(&previous), stride, col))
+        .collect();
+    for qp in [1, 16, 63, 255] {
+        let geometry = BlockQuantization::new(qp);
+        for len in 0..=64 {
+            let mask = geometry.possible_residuals(&exact[..len]);
+            for (i, &(sum, squares)) in exact[..len].iter().enumerate() {
+                let expected = geometry
+                    .ac_limit(i64::from(sum), i64::from(squares))
+                    .is_some()
+                    || u64::from(sum.unsigned_abs()) > geometry.zero_dc_sum;
+                assert_eq!(mask >> i & 1, u64::from(expected));
+                if !expected {
+                    assert!(matches!(
+                        geometry.classify(&frame, Some(&previous), dims, i, (sum, squares)),
+                        BlockSpectrum::DcLevel(0)
+                    ));
+                }
+            }
+            assert!(len == 64 || mask >> len == 0);
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+#[test]
+fn cosine_basis_preserves_centered_energy_within_the_byte_block_allowance() {
+    // Gershgorin bounds the spectral norm of BᵀB-I by its largest absolute
+    // row sum. The 2-D transform uses the tensor product of the two 1-D bases.
+    for x in 0..8 {
+        let error: f64 = (0..8)
+            .map(|y| {
+                let dot: f64 = DCT_FACTORS.iter().map(|row| row[x] * row[y]).sum();
+                (dot - f64::from(u8::from(x == y))).abs()
+            })
+            .sum();
+        assert!(error < 1e-13);
+    }
+}
 #[test]
 fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
     let dims = FrameDimensions::new(16, 16);
@@ -2354,7 +3272,7 @@ fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
         let (residual, _) =
             build_residual_block(&current, Some(&previous), dims, 3, FrameType::Predicted);
         assert_eq!(
-            quantize_coeffs(&separable_dct(&residual, u8::MAX, 0), qp),
+            quantize_coeffs(&forward_dct(&residual, u8::MAX, 0), qp),
             [0; BLOCK_PIXELS]
         );
         // The last sample belongs to block 3. Its neighbors in block 2 stay within the bound.
@@ -2395,7 +3313,7 @@ fn dc_level_resolves_double_rounding_at_quantizer_boundaries() {
                 let block = std::array::from_fn(|i| {
                     (sum.div_euclid(64) + i32::from((i as i32) < sum.rem_euclid(64))) as i16
                 });
-                let dc = separable_dct(&block, u8::MAX, 0)[0];
+                let dc = forward_dct(&block, u8::MAX, 0)[0];
                 assert_eq!(
                     BlockQuantization::new(qp).quantized_dc(i64::from(sum), || block),
                     quantize_level(dc, step)
@@ -2433,9 +3351,9 @@ fn reflection_groups_preserve_all_retained_coefficients() {
         for delta in [-1, 0, 1] {
             let mut block = base;
             block[63] += delta;
-            let reference = separable_dct(&block, u8::MAX, 0);
+            let reference = forward_dct(&block, u8::MAX, 0);
             for qp in [1, 4, 16, 255] {
-                let candidate = separable_dct(&block, u8::MAX, qp);
+                let candidate = forward_dct(&block, u8::MAX, qp);
                 let levels = quantize_coeffs(&reference, qp);
                 assert_eq!(quantize_coeffs(&candidate, qp), levels);
                 for i in 0..BLOCK_PIXELS {
@@ -2555,9 +3473,198 @@ fn dct_tables_satisfy_centered_projection_bound() {
 }
 
 #[test]
-fn separable_forward_dct_matches_direct_evaluation() {
+fn strided_pixel_folds_match_signed_scalar_residuals() {
+    for stride in [8, 15, 32, 129] {
+        let start = 3 * stride + stride - BLOCK_SIZE;
+        let len = start + 7 * stride + BLOCK_SIZE;
+        let pixels: Vec<_> = (0..len).map(|i| (i * 79) as u8).collect();
+        let predictor: Vec<_> = pixels.iter().map(|&v| 255 - v).collect();
+        for reference in [None, Some(&predictor[..])] {
+            let expected = fold_scalar(|y| {
+                std::array::from_fn(|x| {
+                    let i = start + y * stride + x;
+                    i16::from(pixels[i]) - reference.map_or(0, |p| i16::from(p[i]))
+                })
+            });
+            assert_eq!(
+                ResidualRows::new(&pixels, reference, stride, start).folded(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn folded_projection_kernels_match_wide_scalar_sums() {
+    let mut state = 0xbadecafe_u32;
+    for iteration in 0..64 {
+        let block: [i16; BLOCK_PIXELS] = std::array::from_fn(|i| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            match iteration {
+                0 => i16::MIN,
+                1 if i % 2 == 0 => i16::MAX,
+                1 => i16::MIN,
+                _ => (state >> 16) as i16,
+            }
+        });
+        let folded = fold_scalar(|y| block.as_chunks::<BLOCK_SIZE>().0[y]);
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        assert_eq!(fold_rows(|y| block.as_chunks::<BLOCK_SIZE>().0[y]), folded);
+        for (samples, projections) in folded.iter().zip(&AC_PROJECTIONS) {
+            let center = samples.as_flattened().iter().sum::<i32>() / 16;
+            for center in [0, center] {
+                let expected: u32 = samples.iter().flatten().map(|v| v.abs_diff(center)).sum();
+                assert_eq!(folded_l1(samples, center), expected);
+            }
+            assert!(projections.windows(2).all(|p| p[0].weight <= p[1].weight));
+            for projection in projections {
+                let expected: i128 = samples
+                    .iter()
+                    .flatten()
+                    .zip(projection.factors)
+                    .map(|(&x, w)| i128::from(x) * i128::from(w))
+                    .sum();
+                assert_eq!(
+                    i128::from(folded_dot(samples, &projection.factors)),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+#[test]
+fn q32_midpoint_uses_reference_order_for_ac() {
+    let mut block = [0; BLOCK_PIXELS];
+    block[37] = 10;
+    block[51] = -58;
+    let slot = 4 * BLOCK_SIZE;
+    let projection = AC_PROJECTIONS[0].iter().find(|p| p.slot == slot).unwrap();
+    let value = folded_dot(
+        &fold_scalar(|y| block.as_chunks::<BLOCK_SIZE>().0[y])[0],
+        &projection.factors,
+    );
+    assert_eq!(value, (8_i64 << 32) + (1 << 31));
+    for sign in [1, -1] {
+        let signed = block.map(|v| v * sign);
+        assert_eq!(
+            direct_dct_coefficient(&signed, &DCT_FACTORS[4], &DCT_FACTORS[0]),
+            8 * i32::from(sign)
+        );
+        assert_eq!(forward_dct(&signed, u8::MAX, 0)[slot], 8 * i32::from(sign));
+    }
+}
+
+fn quantize_test_block(
+    geometry: &BlockQuantization,
+    block: &[i16; BLOCK_PIXELS],
+    limit: u8,
+) -> [i16; BLOCK_PIXELS] {
+    let folded = fold_rows(|y| block.as_chunks::<BLOCK_SIZE>().0[y]);
+    let (levels, mask) = geometry.quantize_folded(&folded, folded_sum(&folded), limit, || *block);
+    assert_eq!(mask, ac_support(&levels));
+    levels
+}
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+#[test]
+fn narrow_q16_agrees_at_signed_bin_edges_and_large_prediction_offsets() {
+    if !std::arch::is_aarch64_feature_detected!("dotprod") {
+        return;
+    }
+    let geometry = BlockQuantization::new(16);
+    let mut seen = [0; 2];
+    let mut levels_seen = [false; 3];
+    for k in &NARROW_KERNELS {
+        for delta in -7..=7 {
+            let amplitude = f64::from(k.weight) * 8.0 + f64::from(delta);
+            for dc in [-164, 0, 167] {
+                for sign in [-1.0, 1.0] {
+                    let mut frame = [0; 13 * 8];
+                    let mut prior = [0; 13 * 8];
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let r = (sign
+                                * amplitude
+                                * DCT_FACTORS[k.slot / 8][y]
+                                * DCT_FACTORS[k.slot % 8][x])
+                                .round() as i32
+                                + dc;
+                            let p = if dc < 0 {
+                                207
+                            } else if dc > 0 {
+                                39
+                            } else {
+                                127
+                            };
+                            frame[y * 13 + x] = (p + r).clamp(0, 255) as u8;
+                            prior[y * 13 + x] = p as u8;
+                        }
+                    }
+                    for prediction in [None, Some(&prior[..])] {
+                        let rows = ResidualRows::new(&frame, prediction, 13, 0);
+                        let block = rows.block();
+                        let sum = block.iter().map(|&x| i32::from(x)).sum::<i32>();
+                        let sq = block.iter().map(|&x| i64::from(x).pow(2)).sum();
+                        let Some(limit) = geometry.ac_limit(i64::from(sum), sq) else {
+                            continue;
+                        };
+                        if limit > NARROW_LIMIT {
+                            continue;
+                        }
+                        let reference = quantize_coeffs(&forward_dct(&block, u8::MAX, 0), 16);
+                        // SAFETY: the host supports dotprod and the cutoff is the actual block bound.
+                        let (levels, mask) =
+                            unsafe { rows.narrow_q16((sum, sq as i32), limit, &geometry) };
+                        assert_eq!(
+                            levels, reference,
+                            "offset {dc}, frequency {}, cutoff {limit}",
+                            k.slot
+                        );
+                        assert_eq!(mask, ac_support(&reference));
+                        seen[usize::from(prediction.is_some() && limit > 15)] += 1;
+                        levels_seen[(levels[k.slot] + 1) as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(seen.iter().all(|&n| n > 0));
+    assert_eq!(levels_seen, [true; 3]);
+}
+
+#[test]
+fn fused_forward_levels_match_full_transform_at_every_quantizer() {
+    let mut state = 0x52f3e9d1_u32;
+    for quantizer in 0..=255 {
+        let geometry = BlockQuantization::new(quantizer);
+        for amplitude in [3, 127, 255, i16::MAX] {
+            let block = std::array::from_fn(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((state >> 16) as i16) % amplitude
+            });
+            let sum = block.iter().copied().map(i64::from).sum();
+            let squares = block.iter().map(|&x| i64::from(x).pow(2)).sum();
+            let limit = geometry.ac_limit(sum, squares).unwrap_or(0);
+            let expected = quantize_coeffs(&forward_dct(&block, u8::MAX, 0), quantizer);
+            assert_eq!(
+                quantize_test_block(&geometry, &block, limit),
+                expected,
+                "Q{quantizer} amplitude {amplitude}"
+            );
+        }
+    }
+}
+
+#[test]
+fn folded_forward_dct_matches_direct_evaluation() {
     fn check(block: &[i16; BLOCK_PIXELS]) {
-        let transformed = separable_dct(block, u8::MAX, 0);
+        let transformed = forward_dct(block, u8::MAX, 0);
         for u in 0..BLOCK_SIZE {
             for v in 0..BLOCK_SIZE {
                 #[cfg(feature = "streaming-fixed-point-dct")]
@@ -2593,8 +3700,8 @@ fn separable_forward_dct_matches_direct_evaluation() {
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     assert_eq!(
         (
-            separable_dct(&tie, u8::MAX, 0)[0],
-            separable_dct(&tie.map(|v| -v), u8::MAX, 0)[0]
+            forward_dct(&tie, u8::MAX, 0)[0],
+            forward_dct(&tie.map(|v| -v), u8::MAX, 0)[0]
         ),
         (1, -1)
     );
