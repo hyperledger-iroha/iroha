@@ -10388,7 +10388,10 @@ fn enrollment_expiry_domains_bind_records_without_state_authority() {
 /// record or message those tables keep as content (a roster, a registration mapping, a corpus
 /// entry, a closure, and in a lifecycle receipt an attempt State or a board record); none
 /// computes a State commitment, which remains the World root, so every tag keeps its record
-/// role. The registration custody in `parliament_registration.rs` writes no State and has one
+/// role. The N14 receipt table keeps each committed G3 `RuntimeEnactmentReceiptV1`, whose
+/// attempt State digest is the existing `PARL/ATTEMPT-STATE/v1` record digest; it adds no tag
+/// and computes no commitment of its own, so the certified World state root binds it as a
+/// row. The registration custody in `parliament_registration.rs` writes no State and has one
 /// consumer, the credential handler. Ballot State outside those three tables, another node
 /// use of a ballot crate, a State write in the custody or another consumer requires this
 /// review again.
@@ -10397,11 +10400,12 @@ fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     const MODULE: &str = "crates/iroha_data_model/src/governance/anonymous_ballot";
     const CUSTODY: &str = "crates/iroha_core/src/state/parliament_registration.rs";
     const HANDLER: &str = "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs";
-    const TABLES: [&str; 4] = [
+    const TABLES: [&str; 5] = [
         "world.parliament_anonymous_attempts",
         "world.parliament_anonymous_boards",
         "world.parliament_anonymous_due",
         "world.parliament_anonymous_registrations",
+        "world.parliament_anonymous_runtime_enactments",
     ];
     const REVIEW: &str = "review the anonymous-ballot tag classification";
     let record = DomainOwner::Other(Use::Record);

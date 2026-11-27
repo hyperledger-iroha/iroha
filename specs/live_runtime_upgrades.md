@@ -821,10 +821,14 @@ not a date: it happens once everything its first selection needs is implemented 
    distinct G3 result owner is implemented: a root selects it only through an exact services
    profile naming `parliament_runtime_enactment_result_v1` with its reference closure, and it
    admits each complete receipt into a bounded per-block custody (16 receipts) before it applies
-   the prepared effect. No compiled services profile composes that service, and the block start
-   refuses any admitted receipt until the block publishes them, so G3 application still refuses
-   before effects. Bind the admitted receipts into the block's committed outputs, compose the
-   service and qualify the owner. Production qualification remains `None`;
+   the prepared effect. It publishes each receipt as committed World State: the receipt is
+   written to `world.parliament_anonymous_runtime_enactments` (a table of the family's addition)
+   in the effect's own transaction, so the certified World state root of `R` binds receipt,
+   effect and terminal status together, and the block start seals the admitted receipts against
+   those rows; the native output graph stays closed. Restore requires exactly one receipt per
+   executed attempt. No compiled services profile composes the service, so G3 application
+   still refuses before effects. Compose the service and qualify the owner. Production
+   qualification remains `None`;
    candidate certificates never enact, and other proposal effects remain open. Neither this
    corridor nor the runtime emergency panel gets a temporary substitute on Taira. The panel's containment is implemented
    (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound

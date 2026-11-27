@@ -371,9 +371,11 @@ pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
 /// verified credential. Its tables are `world.parliament_anonymous_attempts`, the State of
 /// each attempt, `world.parliament_anonymous_registrations`, the credential of each accepted
 /// binding assignment, `world.parliament_anonymous_boards`, the board of each sealed binding
-/// jury, and `world.parliament_anonymous_due`, its due index of nonterminal attempts and
-/// their boards. Until a change set activates it the instructions stay inactive and the
-/// tables stay empty and out of snapshots. Its dependencies are exactly the frozen baseline.
+/// jury, `world.parliament_anonymous_due`, its due index of nonterminal attempts and
+/// their boards, and `world.parliament_anonymous_runtime_enactments`, the committed G3 receipt
+/// of each runtime attempt the selected result owner executed (N14). Until a change set
+/// activates it the instructions stay inactive and the tables stay empty and out of
+/// snapshots. Its dependencies are exactly the frozen baseline.
 ///
 /// Its services (the positioned block-start pass, the signerless ballot entrypoint and the
 /// committed outputs) run on a root whose selection installs its tables.
@@ -397,6 +399,7 @@ pub const PARLIAMENT_ANONYMOUS: Addition = Addition {
         StorageAddition::Table("world.parliament_anonymous_registrations"),
         StorageAddition::Table("world.parliament_anonymous_boards"),
         StorageAddition::Table("world.parliament_anonymous_due"),
+        StorageAddition::Table("world.parliament_anonymous_runtime_enactments"),
     ],
 };
 

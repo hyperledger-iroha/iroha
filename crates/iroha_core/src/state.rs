@@ -58,6 +58,7 @@ use iroha_data_model::game_partition::GamePartitionStateV1;
 use iroha_data_model::governance::{
     anonymous_ballot::{
         BallotScopeV1, ParliamentBallotBoardRecordV1, ParliamentCredentialRecordV1,
+        RuntimeEnactmentReceiptV1,
     },
     types::AssignmentId,
 };
@@ -1299,6 +1300,7 @@ macro_rules! with_world_overlay_fields {
             parliament_anonymous_registrations,
             parliament_anonymous_boards,
             parliament_anonymous_due,
+            parliament_anonymous_runtime_enactments,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4465,6 +4467,10 @@ pub struct WorldData {
     /// Due index of the anonymous family: each nonterminal attempt with the scopes of its
     /// boards, so listing reads at most `K` attempts (design §9).
     pub(crate) parliament_anonymous_due: Storage<GovernanceAttemptId, Vec<BallotScopeV1>>,
+    /// The committed G3 result of each runtime attempt the selected result owner enacted,
+    /// superseded or failed: one receipt per attempt, written with its effect (N14).
+    pub(crate) parliament_anonymous_runtime_enactments:
+        Storage<GovernanceAttemptId, RuntimeEnactmentReceiptV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5601,6 +5607,9 @@ pub struct WorldBlockFields<'world> {
     /// boards, so listing reads at most `K` attempts (design §9).
     pub(crate) parliament_anonymous_due:
         StorageField<'world, GovernanceAttemptId, Vec<BallotScopeV1>>,
+    /// The committed G3 result of each runtime attempt, one receipt per attempt (N14).
+    pub(crate) parliament_anonymous_runtime_enactments:
+        StorageField<'world, GovernanceAttemptId, RuntimeEnactmentReceiptV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6859,6 +6868,7 @@ impl WorldBlock<'_> {
             parliament_anonymous_registrations,
             parliament_anonymous_boards,
             parliament_anonymous_due,
+            parliament_anonymous_runtime_enactments,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7520,6 +7530,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// boards, so listing reads at most `K` attempts (design §9).
     pub(crate) parliament_anonymous_due:
         StorageTransaction<'block, GovernanceAttemptId, Vec<BallotScopeV1>>,
+    /// The committed G3 result of each runtime attempt, one receipt per attempt (N14).
+    pub(crate) parliament_anonymous_runtime_enactments:
+        StorageTransaction<'block, GovernanceAttemptId, RuntimeEnactmentReceiptV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9899,6 +9912,9 @@ pub struct WorldView<'world> {
     /// boards, so listing reads at most `K` attempts (design §9).
     pub(crate) parliament_anonymous_due:
         StorageView<'world, GovernanceAttemptId, Vec<BallotScopeV1>>,
+    /// The committed G3 result of each runtime attempt, one receipt per attempt (N14).
+    pub(crate) parliament_anonymous_runtime_enactments:
+        StorageView<'world, GovernanceAttemptId, RuntimeEnactmentReceiptV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -22361,6 +22377,8 @@ macro_rules! world_ro_accessors {
             storage parliament_anonymous_boards: BallotScopeV1 => ParliamentBallotBoardRecordV1;
             /// Due index of the anonymous family: each nonterminal attempt and its boards.
             storage parliament_anonymous_due: GovernanceAttemptId => Vec<BallotScopeV1>;
+            /// The committed G3 result of each runtime attempt, one receipt per attempt.
+            storage parliament_anonymous_runtime_enactments: GovernanceAttemptId => RuntimeEnactmentReceiptV1;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -26292,6 +26310,7 @@ impl WorldTransaction<'_, '_> {
             parliament_anonymous_registrations: _,
             parliament_anonymous_boards: _,
             parliament_anonymous_due: _,
+            parliament_anonymous_runtime_enactments: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -26772,6 +26791,7 @@ impl WorldTransaction<'_, '_> {
         self.parliament_anonymous_registrations.apply();
         self.parliament_anonymous_boards.apply();
         self.parliament_anonymous_due.apply();
+        self.parliament_anonymous_runtime_enactments.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();

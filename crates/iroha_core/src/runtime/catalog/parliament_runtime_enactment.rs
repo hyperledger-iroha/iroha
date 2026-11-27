@@ -1,6 +1,7 @@
 //! Selection of the distinct G3 runtime enactment result owner (N14).
 //!
 //! A root selects the owner only when its selection installs the anonymous Parliament family
+//! together with its committed receipt table (`world.parliament_anonymous_runtime_enactments`)
 //! and its exact compiled services profile names
 //! [`RUNTIME_ENACTMENT_RESULT_SERVICE_V1`] with exactly the reference closure of
 //! [`RUNTIME_ENACTMENT_RESULT_SERVICE_CLOSURE_V1`]. A matching name with another closure is
@@ -8,8 +9,8 @@
 //!
 //! This release composes the service into no services profile, so every root answers "not
 //! selected" and G3 application keeps its original refusal before effects.
-//! TODO(N14): compose the service only together with block publication of the admitted
-//! results and the qualified ballot authority (P1).
+//! TODO(N14): compose the service only together with the qualified ballot authority (P1) and a
+//! reviewed governed change set; the owner already commits its receipts to World State.
 
 use iroha_data_model::governance::anonymous_ballot::{
     RUNTIME_ENACTMENT_RESULT_SERVICE_CLOSURE_V1, RUNTIME_ENACTMENT_RESULT_SERVICE_V1,
@@ -31,7 +32,13 @@ pub(crate) fn selected_in(
     catalog: &ReleaseCatalog,
     selection: &RootSelectionV1,
 ) -> Result<bool, String> {
-    if !crate::runtime::parliament_anonymous_installed(selection)? {
+    // A root that installed the family without the receipt table (an older family descriptor)
+    // has no committed place for a receipt, so it never selects the owner.
+    let uninstalled = crate::runtime::uninstalled_world_members(selection)?.members;
+    if uninstalled.contains(&"parliament_anonymous_attempts")
+        || uninstalled
+            .contains(&crate::state::parliament_anonymous_tables::RUNTIME_ENACTMENTS_MEMBER)
+    {
         return Ok(false);
     }
     catalog
@@ -108,7 +115,7 @@ mod tests {
                     .services
                     .iter()
                     .all(|entry| entry.name.as_str() != RUNTIME_ENACTMENT_RESULT_SERVICE_V1),
-                "composing the G3 result service requires its block publication and P1"
+                "composing the G3 result service requires P1 and a reviewed governed change set"
             );
         }
         assert!(profiles > 0);
@@ -133,6 +140,20 @@ mod tests {
         assert_eq!(selected_in(&catalog, &baseline), Ok(false));
         // The real catalog never compiled that profile.
         assert!(selected(&family).is_err());
+    }
+
+    #[test]
+    fn a_root_without_the_committed_receipt_table_never_selects_the_owner() {
+        let release = release_catalog().expect("release catalog");
+        let mut family = family_selection();
+        let (catalog, profile) = composed(release, family.services_profile, reference_closure());
+        family.services_profile = profile;
+        assert_eq!(selected_in(&catalog, &family), Ok(true));
+        // The same root as an older family descriptor installed it: no receipt table.
+        let table = release.world_storage["world.parliament_anonymous_runtime_enactments"];
+        family.installed_storage.retain(|storage| *storage != table);
+        assert!(crate::runtime::parliament_anonymous_installed(&family).unwrap());
+        assert_eq!(selected_in(&catalog, &family), Ok(false));
     }
 
     #[test]

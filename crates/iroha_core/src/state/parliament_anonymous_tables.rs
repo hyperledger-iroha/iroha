@@ -1,6 +1,6 @@
 //! The anonymous Parliament tables and their restore check (design §12.3, slice 2).
 //!
-//! World keeps four tables for the anonymous family, added by the
+//! World keeps five tables for the anonymous family, added by the
 //! `iroha.governance.parliament.anonymous.v1` release addition:
 //!
 //! - `world.parliament_anonymous_attempts`: the State of each attempt;
@@ -11,7 +11,12 @@
 //! - `world.parliament_anonymous_due`: the due index, every nonterminal attempt with the
 //!   scopes of its boards. Listing reads it, so a block reads at most `K` attempts whatever
 //!   the tables keep of terminal ones (design §9). [`store_attempt`] and [`store_board`]
-//!   keep it, and restore refuses a cut whose index is not the one its tables give.
+//!   keep it, and restore refuses a cut whose index is not the one its tables give;
+//! - `world.parliament_anonymous_runtime_enactments`: the committed G3 receipt of each runtime
+//!   attempt the selected result owner executed, keyed by the attempt. The owner writes it in
+//!   the effect's own transaction, so the certified World state root binds the receipt
+//!   together with the effect (N14). Restore requires exactly one receipt per executed
+//!   attempt, equal to the outcome, stage, anchor and State digest that attempt records.
 //!
 //! Until a change set activates the addition the tables stay empty and out of snapshots. A
 //! restored cut is accepted only if every attempt is one the reducer produces, every election
@@ -43,13 +48,18 @@ use crate::governance::parliament_anonymous::{
     AnonymousElectionCredentialsV1, AnonymousParliamentAttemptStateV1, AnonymousParliamentErrorV1,
 };
 
-/// The World members of the four tables, in registry order.
-const MEMBERS: [&str; 4] = [
+/// The World members of the five tables, in registry order.
+const MEMBERS: [&str; 5] = [
     "parliament_anonymous_attempts",
     "parliament_anonymous_registrations",
     "parliament_anonymous_boards",
     "parliament_anonymous_due",
+    RUNTIME_ENACTMENTS_MEMBER,
 ];
+
+/// The World member of the committed G3 receipts. A root whose selection does not install it
+/// cannot select the G3 result owner.
+pub(crate) const RUNTIME_ENACTMENTS_MEMBER: &str = "parliament_anonymous_runtime_enactments";
 
 /// Store `attempt` under `id` and keep the due index: a nonterminal attempt is listed, with
 /// the boards it keeps, and a terminal one is not.
@@ -188,6 +198,7 @@ pub(crate) fn validate_cut(
     let registrations = cut.parliament_anonymous_registrations();
     let stored_boards = cut.parliament_anonymous_boards();
     let due = cut.parliament_anonymous_due();
+    let enactments = cut.parliament_anonymous_runtime_enactments();
 
     // A selection that does not install the family holds none of its rows.
     let uninstalled = crate::runtime::uninstalled_world_members(cut.runtime_selection())
@@ -198,6 +209,7 @@ pub(crate) fn validate_cut(
         registrations.is_empty(),
         stored_boards.is_empty(),
         due.is_empty(),
+        enactments.is_empty(),
     ]) {
         if !empty && uninstalled.contains(&member) {
             return Err(Invalid(format!(
@@ -239,6 +251,7 @@ pub(crate) fn validate_cut(
                 .to_owned(),
         ));
     }
+    validate_runtime_enactments(cut, height)?;
     if let Some((assignment, _)) = registrations
         .iter()
         .find(|(assignment, _)| !accepted.contains(*assignment))
@@ -298,6 +311,77 @@ pub(crate) fn validate_cut(
                 boards.remove(id).unwrap_or_default(),
             )
             .map_err(refuse)?;
+    }
+    Ok(())
+}
+
+/// Check the committed G3 receipts of `cut` against the attempts it keeps: every receipt
+/// belongs to a stored attempt whose recorded execution it describes exactly (anchor at or
+/// below the restored `height`, outcome, stage and the digest of the attempt State), and every
+/// executed attempt holds its receipt. The selected result owner writes both in one
+/// transaction, so a cut with one and not the other is not one this release produces.
+///
+/// # Errors
+/// [`AnonymousTablesRestoreError::Invalid`] for the first receipt or executed attempt that
+/// breaks the rule.
+fn validate_runtime_enactments(
+    cut: &impl WorldReadOnly,
+    height: u64,
+) -> Result<(), AnonymousTablesRestoreError> {
+    use AnonymousTablesRestoreError::Invalid;
+
+    let attempts = cut.parliament_anonymous_attempts();
+    let enactments = cut.parliament_anonymous_runtime_enactments();
+    for (id, receipt) in enactments.iter() {
+        if receipt.governance_attempt_id != *id {
+            return Err(Invalid(format!(
+                "runtime enactment receipt {id:?} is stored under another attempt"
+            )));
+        }
+        receipt
+            .validate()
+            .map_err(|error| Invalid(format!("runtime enactment receipt {id:?}: {error}")))?;
+        if receipt.anchor.height > height {
+            return Err(Invalid(format!(
+                "runtime enactment receipt {id:?} records a block above restored height {height}"
+            )));
+        }
+        let attempt = attempts.get(id).ok_or_else(|| {
+            Invalid(format!(
+                "runtime enactment receipt {id:?} names no stored anonymous Parliament attempt"
+            ))
+        })?;
+        let executed = attempt.execution().ok_or_else(|| {
+            Invalid(format!(
+                "runtime enactment receipt {id:?} names an attempt that recorded no execution"
+            ))
+        })?;
+        let digest =
+            iroha_data_model::governance::anonymous_ballot::digests::attempt_state_digest_v1(
+                attempt,
+            )
+            .map_err(|error| {
+                Invalid(format!(
+                    "runtime enactment receipt {id:?}: attempt State digest: {error}"
+                ))
+            })?;
+        if executed.at != receipt.anchor
+            || attempt.attempt().status != receipt.status
+            || attempt.attempt().stage != receipt.stage
+            || digest != receipt.attempt_state_digest
+        {
+            return Err(Invalid(format!(
+                "runtime enactment receipt {id:?} is not the result its attempt records"
+            )));
+        }
+    }
+    if let Some((id, _)) = attempts
+        .iter()
+        .find(|(id, attempt)| attempt.execution().is_some() && enactments.get(*id).is_none())
+    {
+        return Err(Invalid(format!(
+            "anonymous Parliament attempt {id:?} recorded an execution without its committed receipt"
+        )));
     }
     Ok(())
 }

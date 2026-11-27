@@ -11,9 +11,15 @@
 //! The retained private preparation drops a deterministically rejected effect transaction
 //! before a fresh failure child; local refusal keeps its original retry owner intact.
 //!
+//! The owner publishes each receipt as committed World State: it writes the receipt to
+//! `world.parliament_anonymous_runtime_enactments` in the effect's own transaction, so the
+//! certified World state root of the block's result (`R`) binds receipt, effect and terminal
+//! status together, and the block start seals the admitted receipts against those rows. The
+//! native block outputs stay closed. A root selects the owner only when it also installs that
+//! table, so a root that installed an older family descriptor keeps the original refusal.
+//!
 //! Activation still needs, all together: the qualified ballot authority
-//! (`PARLIAMENT_BALLOT_QUALIFICATION_V1`, P1), the block publication of the admitted results
-//! (the block start refuses any admitted receipt until then) and the composed service.
+//! (`PARLIAMENT_BALLOT_QUALIFICATION_V1`, P1) and the composed service.
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
@@ -141,8 +147,10 @@ struct PreparedRuntimeEnactment<'block, 'state> {
     receipt: RuntimeEnactmentReceiptV1,
 }
 
-/// The selected G3 result owner: admit the complete original receipt into this block's bounded
-/// result custody, then apply the original effect transaction. Every refusal drops the
+/// The selected G3 result owner: commit the complete original receipt into World within the
+/// effect's own transaction, admit it into this block's bounded result custody, then apply that
+/// one transaction. The certified World state root of the block's result binds the receipt
+/// together with the effect and the attempt's terminal status. Every refusal drops the
 /// transaction unapplied, so no business effect, terminal status or receipt survives it.
 fn produce(
     _selected: &SelectedResultOwner,
@@ -151,7 +159,7 @@ fn produce(
     results: &mut RuntimeEnactmentResultsV1,
 ) -> Result<(), PassError> {
     let PreparedRuntimeEnactment {
-        transaction,
+        mut transaction,
         receipt,
     } = prepared;
     if receipt.anchor != at {
@@ -159,8 +167,28 @@ fn produce(
             "a prepared runtime receipt names another pass position",
         ));
     }
+    let id = receipt.governance_attempt_id;
+    if transaction
+        .world
+        .parliament_anonymous_runtime_enactments
+        .get(&id)
+        .is_some()
+    {
+        return Err(PassError::World(
+            "a runtime attempt already holds a committed enactment receipt",
+        ));
+    }
+    // SPEC/N14: the receipt is published as committed World State in the effect's own
+    // transaction; R's World state root certifies both or neither.
+    transaction
+        .world
+        .parliament_anonymous_runtime_enactments
+        .insert(id, receipt);
+    transaction
+        .require_storage_admission()
+        .map_err(PassError::Storage)?;
     results.admit(receipt).map_err(PassError::Results)?;
-    // SPEC/N14: the complete receipt is in custody before any effect is applied.
+    // SPEC/N14: the complete receipt is committed and in custody before any effect applies.
     transaction.apply();
     Ok(())
 }
@@ -702,9 +730,19 @@ mod tests {
         timestamp_ms: 300_000,
     };
 
+    /// The committed receipt row of attempt `tag`, if any.
+    fn committed(block: &StateBlock<'_>, tag: u8) -> Option<RuntimeEnactmentReceiptV1> {
+        block
+            .world
+            .parliament_anonymous_runtime_enactments
+            .get(&GovernanceAttemptId::new([tag; 32]))
+            .copied()
+    }
+
     #[test]
-    fn selected_owner_admits_the_complete_receipt_before_applying_the_effect() {
-        let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+    fn selected_owner_commits_the_receipt_with_its_effect_before_applying() {
+        // A fixture root whose selection installs the anonymous family and its receipt table.
+        let state = Rows::default().state();
         let mut block = state.block(header(AT.height, AT.timestamp_ms));
         let mut results = RuntimeEnactmentResultsV1::new(AT.height, AT.timestamp_ms);
         let receipt = receipt_at(AT, 4);
@@ -716,9 +754,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.receipts(), &[receipt]);
+        assert_eq!(committed(&block, 4), Some(receipt));
         assert_eq!(
             block.world.smart_contract_state.get(&effect_key()),
             Some(&vec![9])
+        );
+        // The block start's seal accepts exactly the committed row.
+        assert!(
+            crate::state::governance_start::require_committed_enactments(
+                &block.world,
+                results.receipts()
+            )
+            .is_ok()
         );
         drop(block);
         assert!(
@@ -730,6 +777,15 @@ mod tests {
                 .is_none(),
             "the block was never committed"
         );
+        assert!(
+            state
+                .world
+                .parliament_anonymous_runtime_enactments
+                .view()
+                .get(&receipt.governance_attempt_id)
+                .is_none(),
+            "an abandoned block keeps no receipt"
+        );
     }
 
     #[test]
@@ -737,14 +793,14 @@ mod tests {
         use iroha_data_model::governance::anonymous_ballot::{
             RUNTIME_ENACTMENT_RESULTS_PER_BLOCK_V1, RuntimeEnactmentResultsErrorV1 as Refusal,
         };
-        let state = crate::smartcontracts::isi::sccp::test_support::blank_state();
+        let state = Rows::default().state();
         let mut block = state.block(header(AT.height, AT.timestamp_ms));
         let owner = SelectedResultOwner::for_test();
         let mut results = RuntimeEnactmentResultsV1::new(AT.height, AT.timestamp_ms);
         let effect =
             |block: &StateBlock<'_>| block.world.smart_contract_state.get(&effect_key()).cloned();
 
-        // A receipt prepared for another pass position never enters custody.
+        // A receipt prepared for another pass position never enters World or custody.
         let elsewhere = GovernanceAnchorV1 { position: 2, ..AT };
         assert!(matches!(
             produce(
@@ -755,7 +811,7 @@ mod tests {
             ),
             Err(PassError::World(_))
         ));
-        // Neither does one the custody of another block refuses.
+        // Neither does one the custody of another block refuses: its World row is discarded.
         let mut foreign = RuntimeEnactmentResultsV1::new(AT.height + 1, AT.timestamp_ms);
         assert!(matches!(
             produce(
@@ -768,6 +824,7 @@ mod tests {
         ));
         assert!(results.is_empty() && foreign.is_empty());
         assert_eq!(effect(&block), None);
+        assert_eq!(committed(&block, 4), None);
 
         produce(
             &owner,
@@ -777,8 +834,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(effect(&block), Some(vec![3]));
+        assert_eq!(committed(&block, 4), Some(receipt_at(AT, 4)));
 
-        // A second receipt of the same attempt is refused and its effect discarded.
+        // An attempt that already holds a committed receipt is refused; its effect is discarded
+        // and the committed row is unchanged.
         let next = GovernanceAnchorV1 { position: 4, ..AT };
         assert!(matches!(
             produce(
@@ -787,12 +846,14 @@ mod tests {
                 next,
                 &mut results
             ),
-            Err(PassError::Results(Refusal::DuplicateAttempt))
+            Err(PassError::World(_))
         ));
         assert_eq!(effect(&block), Some(vec![3]));
+        assert_eq!(committed(&block, 4), Some(receipt_at(AT, 4)));
         assert_eq!(results.receipts().len(), 1);
 
-        // A custody at its bound refuses before the effect (its owner checks `fits` first).
+        // A custody at its bound refuses before the effect (its owner checks `fits` first), and
+        // the receipt row its transaction wrote is discarded with it.
         let mut position = next.position;
         let mut tag = 10_u8;
         while results.fits() {
@@ -817,6 +878,7 @@ mod tests {
             Err(PassError::Results(Refusal::Capacity))
         ));
         assert_eq!(effect(&block), Some(vec![3]));
+        assert_eq!(committed(&block, 0xee), None);
         assert!(!PassError::Results(Refusal::Capacity).is_local());
         assert!(PassError::Results(Refusal::Allocation).is_local());
     }

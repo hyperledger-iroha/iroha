@@ -29,10 +29,7 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly as _;
 
-use super::{
-    StateBlock, StateBlockStartError, StateReadOnly as _, StateStorageAdmissionError,
-    WorldReadOnly as _,
-};
+use super::{StateBlock, StateBlockStartError, StateReadOnly as _, WorldReadOnly};
 use crate::{
     governance::parliament_anonymous::{
         AnonymousSortitionPulseV1,
@@ -86,8 +83,8 @@ pub(crate) fn run_on_global_chain<E: std::fmt::Debug>(
     let mut sccp = SccpPassOwnerV1::<E>::default();
     let report = run_governance_pass(state, parliament, &mut sccp, before_enactments)
         .map_err(start_error)?;
-    require_published_enactments(state._curr_block.height().get(), &report.runtime_enactments)
-        .map_err(StateBlockStartError::Storage)?;
+    require_committed_enactments(&state.world, &report.runtime_enactments)
+        .map_err(StateBlockStartError::Policy)?;
     state.governance_due_applied = report.governance_due_applied();
     if installed {
         state.governance_start_outputs = Some(report.rows);
@@ -144,28 +141,29 @@ fn committed_pulses(state: &StateBlock<'_>) -> Vec<AnonymousSortitionPulseV1> {
         .collect()
 }
 
-/// The selected G3 result owner admits each receipt before it applies the effect the receipt
-/// describes. No committed block output carries those receipts in this release, so a block
-/// whose pass admitted any cannot be sealed: this is a local unsupported-runtime refusal,
-/// never a verdict, and the abandoned block discards the effects with its State. No root can
-/// reach it yet: no compiled services profile selects the owner and no production
-/// certificate exists without P1.
-/// TODO(N14): bind the admitted receipts into the block's committed outputs instead.
-fn require_published_enactments(
-    height: u64,
+/// Seal the G3 results of this block's pass: every receipt the selected result owner admitted is
+/// exactly the row its effect's transaction committed to
+/// `world.parliament_anonymous_runtime_enactments`. That table is canonical World State, so
+/// the certified World state root of the block's result (`R`) binds each receipt; the native
+/// block outputs stay closed. A disagreement is never produced by this release: the block is
+/// abandoned. No root reaches a receipt yet: no compiled services profile selects the owner
+/// and no production certificate exists without P1.
+pub(crate) fn require_committed_enactments(
+    world: &(impl WorldReadOnly + ?Sized),
     receipts: &[RuntimeEnactmentReceiptV1],
-) -> Result<(), StateStorageAdmissionError> {
-    // SPEC/N14: admitted G3 receipts are never dropped while their effects are committed.
-    if receipts.is_empty() {
-        Ok(())
-    } else {
-        Err(StateStorageAdmissionError::UnsupportedRuntime {
-            height,
-            reason: "selected runtime enactment results have no committed block publication in \
-                     this release"
-                .into(),
-        })
+) -> Result<(), String> {
+    // SPEC/N14: an admitted G3 receipt is published only as its committed World row.
+    let committed = world.parliament_anonymous_runtime_enactments();
+    for receipt in receipts {
+        if committed.get(&receipt.governance_attempt_id) != Some(receipt) {
+            return Err(format!(
+                "governance block-start pass: runtime enactment receipt of {:?} is not its \
+                 committed World row",
+                receipt.governance_attempt_id
+            ));
+        }
     }
+    Ok(())
 }
 
 /// The block-start refusal of a pass that did not complete.
@@ -248,8 +246,8 @@ mod tests {
     use crate::smartcontracts::isi::sccp::test_support::{blank_state, header};
 
     #[test]
-    fn admitted_runtime_enactments_without_publication_never_seal() {
-        assert!(require_published_enactments(5, &[]).is_ok());
+    fn the_seal_binds_each_admitted_receipt_to_its_committed_world_row() {
+        use iroha_data_model::governance::types::GovernanceAttemptStatusV1;
         let receipt = RuntimeEnactmentReceiptV1 {
             anchor: iroha_data_model::governance::GovernanceAnchorV1 {
                 height: 5,
@@ -259,14 +257,44 @@ mod tests {
             governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId::new(
                 [4; 32],
             ),
-            status: iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted,
+            status: GovernanceAttemptStatusV1::Enacted,
             stage: iroha_data_model::governance::types::GovernanceStageV1::default(),
             attempt_state_digest: [4; 64].into(),
         };
-        assert!(matches!(
-            require_published_enactments(5, &[receipt]),
-            Err(StateStorageAdmissionError::UnsupportedRuntime { height: 5, .. })
-        ));
+        let world = crate::state::World::new();
+        assert!(require_committed_enactments(&world.view(), &[]).is_ok());
+        assert!(
+            require_committed_enactments(&world.view(), &[receipt]).is_err(),
+            "an admitted receipt without its committed row never seals"
+        );
+        let mut block = world.block();
+        block
+            .parliament_anonymous_runtime_enactments
+            .insert(receipt.governance_attempt_id, receipt);
+        block.commit();
+        assert!(require_committed_enactments(&world.view(), &[receipt]).is_ok());
+        for changed in [
+            RuntimeEnactmentReceiptV1 {
+                status: GovernanceAttemptStatusV1::Superseded,
+                ..receipt
+            },
+            RuntimeEnactmentReceiptV1 {
+                attempt_state_digest: [5; 64].into(),
+                ..receipt
+            },
+            RuntimeEnactmentReceiptV1 {
+                anchor: iroha_data_model::governance::GovernanceAnchorV1 {
+                    position: 1,
+                    ..receipt.anchor
+                },
+                ..receipt
+            },
+        ] {
+            assert!(
+                require_committed_enactments(&world.view(), &[changed]).is_err(),
+                "a receipt that differs from its committed row never seals"
+            );
+        }
     }
 
     #[test]

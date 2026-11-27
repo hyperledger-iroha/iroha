@@ -35,9 +35,11 @@
 //! receipt before applying it; a root that selects no such owner refuses as unsupported before
 //! effects. This release composes the owner's service into no services profile. Candidate
 //! certificates never list an enactment.
-//! TODO(design §12.3, slice 5; N14): publish the admitted receipts with the block and compose
-//! the result service, qualify production ballot authority (P1) and implement the remaining
-//! proposal effects. Qualification remains `None`.
+//! The owner commits each receipt to `world.parliament_anonymous_runtime_enactments` in its
+//! effect's own transaction, so the certified World state root of the block's result binds it;
+//! the native block outputs stay closed.
+//! TODO(design §12.3, slice 5; N14): compose the result service, qualify production ballot
+//! authority (P1) and implement the remaining proposal effects. Qualification remains `None`.
 
 use core::cell::RefCell;
 

@@ -7,9 +7,12 @@
 //! an exact compiled services profile naming [`RUNTIME_ENACTMENT_RESULT_SERVICE_V1`] with the
 //! reference closure [`RUNTIME_ENACTMENT_RESULT_SERVICE_CLOSURE_V1`].
 //!
-//! TODO(N14): bind the admitted results into the block's committed outputs, then compose the
-//! service. Until both exist no compiled services profile names the service, every root
-//! answers "not selected", and G3 application keeps refusing before effects.
+//! Core publishes each admitted receipt as committed World State
+//! (`world.parliament_anonymous_runtime_enactments`, written in the effect's own transaction),
+//! so the certified World state root binds it and the native output graph stays closed.
+//! TODO(N14): compose the service once P1 qualifies the ballot authority. Until then no
+//! compiled services profile names the service, every root answers "not selected", and G3
+//! application keeps refusing before effects.
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
