@@ -3600,6 +3600,7 @@ pub enum PublicationBackendFailureClass {
 pub struct PublicationBackendError {
     class: PublicationBackendFailureClass,
     code: String,
+    pending_native_operation: bool,
 }
 impl PublicationBackendError {
     /// Construct a retryable backend failure from a bounded stable code.
@@ -3624,7 +3625,20 @@ impl PublicationBackendError {
         } else {
             "MUSUBI_BACKEND_FAILURE".to_owned()
         };
-        Self { class, code }
+        Self {
+            class,
+            code,
+            pending_native_operation: false,
+        }
+    }
+    pub(crate) fn pending_native_operation() -> Self {
+        Self {
+            pending_native_operation: true,
+            ..Self::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY")
+        }
+    }
+    pub(crate) fn is_pending_native_operation(&self) -> bool {
+        self.pending_native_operation
     }
     /// Return whether the same idempotent call may be retried.
     #[must_use]

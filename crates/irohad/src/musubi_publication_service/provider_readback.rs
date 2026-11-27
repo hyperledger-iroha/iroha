@@ -52,6 +52,7 @@ trait AuthenticatedReadbackSourceV1: Send {
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
+        paid_operation_id: [u8; 32],
     ) -> Result<Box<dyn std::io::Read + Send + 'static>, MusubiArchiveRuntimeErrorV1>;
     fn take_stream_failure(&mut self) -> Option<MusubiArchiveRuntimeErrorV1>;
 }
@@ -78,13 +79,15 @@ impl AuthenticatedReadbackSourceV1 for AuthenticatedMusubiArchiveFetchClientV1 {
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
+        paid_operation_id: [u8; 32],
     ) -> Result<Box<dyn std::io::Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
-        AuthenticatedMusubiArchiveFetchClientV1::open_authenticated_car(
+        AuthenticatedMusubiArchiveFetchClientV1::open_authenticated_car_for_readback(
             self,
             pin_manifest,
             provider,
             commitment,
             plan,
+            paid_operation_id,
         )
     }
     fn take_stream_failure(&mut self) -> Option<MusubiArchiveRuntimeErrorV1> {
@@ -118,8 +121,15 @@ impl<S: AuthenticatedReadbackSourceV1> ReadbackCoreV1<S> {
             .source
             .storage_plan(manifest, request.provider, &request.commitment)
             .map_err(backend_error)?;
-        let car = read_complete_car(&mut self.source, request, &plan)?;
-        verify_complete_readback(request, &plan, &car)
+        self.readback_with_plan(request, &plan)
+    }
+    fn readback_with_plan(
+        &mut self,
+        request: &MusubiProviderReadbackRequestV1,
+        plan: &CarBuildPlan,
+    ) -> Result<MusubiProviderReadbackResponseV1, MusubiPublicationServiceBackendErrorV1> {
+        let car = read_complete_car(&mut self.source, request, plan)?;
+        verify_complete_readback(request, plan, &car)
     }
 }
 
@@ -157,10 +167,13 @@ impl MusubiPublicationAuthenticatedProviderReadbackV1 {
             adverts,
         })
     }
-    fn validate_target(
+    fn verify_registered_target(
         &self,
         request: &MusubiProviderReadbackRequestV1,
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        if request.network_id != self.core.network_id || request.validate().is_err() {
+            return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
+        }
         let evidence = &request.finalized_registration;
         let query = MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
             version: 1,
@@ -181,24 +194,24 @@ impl MusubiPublicationAuthenticatedProviderReadbackV1 {
                     MusubiPublicationServiceBackendErrorV1::Permanent
                 }
             })?;
-        // Discovery can perform registry I/O. Never hold the advert cache guard across it.
-        let origin = self
-            .core
-            .source
-            .resolve_provider_gateway_origin(request.provider)
-            .map_err(backend_error)?;
+        Ok(())
+    }
+    fn verify_advert(
+        adverts: &SharedProviderAdvertsV1,
+        provider: ProviderId,
+        origin: &str,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| MusubiPublicationServiceBackendErrorV1::Retryable)?
             .as_secs();
-        let adverts = self
-            .adverts
+        let adverts = adverts
             .try_read()
             .map_err(|_| MusubiPublicationServiceBackendErrorV1::Retryable)?;
         let record = adverts
-            .admitted_record_by_provider(request.provider.as_bytes(), now)
+            .admitted_record_by_provider(provider.as_bytes(), now)
             .ok_or(MusubiPublicationServiceBackendErrorV1::Retryable)?;
-        if !admitted_torii_gateway_matches(record, &origin) {
+        if !admitted_torii_gateway_matches(record, origin) {
             return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
         }
         Ok(())
@@ -209,17 +222,33 @@ impl MusubiProviderReadbackBackendV1 for MusubiPublicationAuthenticatedProviderR
         &self,
         request: &MusubiProviderReadbackRequestV1,
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
-        if request.network_id != self.core.network_id || request.validate().is_err() {
-            return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
-        }
-        self.validate_target(request)
+        self.verify_registered_target(request)?;
+        let origin = self
+            .core
+            .source
+            .resolve_provider_gateway_origin(request.provider)
+            .map_err(backend_error)?;
+        Self::verify_advert(&self.adverts, request.provider, &origin)
     }
     fn readback_provider(
         &mut self,
         request: &MusubiProviderReadbackRequestV1,
     ) -> Result<MusubiProviderReadbackResponseV1, MusubiPublicationServiceBackendErrorV1> {
-        self.verify_current_target(request)?;
-        let response = self.core.readback(request)?;
+        let response = if norito::core::decode_limits_active() {
+            // Both original discoveries debit the current caller's finite decoder.
+            self.verify_current_target(request)?;
+            self.core.readback(request)?
+        } else {
+            self.verify_registered_target(request)?;
+            let plan = self.core.source.storage_plan_with_origin_check(
+                &request.location.pin_manifest,
+                request.provider,
+                &request.commitment,
+                |origin| Self::verify_advert(&self.adverts, request.provider, origin),
+                backend_error,
+            )?;
+            self.core.readback_with_plan(request, &plan)?
+        };
         self.verify_current_target(request)?;
         Ok(response)
     }
@@ -301,6 +330,7 @@ fn read_complete_car<S: AuthenticatedReadbackSourceV1>(
             request.provider,
             &request.commitment,
             plan,
+            request.operation_id,
         )
         .map_err(backend_error)?;
     if reader.read_exact(&mut car).is_err() {
@@ -353,6 +383,9 @@ fn verify_complete_readback(
 }
 
 fn backend_error(error: MusubiArchiveRuntimeErrorV1) -> MusubiPublicationServiceBackendErrorV1 {
+    if error.is_account_token_pending() {
+        return MusubiPublicationServiceBackendErrorV1::ReadbackPending;
+    }
     match error.class() {
         MusubiArchiveRuntimeFailureClassV1::Retryable
         | MusubiArchiveRuntimeFailureClassV1::Unavailable => {
@@ -414,11 +447,13 @@ mod tests {
             provider: ProviderId,
             commitment: &MusubiArchiveCommitmentV1,
             plan: &CarBuildPlan,
+            paid_operation_id: [u8; 32],
         ) -> Result<Box<dyn std::io::Read + Send + 'static>, MusubiArchiveRuntimeErrorV1> {
             assert_eq!(*pin_manifest, self.expected_manifest);
             assert_eq!(provider, self.expected_provider);
             assert_eq!(*commitment, self.expected_commitment);
             assert_eq!(*plan, self.plan);
+            assert_eq!(paid_operation_id, [0x41; 32]);
             self.car_calls += 1;
             Ok(Box::new(Cursor::new(self.car.clone())))
         }

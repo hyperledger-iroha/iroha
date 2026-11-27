@@ -367,15 +367,20 @@ mod native {
             )?)?)
         }
 
-        pub(crate) fn set_deadline(&mut self, deadline: Instant) -> Result<()> {
-            self.1 = Some(self.io_deadline().min(deadline));
+        pub(crate) fn set_listener_handoff_deadline(&mut self, deadline: Instant) -> Result<()> {
+            // The first handoff deadline comes from the original startup owner. A later
+            // sample can shorten it, including to expiry, but cannot extend it.
+            self.1 = Some(self.1.map_or(deadline, |original| original.min(deadline)));
             remaining_io(self.io_deadline())?;
             Ok(())
         }
     }
 
-    pub fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> Result<Connection> {
-        let deadline = deadline.min(Instant::now() + IO_TIMEOUT);
+    pub fn connect_listener_handoff_until(
+        directory: &PrivateDirectory,
+        deadline: Instant,
+    ) -> Result<Connection> {
+        // This private endpoint carries bound listeners under the original startup deadline.
         remaining_io(deadline)?;
         let ipc = ipc_directory(directory, false)?;
         let before = validate_endpoint(&ipc)?;
@@ -503,7 +508,7 @@ mod native {
     // that disconnected socket even while its reply is buffered, so deadline I/O uses
     // an owned nonblocking descriptor and waits only for the original absolute remainder.
     // Darwin may still block a send with MSG_DONTWAIT alone when its buffer is full.
-    // connect_until retains its blocking return contract; only this private exchange changes it.
+    // connect_listener_handoff_until retains its blocking return contract; only this private exchange changes it.
     struct DeadlineStream {
         stream: UnixStream,
         deadline: Instant,
@@ -1353,7 +1358,7 @@ mod native {
         pub(crate) fn receive_reply<T: JsonDeserialize>(&mut self) -> Result<T> {
             Err(Error::Invalid("native IPC unavailable".into()))
         }
-        pub(crate) fn set_deadline(&mut self, _: Instant) -> Result<()> {
+        pub(crate) fn set_listener_handoff_deadline(&mut self, _: Instant) -> Result<()> {
             supported()
         }
         pub(crate) fn send_tcp_listeners(&mut self, _: &[std::net::TcpListener]) -> Result<()> {
@@ -1366,7 +1371,7 @@ mod native {
             Err(Error::Invalid("native IPC unavailable".into()))
         }
     }
-    pub fn connect_until(_: &PrivateDirectory, _: Instant) -> Result<Connection> {
+    pub fn connect_listener_handoff_until(_: &PrivateDirectory, _: Instant) -> Result<Connection> {
         Err(Error::Invalid("native IPC unavailable".into()))
     }
     pub(super) fn request_observed_with_deadline<T: JsonDeserialize>(
@@ -1378,7 +1383,7 @@ mod native {
     }
 }
 
-pub(crate) use native::connect_until;
+pub(crate) use native::connect_listener_handoff_until;
 pub use native::{Connection, Listener};
 
 /// Refuse a platform without owner-authenticated native IPC.

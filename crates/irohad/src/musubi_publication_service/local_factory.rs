@@ -147,6 +147,11 @@ pub trait MusubiPublicationPrivateIngressBuilderV1: Send + 'static {
     ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>;
 }
 
+pub(super) enum StorageBuilder {
+    Deployment(Box<dyn MusubiPublicationPrivateStorageBuilderV1>),
+    Native(Box<super::NativeMusubiStorageBuilderV1>),
+}
+
 /// Factory assembling the actual durable publication core from daemon-owned custody.
 ///
 /// The receipt signer, authenticated provider client, and admitted advert cache enter through
@@ -157,7 +162,7 @@ pub trait MusubiPublicationPrivateIngressBuilderV1: Send + 'static {
 pub struct MusubiPublicationPrivateLocalFactoryV1 {
     settings: MusubiPublicationPrivateLocalFactorySettingsV1,
     receipt_signer: Box<dyn MusubiSeedIngressReceiptSigningProviderV1>,
-    storage_builder: Box<dyn MusubiPublicationPrivateStorageBuilderV1>,
+    storage_builder: StorageBuilder,
     readback_client: AuthenticatedMusubiArchiveFetchClientV1,
     provider_adverts: Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>,
     ingress_builder: Box<dyn MusubiPublicationPrivateIngressBuilderV1>,
@@ -169,6 +174,24 @@ impl MusubiPublicationPrivateLocalFactoryV1 {
         settings: MusubiPublicationPrivateLocalFactorySettingsV1,
         receipt_signer: Box<dyn MusubiSeedIngressReceiptSigningProviderV1>,
         storage_builder: Box<dyn MusubiPublicationPrivateStorageBuilderV1>,
+        readback_client: AuthenticatedMusubiArchiveFetchClientV1,
+        provider_adverts: Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>,
+        ingress_builder: Box<dyn MusubiPublicationPrivateIngressBuilderV1>,
+    ) -> Self {
+        Self::with_storage(
+            settings,
+            receipt_signer,
+            StorageBuilder::Deployment(storage_builder),
+            readback_client,
+            provider_adverts,
+            ingress_builder,
+        )
+    }
+
+    pub(super) fn with_storage(
+        settings: MusubiPublicationPrivateLocalFactorySettingsV1,
+        receipt_signer: Box<dyn MusubiSeedIngressReceiptSigningProviderV1>,
+        storage_builder: StorageBuilder,
         readback_client: AuthenticatedMusubiArchiveFetchClientV1,
         provider_adverts: Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>,
         ingress_builder: Box<dyn MusubiPublicationPrivateIngressBuilderV1>,
@@ -222,19 +245,30 @@ impl MusubiPublicationPrivateServiceFactoryV1 for MusubiPublicationPrivateLocalF
         let (journal, seed, finalized_reader) = custody.into_parts();
         let (shared_seed, finalized_seed) =
             SharedSeedStagingBackendV1::share(seed, finalized_reader.clone());
-        // The deployment-selected coordinator may perform irreversible SoraFS effects. Require
-        // this daemon-owned finality check even when its builder does not use the reader.
-        let storage = storage_builder.build(
-            &context,
-            finalized_reader.clone(),
-            finalized_seed,
-            settings.paid_pin.clone(),
-            Box::new(clock.clone()),
-        )?;
-        let storage = Box::new(FinalizedRegistrationCheckedStorageBackendV1::new(
-            finalized_reader,
-            storage,
-        ));
+        // A deployment-selected delegate always passes through the independent archive gate.
+        // The concrete native coordinator applies the same gate inside its bounded source selection.
+        let storage: Box<dyn MusubiStorageCoordinationBackendV1> = match storage_builder {
+            StorageBuilder::Native(builder) => builder.build(
+                &context,
+                finalized_reader,
+                finalized_seed,
+                settings.paid_pin.clone(),
+                Box::new(clock.clone()),
+            )?,
+            StorageBuilder::Deployment(builder) => {
+                let delegate = builder.build(
+                    &context,
+                    finalized_reader.clone(),
+                    finalized_seed,
+                    settings.paid_pin.clone(),
+                    Box::new(clock.clone()),
+                )?;
+                Box::new(FinalizedRegistrationCheckedStorageBackendV1::new(
+                    finalized_reader,
+                    delegate,
+                ))
+            }
+        };
         let service = MusubiPublicationPrivateServiceV1::new(
             settings.service,
             Box::new(clock),

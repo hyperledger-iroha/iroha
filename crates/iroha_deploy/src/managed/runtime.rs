@@ -66,7 +66,10 @@ pub(in crate::managed) fn test_with_renewal_custody<T>(
     provider: iroha_data_model::sorafs::capacity::ProviderId,
     action: impl FnOnce(&mut super::ManagedStreamTokenCustody) -> Result<T>,
 ) -> Result<T> {
-    renewal::with_custody(prepared, provider, action)
+    renewal::with_custody(
+        super::ManagedStreamTokenCustody::open(prepared, provider),
+        action,
+    )
 }
 
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
@@ -523,8 +526,19 @@ pub fn run_worker(
                     let selected = prepared.clone();
                     let (sender, receiver) = mpsc::sync_channel(1);
                     processes.spawn_refresh(move || {
-                        let _ =
-                            sender.send(maintenance::refresh(&selected, selection, live, &turn));
+                        let result = maintenance::refresh(&selected, selection, live, &turn);
+                        if let Err(failure) = &result {
+                            use std::io::Write as _;
+                            // Retain the closed phase and physical budget of a refused turn.
+                            // Client-controlled response bodies never enter supervisor logs.
+                            let _ = writeln!(
+                                std::io::stderr().lock(),
+                                "generated service refresh refused slot={slot} elapsed_ms={} budget_ms={} failure={failure:?}",
+                                turn.started.elapsed().as_millis(),
+                                turn.timeout.as_millis(),
+                            );
+                        }
+                        let _ = sender.send(result);
                     })?;
                     Ok(receiver)
                 })();

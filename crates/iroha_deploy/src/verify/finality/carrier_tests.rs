@@ -255,7 +255,8 @@ fn sdk_authenticated_conflicting_decision_still_fails_trusted_prefix_placement()
         panic!("original SDK-authenticated statement must be admitted")
     };
     let epoch = prefix
-        .verified
+        .selection
+        .verified()
         .commitment()
         .schedule
         .current

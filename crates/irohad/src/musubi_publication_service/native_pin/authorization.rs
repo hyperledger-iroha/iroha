@@ -30,7 +30,7 @@ pub struct NativePinAuthorizationV1 {
     pub max_check_rounds: u16,
     /// Per-transaction authority-paid native fee ceilings; native ISIs have no gas allowance.
     pub per_transaction: FeePaymentIntent,
-    /// Aggregate Nexus ceilings across the pin, two advances and every retained Check payload.
+    /// Aggregate Nexus ceilings across the pin, its archive order, advances and retained Checks.
     /// Native public-pin pricing is separate and has no principal maximum in the signed ISI.
     pub max_total_fees: BTreeMap<AssetDefinitionId, Quantity>,
 }
@@ -135,8 +135,19 @@ impl NativePinAuthorizationV1 {
         intent: &FeePaymentIntent,
         check: bool,
     ) -> Result<ReservedFeesV1> {
+        self.reserve_authorized_payload(previous, intent, check, false)
+    }
+
+    pub(super) fn reserve_authorized_payload(
+        &self,
+        previous: &ReservedFeesV1,
+        intent: &FeePaymentIntent,
+        check: bool,
+        includes_archive_order: bool,
+    ) -> Result<ReservedFeesV1> {
         self.validate()?;
-        previous.validate(self)?;
+        let transaction_limit = self.max_check_rounds + 3 + u16::from(includes_archive_order);
+        previous.validate(self, transaction_limit)?;
         intent.validate()?;
         ensure!(
             matches!(intent, FeePaymentIntent::Authority(_))
@@ -153,7 +164,7 @@ impl NativePinAuthorizationV1 {
             .checked_add(1)
             .ok_or_else(|| eyre::eyre!("native pin transaction count overflow"))?;
         ensure!(
-            checks <= self.max_check_rounds && transactions <= self.max_check_rounds + 3,
+            checks <= self.max_check_rounds && transactions <= transaction_limit,
             "original native pin transaction authorization is exhausted"
         );
         let mut total = previous.amounts.clone();
@@ -200,12 +211,12 @@ pub(in crate::musubi_publication_service) struct ReservedFeesV1 {
     pub(in crate::musubi_publication_service) amounts: BTreeMap<AssetDefinitionId, Quantity>,
 }
 impl ReservedFeesV1 {
-    fn validate(&self, original: &NativePinAuthorizationV1) -> Result<()> {
+    fn validate(&self, original: &NativePinAuthorizationV1, transaction_limit: u16) -> Result<()> {
         let check_rounds_within_limit = self.check_rounds <= original.max_check_rounds;
         ensure!(
             check_rounds_within_limit
                 && self.check_rounds <= self.transactions
-                && self.transactions <= original.max_check_rounds + 3
+                && self.transactions <= transaction_limit
                 && self.amounts.len() <= MAX_FEE_ASSETS,
             "retained native pin fee inventory exceeds its original bounds"
         );

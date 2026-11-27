@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::localnet::service_authorities::RetainedGatewayCompliancePlan;
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError, atomic::AtomicU64};
 
 pub(super) fn promote(
     prepared: &PreparedLocalnet,
@@ -14,16 +14,23 @@ pub(super) fn promote(
     // Every full live check reopens the same original Bootstrap and custody selections. Keep
     // that exact recipe exclusive within this round, but hold no guard during catalog HTTP.
     let validation = Mutex::new(());
+    let round = (parallel
+        && !norito::core::decode_limits_active()
+        && live[0].read_renderer().is_some()
+        && live.iter().all(|gateway| gateway.same_launch(&live[0])))
+    .then(LaunchRound::default);
     let result = crate::managed::provider_round::run(
         live.each_mut(),
         parallel,
         |gateway| {
-            let publisher =
-                budget.call(|_| ManagedGatewayCompliance::open(prepared, gateway.provider()))?;
-            let mut gateway = GuardedGateway {
-                gateway,
-                validation: &validation,
-                budget,
+            let publisher = budget.call(|_| gateway.open_catalog_writer(prepared))?;
+            let mut gateway = PublishingGateway {
+                original: GuardedGateway {
+                    gateway,
+                    validation: &validation,
+                    budget,
+                },
+                round: round.as_ref(),
             };
             loop {
                 gateway.validate_original(prepared)?;
@@ -62,12 +69,14 @@ pub(in crate::managed::runtime) fn observe(
         |gateway| budget.call(|_| renderer.open_catalog_reader(prepared, gateway.provider())),
         || budget.progress.unconfirmed(),
     )?;
+    let mut reads = renderer.catalog_launch_reads();
     budget.call(|deadline| {
         ManagedGatewayCompliance::recover_promoted_set(&owners, expected, deadline, |plans| {
             budget
                 .check()
                 .map_err(|f| crate::managed::Error::Invalid(f.message()))?;
-            let result = OwnedGateway::validate_catalog_read(prepared, live, plans);
+            let result =
+                OwnedGateway::validate_catalog_read(prepared, live, plans, Some(&mut reads));
             budget
                 .check()
                 .map_err(|f| crate::managed::Error::Invalid(f.message()))?;
@@ -130,25 +139,83 @@ impl<G: LiveGatewayProcess> LiveGatewayProcess for GuardedGateway<'_, G> {
         result
     }
 }
-impl GuardedGateway<'_, OwnedGateway> {
+/// Only requests already waiting before a successful native read begins can share it.
+/// Neither a completed read nor a read already in flight admits a later request.
+#[derive(Default)]
+struct LaunchRound {
+    requested: AtomicU64,
+    completed: Mutex<u64>,
+}
+impl LaunchRound {
+    fn validate(&self, budget: &Budget, read: impl FnOnce() -> Result<()>) -> Result<()> {
+        let ticket = self
+            .requested
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+            .map_err(|_| invalid("catalog validation request count overflowed"))?
+            + 1;
+        let mut completed = acquire_validation(&self.completed, budget)?;
+        if *completed < ticket {
+            let pending = self.requested.load(Ordering::Acquire);
+            let result = read();
+            budget
+                .check()
+                .map_err(|failure| crate::managed::Error::Invalid(failure.message()))?;
+            result?;
+            *completed = pending;
+        }
+        Ok(())
+    }
+}
+
+struct PublishingGateway<'a> {
+    original: GuardedGateway<'a, OwnedGateway>,
+    round: Option<&'a LaunchRound>,
+}
+
+impl LiveGatewayProcess for PublishingGateway<'_> {
+    fn validate(
+        &mut self,
+        prepared: &PreparedLocalnet,
+        plan: &RetainedGatewayCompliancePlan,
+    ) -> Result<()> {
+        let Some(round) = self.round else {
+            return self.original.validate(prepared, plan);
+        };
+        let gateway = &*self.original.gateway;
+        let budget = self.original.budget;
+        budget
+            .check()
+            .map_err(|failure| crate::managed::Error::Invalid(failure.message()))?;
+        let result = gateway.validate_with_launch(prepared, plan, || {
+            round.validate(budget, || gateway.validate_launch())
+        });
+        budget
+            .check()
+            .map_err(|failure| crate::managed::Error::Invalid(failure.message()))?;
+        result
+    }
+}
+
+impl PublishingGateway<'_> {
     fn validate_original(
         &mut self,
         prepared: &PreparedLocalnet,
     ) -> std::result::Result<(), Failure> {
-        let plan = self.budget.call(|_| {
-            self.gateway
+        let budget = self.original.budget;
+        let plan = budget.call(|_| {
+            self.original
+                .gateway
                 .original_gateway_compliance_plan(prepared)?
                 .ok_or_else(|| invalid("generated gateway plan absent"))
         })?;
-        let budget = self.budget;
         budget.call(|_| self.validate(prepared, &plan))
     }
 }
 
-fn acquire_validation<'a>(
-    validation: &'a Mutex<()>,
+fn acquire_validation<'a, T>(
+    validation: &'a Mutex<T>,
     budget: &Budget,
-) -> Result<MutexGuard<'a, ()>> {
+) -> Result<MutexGuard<'a, T>> {
     loop {
         budget
             .check()

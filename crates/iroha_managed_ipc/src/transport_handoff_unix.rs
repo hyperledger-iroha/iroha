@@ -326,7 +326,11 @@ mod listener_handoff_tests {
         assert!(sender.send_tcp_listeners(&[]).is_err());
         assert!(receiver.receive_tcp_listeners(0).is_err());
         assert!(receiver.receive_tcp_listeners(9).is_err());
-        assert!(sender.set_deadline(Instant::now()).is_err());
+        assert!(
+            sender
+                .set_listener_handoff_deadline(Instant::now())
+                .is_err()
+        );
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         assert!(sender.send_tcp_listeners(&[listener]).is_err());
     }
@@ -336,7 +340,8 @@ mod listener_handoff_tests {
         let temporary = tempfile::tempdir().unwrap();
         let directory = PrivateDirectory::open_or_create(temporary.path().join("handoff")).unwrap();
         let server = Listener::bind(&directory).unwrap();
-        let mut client = connect_until(&directory, Instant::now() + IO_TIMEOUT).unwrap();
+        let mut client =
+            connect_listener_handoff_until(&directory, Instant::now() + IO_TIMEOUT).unwrap();
         let mut accepted = server.accept().unwrap().unwrap();
         let request = ControlRequest {
             token: "a".repeat(64),
@@ -349,9 +354,11 @@ mod listener_handoff_tests {
         let reply: ControlRequest = client.receive_reply().unwrap();
         assert_eq!(reply.action, request.action);
         let original = client.1.unwrap();
-        client.set_deadline(original + IO_TIMEOUT).unwrap();
+        client
+            .set_listener_handoff_deadline(original + IO_TIMEOUT)
+            .unwrap();
         assert_eq!(client.1, Some(original));
-        assert!(connect_until(&directory, Instant::now()).is_err());
+        assert!(connect_listener_handoff_until(&directory, Instant::now()).is_err());
     }
 
     #[test]

@@ -126,11 +126,9 @@ fn current_account_read_policy(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| denied())?
         .as_secs();
-    let admitted = iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
-        &view, provider, now,
-    )
-    .map_err(|_| denied())?
-    .ok_or_else(denied)?;
+    let admitted = crate::sorafs::admission::current_transport_admission(&view, provider, now)
+        .map_err(|_| denied())?
+        .ok_or_else(denied)?;
     RegisteredAccountReadV1::from_capabilities(&admitted.envelope().proposal.capabilities)
         .map_err(|_| denied())?
         .ok_or_else(denied)
@@ -180,6 +178,20 @@ async fn issue_storage_token(
             "provider_id_hex must be exactly 64 lowercase hexadecimal characters",
         );
     }
+    if let Some(operation) = &req.paid_readback
+        && (account.is_none()
+            || !super::token::paid::valid_operation(operation)
+            || single_header_value(&headers, crate::app_auth::HEADER_NONCE)
+                .ok()
+                .flatten()
+                .and_then(|v| v.to_str().ok())
+                != Some(nonce.as_str()))
+    {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid paid account-token operation",
+        );
+    }
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
         Ok(manifest_id) => manifest_id,
         Err(response) => return response,
@@ -225,49 +237,148 @@ async fn issue_storage_token(
     let worker_state = state.state.clone();
     // The physical worker owns query and heavy-query admission until issuance finishes, even
     // if the HTTP request is cancelled. Custody checks and broker I/O must not run on an executor.
-    let issuance_result =
-        match sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move || {
-            let policy = account
-                .as_ref()
-                .map(|account| {
-                    current_account_read_policy(
-                        &worker_state,
-                        account,
-                        ProviderId::new(provider_id),
-                    )
-                })
-                .transpose()?;
-            let issuance_result = worker_issuer.issue_token(
-                quota_subject,
-                manifest_cid,
-                provider_id,
-                profile_handle,
-                overrides,
-                policy.as_ref(),
+    let (acknowledge, mut accepted) = tokio::sync::oneshot::channel();
+    let pending = if let Some(op) = &req.paid_readback {
+        let Ok(encoded) = norito::json::to_vec(&req) else {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid paid account-token request",
             );
-            // Issuance can await external custody. Do not release a token after an intervening
-            // finalized policy withdrawal, account deletion, expiry, or replacement.
-            if let Some(account) = &account
-                && Some(current_account_read_policy(
-                    &worker_state,
-                    account,
-                    ProviderId::new(provider_id),
-                )?) != policy
-            {
-                return Err(json_error(
-                    StatusCode::FORBIDDEN,
-                    "account-read policy changed during token issuance",
-                ));
-            }
-            Ok(issuance_result)
-        })
-        .await
-        {
-            Ok(issuance_result) => issuance_result,
-            Err(response) => return response,
         };
+        let status = super::token::paid::StatusKey::new(
+            quota_subject,
+            &encoded,
+            &manifest_cid,
+            &profile_handle,
+        );
+        let body = format!(
+            r#"{{"schema":"sorafs.account_token.pending.v1","paid_readback":"{op}","provider":"{}","manifest":"{}"}}"#,
+            req.provider_id_hex, req.manifest_id_hex
+        );
+        if std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .is_ok_and(|now| issuer.paid_work_active(status, now.as_secs()))
+        {
+            return paid_token_pending_response(body, &client_id, &nonce);
+        }
+        Some((body, status))
+    } else {
+        None
+    };
+    let status = pending.as_ref().map(|(_, status)| *status);
+    let workspace = req.paid_readback.as_ref().map(|_| {
+        state
+            .sorafs_node
+            .config()
+            .data_dir()
+            .join("paid-account-tokens-v1")
+    });
+    let worker = sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move || {
+        let policy = account
+            .as_ref()
+            .map(|account| {
+                current_account_read_policy(&worker_state, account, ProviderId::new(provider_id))
+            })
+            .transpose()?;
+        let delivery = policy
+            .as_ref()
+            .filter(|_| req.paid_readback.is_none() && !norito::core::decode_limits_active())
+            .map(|policy| {
+                super::token::delivery::AccountDelivery::new(
+                    quota_subject,
+                    req.manifest_id_hex.clone(),
+                    manifest_cid.clone(),
+                    provider_id,
+                    profile_handle.clone(),
+                    overrides,
+                    policy.clone(),
+                )
+            });
+        let recovered = delivery
+            .as_ref()
+            .and_then(|request| worker_issuer.take_undelivered(request));
+        let issuance_result = if let (Some(operation), Some(path), Some(policy), Some(status)) = (
+            req.paid_readback.as_deref(),
+            workspace.as_deref(),
+            policy.as_ref(),
+            status,
+        ) {
+            worker_issuer.issue_paid(
+                path,
+                super::token::paid::Request {
+                    subject: quota_subject,
+                    operation,
+                    manifest_id: &req.manifest_id_hex,
+                    manifest_cid: &manifest_cid,
+                    provider: provider_id,
+                    profile: &profile_handle,
+                    overrides,
+                    policy,
+                },
+                status,
+                acknowledge,
+            )
+        } else {
+            match recovered {
+                Some(previous) => worker_issuer.recover_undelivered(previous),
+                None => worker_issuer.issue_token(
+                    quota_subject,
+                    manifest_cid,
+                    provider_id,
+                    profile_handle,
+                    overrides,
+                    policy.as_ref(),
+                ),
+            }
+        };
+        // Issuance can await external custody. Do not release a token after an intervening
+        // finalized policy withdrawal, account deletion, expiry, or replacement.
+        if let Some(account) = &account
+            && Some(current_account_read_policy(
+                &worker_state,
+                account,
+                ProviderId::new(provider_id),
+            )?) != policy
+        {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "account-read policy changed during token issuance",
+            ));
+        }
+        let issuance_result = issuance_result.and_then(|mut issue| {
+            if req.paid_readback.is_some() {
+                if let Err(error) = worker_issuer.paid_release_time(&issue.token.body) {
+                    iroha_crypto::zeroize_value_for_confidential_discard(
+                        &mut issue.token.signature,
+                    );
+                    return Err(error);
+                }
+            }
+            Ok(issue)
+        });
+        Ok(issuance_result.map(|issue| {
+            super::token::delivery::WorkerDelivery::new(worker_issuer, delivery, issue)
+        }))
+    });
+    tokio::pin!(worker);
+    let completed = if let Some((body, _)) = pending {
+        tokio::select! {
+            biased;
+            Ok(()) = &mut accepted => {
+                return paid_token_pending_response(body,&client_id,&nonce)
+
+            },
+            result = &mut worker => result,
+        }
+    } else {
+        worker.await
+    };
+    let issuance_result = match completed {
+        Ok(issuance_result) => issuance_result,
+        Err(response) => return response,
+    };
     let token_issue = match issuance_result {
-        Ok(token) => token,
+        Ok(token) => token.receive(),
         Err(err) => {
             return match &err {
                 StreamTokenIssuerError::IssuanceQuotaExceeded {
@@ -399,6 +510,24 @@ async fn issue_storage_token(
         json_entry("token_base64", &(Value::String(token_base64))),
     ]);
     (StatusCode::OK, response_headers, JsonBody(response)).into_response()
+}
+#[cfg(feature = "app_api")]
+fn paid_token_pending_response(body: String, client_id: &str, nonce: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::HeaderName::from_static(HEADER_SORA_CLIENT),
+        header_value(client_id, "X-SoraFS-Client"),
+    );
+    headers.insert(
+        header::HeaderName::from_static(HEADER_SORA_NONCE),
+        header_value(nonce, "X-SoraFS-Nonce"),
+    );
+    (StatusCode::ACCEPTED, headers, body).into_response()
 }
 #[cfg(feature = "app_api")]
 fn stream_token_body_json(body: &StreamTokenBodyV1) -> Value {

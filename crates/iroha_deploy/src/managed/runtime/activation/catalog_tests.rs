@@ -108,3 +108,65 @@ fn waiting_validation_rejects_original_cancellation_and_expiry_without_entering_
     drop(held);
     assert!(acquire_validation(&validation, &budget()).is_ok());
 }
+
+#[test]
+fn overlapping_catalog_requests_only_share_a_validation_started_after_their_entry() {
+    use std::sync::mpsc;
+    let round = LaunchRound::default();
+    let budget = budget();
+    let reads = AtomicUsize::new(0);
+    // Hold the round before selecting requests, then make two waiters eligible
+    // for the same physical read. A third starts while that read is in flight.
+    let held = round.completed.lock().unwrap();
+    let (started, receiving) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let resume = Mutex::new(resume);
+    let read = || {
+        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+            started.send(()).unwrap();
+            resume
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap();
+        }
+        Ok(())
+    };
+    let run = || round.validate(&budget, read);
+    thread::scope(|scope| {
+        let a = scope.spawn(&run);
+        let b = scope.spawn(&run);
+        let wait = |n| {
+            let end = Instant::now() + Duration::from_secs(30);
+            while round.requested.load(Ordering::Acquire) < n {
+                assert!(Instant::now() < end);
+                thread::sleep(Duration::from_millis(1));
+            }
+        };
+        wait(2);
+        drop(held);
+        receiving.recv_timeout(Duration::from_secs(30)).unwrap();
+        let c = scope.spawn(&run);
+        wait(3);
+        release.send(()).unwrap();
+        for worker in [a, b, c] {
+            worker.join().unwrap().unwrap();
+        }
+    });
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+    assert!(round.validate(&budget, || Err(invalid("refused"))).is_err());
+    assert_eq!(*round.completed.lock().unwrap(), 3);
+    round
+        .validate(&budget, || {
+            reads.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    budget.cancelled.store(true, Ordering::Release);
+    assert!(
+        round
+            .validate(&budget, || panic!("cancelled request performed a read"))
+            .is_err()
+    );
+}

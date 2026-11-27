@@ -24,7 +24,8 @@ fn independently_place(
 
 fn epoch(prefix: &Prefix) -> u64 {
     prefix
-        .verified
+        .selection
+        .verified()
         .commitment()
         .schedule
         .current
@@ -33,7 +34,7 @@ fn epoch(prefix: &Prefix) -> u64 {
 }
 
 fn assert_same_refusal(prefix: &Prefix, proof: &SumeragiFinalityProof) {
-    assert_ne!(proof, &prefix.tip);
+    assert_ne!(proof, prefix.selection.tip());
     let expected = independently_place(prefix, proof, epoch(prefix)).unwrap_err();
     let actual = prefix.place(proof, epoch(prefix), None).unwrap_err();
     assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
@@ -45,27 +46,32 @@ fn exact_tip_and_alternate_certificate_keep_native_placement_results() {
     for height in [1, 2, 3, 4] {
         let checkpoint = chain.verifier_at(height).checkpoint().clone();
         let mut prefix = Prefix::new(&checkpoint).unwrap();
-        let expected = independently_place(&prefix, &prefix.tip, epoch(&prefix)).unwrap();
+        let expected =
+            independently_place(&prefix, prefix.selection.tip(), epoch(&prefix)).unwrap();
         assert_eq!(
-            prefix.place(&prefix.tip, epoch(&prefix), None).unwrap(),
+            prefix
+                .place(prefix.selection.tip(), epoch(&prefix), None)
+                .unwrap(),
             expected
         );
         assert_eq!(expected.height.get(), height);
-        let retained = prefix.tip.clone();
+        let retained = prefix.selection.tip().clone();
         prefix.push(chain.proof(height + 1)).unwrap();
         assert_eq!(
-            prefix.place(&prefix.tip, epoch(&prefix), None).unwrap(),
-            independently_place(&prefix, &prefix.tip, epoch(&prefix)).unwrap()
+            prefix
+                .place(prefix.selection.tip(), epoch(&prefix), None)
+                .unwrap(),
+            independently_place(&prefix, prefix.selection.tip(), epoch(&prefix)).unwrap()
         );
         assert_eq!(
             prefix.place(&retained, epoch(&prefix), None).unwrap(),
             independently_place(&prefix, &retained, epoch(&prefix)).unwrap()
         );
         let alternate = chain.alternate(height + 1);
-        assert_ne!(alternate, prefix.tip);
+        assert_ne!(alternate, *prefix.selection.tip());
         assert_eq!(
             alternate.block_header.hash(),
-            prefix.tip.block_header.hash()
+            prefix.selection.tip().block_header.hash()
         );
         assert_eq!(
             prefix.place(&alternate, epoch(&prefix), None).unwrap(),
@@ -78,9 +84,12 @@ fn exact_tip_and_alternate_certificate_keep_native_placement_results() {
         let mut qc = commit_qc(&invalid);
         qc.agg_sig.0[0] ^= 1;
         replace_certificate(&mut invalid, &header, &qc, &execution);
-        assert_eq!(invalid.block_header.hash(), prefix.tip.block_header.hash());
+        assert_eq!(
+            invalid.block_header.hash(),
+            prefix.selection.tip().block_header.hash()
+        );
         assert_same_refusal(&prefix, &invalid);
-        assert_eq!(prefix.tip, *chain.proof(height + 1));
+        assert_eq!(*prefix.selection.tip(), *chain.proof(height + 1));
     }
 }
 
@@ -90,7 +99,7 @@ fn every_complete_witness_field_remains_bound_to_the_native_tip() {
     let checkpoint = chain.verifier_at(3).checkpoint().clone();
     let prefix = Prefix::new(&checkpoint).unwrap();
     let original = checkpoint.encode_canonical().unwrap();
-    let mut changed_header = prefix.tip.clone();
+    let mut changed_header = prefix.selection.tip().clone();
     changed_header.block_header = BlockHeader::new(
         nz(3),
         Some(chain.proof(2).block_header.hash()),
@@ -98,11 +107,11 @@ fn every_complete_witness_field_remains_bound_to_the_native_tip() {
         300,
         0,
     );
-    let mut changed_wire = prefix.tip.clone();
+    let mut changed_wire = prefix.selection.tip().clone();
     changed_wire.block_wire.push(0);
-    let mut changed_committee = prefix.tip.clone();
+    let mut changed_committee = prefix.selection.tip().clone();
     changed_committee.committee[0].public_key = key(42).public_key().clone();
-    let mut changed_pop = prefix.tip.clone();
+    let mut changed_pop = prefix.selection.tip().clone();
     changed_pop.committee[0].proof_of_possession[0] ^= 1;
     for changed in [changed_header, changed_wire, changed_committee, changed_pop] {
         assert_same_refusal(&prefix, &changed);
@@ -112,8 +121,10 @@ fn every_complete_witness_field_remains_bound_to_the_native_tip() {
         original
     );
     assert_eq!(
-        prefix.place(&prefix.tip, epoch(&prefix), None).unwrap(),
-        independently_place(&prefix, &prefix.tip, epoch(&prefix)).unwrap()
+        prefix
+            .place(prefix.selection.tip(), epoch(&prefix), None)
+            .unwrap(),
+        independently_place(&prefix, prefix.selection.tip(), epoch(&prefix)).unwrap()
     );
 }
 
@@ -123,7 +134,7 @@ fn exact_tip_reuse_keeps_prior_failure_height_and_epoch_guards() {
     let prefix = Prefix::new(chain.verifier_at(5).checkpoint()).unwrap();
     assert!(matches!(
         prefix.place(
-            &prefix.tip,
+            prefix.selection.tip(),
             epoch(&prefix),
             Some(FinalityError::WrongGenesis)
         ),
@@ -133,12 +144,12 @@ fn exact_tip_reuse_keeps_prior_failure_height_and_epoch_guards() {
     assert_eq!(
         prefix
             .place(
-                &prefix.tip,
+                prefix.selection.tip(),
                 epoch(&prefix),
                 Some(FinalityError::ResourceLimit("proof count")),
             )
             .unwrap(),
-        independently_place(&prefix, &prefix.tip, epoch(&prefix)).unwrap()
+        independently_place(&prefix, prefix.selection.tip(), epoch(&prefix)).unwrap()
     );
     assert!(matches!(
         prefix.place(chain.proof(6), epoch(&prefix), None),
@@ -163,7 +174,7 @@ fn exact_tip_reuse_keeps_prior_failure_height_and_epoch_guards() {
         })
     ));
     assert!(matches!(
-        prefix.place(&prefix.tip, epoch(&prefix) + 2, None),
+        prefix.place(prefix.selection.tip(), epoch(&prefix) + 2, None),
         Err(FinalityError::OutsideRetainedPrefix {
             checkpoint: 5,
             height: 5
@@ -224,13 +235,13 @@ fn exact_tip_placement_preserves_active_decoder_charges_and_refusals() {
 
     let expected_budget = DecodeBudgetContext::new(limits(CEILING));
     let expected = expected_budget
-        .with(|| independently_place(&prefix, &prefix.tip, epoch(&prefix)))
+        .with(|| independently_place(&prefix, prefix.selection.tip(), epoch(&prefix)))
         .unwrap();
     let expected_cost = usize::try_from(expected_budget.consumed_allocated_bytes()).unwrap();
     assert!(expected_cost > 1 && expected_cost <= CEILING);
     let actual_budget = DecodeBudgetContext::new(limits(CEILING));
     let actual = actual_budget
-        .with(|| prefix.place(&prefix.tip, epoch(&prefix), None))
+        .with(|| prefix.place(prefix.selection.tip(), epoch(&prefix), None))
         .unwrap();
     assert_eq!(actual, expected);
     // Each native invocation owns a separately allocated decoded graph. Norito
@@ -242,11 +253,11 @@ fn exact_tip_placement_preserves_active_decoder_charges_and_refusals() {
     for cap in [0, 1] {
         let expected_budget = DecodeBudgetContext::new(limits(cap));
         let expected_error = expected_budget
-            .with(|| independently_place(&prefix, &prefix.tip, epoch(&prefix)))
+            .with(|| independently_place(&prefix, prefix.selection.tip(), epoch(&prefix)))
             .expect_err("native signed-block decoding cannot fit a zero/one-byte budget");
         let actual_budget = DecodeBudgetContext::new(limits(cap));
         let actual_error = actual_budget
-            .with(|| prefix.place(&prefix.tip, epoch(&prefix), None))
+            .with(|| prefix.place(prefix.selection.tip(), epoch(&prefix), None))
             .expect_err("an active owner must still refuse the exact retained tip");
         // Both calls borrow the same original frame and refuse before creating
         // a decoded graph: even one compact public key needs payload_bytes + 1.
@@ -279,7 +290,9 @@ fn exact_tip_placement_preserves_active_decoder_charges_and_refusals() {
         );
     }
     assert_eq!(
-        prefix.place(&prefix.tip, epoch(&prefix), None).unwrap(),
+        prefix
+            .place(prefix.selection.tip(), epoch(&prefix), None)
+            .unwrap(),
         expected
     );
 }

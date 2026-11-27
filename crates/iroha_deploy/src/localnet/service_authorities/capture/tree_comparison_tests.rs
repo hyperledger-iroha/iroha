@@ -3,6 +3,88 @@
 use super::*;
 use iroha_fs::PublishMode;
 
+// Independent three-pass recipe retained for comparison with the lexical directory scopes.
+impl CapturedDirectory {
+    // The former standalone root and descendant reads retain their independent native brackets.
+    pub(super) fn compare_inputs(&self) -> crate::managed::Result<()> {
+        self.compare_inputs_with(|inputs| self.directory.compare_files(inputs))
+    }
+
+    fn revalidate_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        // Keep the native census and complete-name comparison in one fresh suffix bracket.
+        // Its exit closes even empty inventories and overrides ordinary comparison errors.
+        tree.read_scope(&self.directory, |reader| match &self.inventory {
+            Some(expected) => {
+                let expected = expected.iter().cloned().collect::<BTreeSet<_>>();
+                if reader
+                    .entries(expected.len())?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    != expected
+                {
+                    return Err(Error::Invalid(
+                        "original service directory inventory differs".into(),
+                    ));
+                }
+                Ok(())
+            }
+            None => Ok(()),
+        })
+    }
+
+    fn compare_inputs_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        self.compare_inputs_with(|inputs| {
+            tree.read_scope(&self.directory, |reader| reader.compare_files(inputs))
+        })
+    }
+}
+
+impl CapturedProfile {
+    fn revalidate_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        // Keep the generation's original full checks without wrapping it in another
+        // full-fallback directory view. Only genuine descendants can share its prefix.
+        for (index, directory) in self.directories.iter().enumerate() {
+            if index == GENERATION {
+                directory.revalidate()?;
+            } else {
+                directory.revalidate_in_tree(tree)?;
+            }
+        }
+        for (index, directory) in self.directories.iter().enumerate() {
+            if index == GENERATION {
+                directory.compare_inputs()?;
+            } else {
+                directory.compare_inputs_in_tree(tree)?;
+            }
+        }
+        for (index, directory) in self.directories.iter().enumerate().rev() {
+            if index == GENERATION {
+                directory.revalidate()?;
+            } else {
+                directory.revalidate_in_tree(tree)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn original_three_pass(&self) -> crate::managed::Result<()> {
+        self.directories
+            .first()
+            .ok_or_else(invalid)?
+            .directory
+            .read_tree_scope(|tree| self.revalidate_in_tree(tree))
+    }
+}
+
 fn small() -> (tempfile::TempDir, CapturedProfile) {
     let temporary = tempfile::tempdir().unwrap();
     let generation = PrivateDirectory::open_or_create(temporary.path().join("generation")).unwrap();
@@ -271,8 +353,9 @@ fn profile_tree_exit_refuses_real_success_mismatch_and_missing_outcomes_before_r
             "missing" => std::fs::remove_file(child.path().join("first")).unwrap(),
             _ => (),
         }
-        let refused = generation.read_tree_scope(|tree| {
-            let body = image.revalidate_in_tree(tree);
+        let refused = generation.read_tree_scope_with_root(|tree, reader| {
+            let (first, rest) = image.directories.split_first().unwrap();
+            let body = CapturedProfile::revalidate_directory(first, rest, tree, reader, &mut || Ok(()));
             match outcome {
                 "success" => assert!(body.is_ok()),
                 "mismatch" => assert!(matches!(&body, Err(Error::Invalid(message)) if message == "retained service profile input custody differs")),
@@ -343,5 +426,91 @@ fn profile_tree_keeps_native_prefix_fallback_private_leaf_suffix_and_restored_te
         captured.compare_inputs_in_tree(tree)?;
         Ok::<_, Error>(())
     }).unwrap();
+    image.revalidate().unwrap();
+}
+
+#[test]
+fn scoped_profile_preserves_forward_inventory_and_ordered_input_refusals() {
+    let (_temporary, mut image) = small();
+    let root = &image.directories[GENERATION].directory;
+    let child = root.create_child("later").unwrap();
+    child
+        .write_atomic("third", b"third", PublishMode::CreateNew)
+        .unwrap();
+    let mut later = CapturedDirectory::new(child, Some(vec![OsString::from("third")])).unwrap();
+    later
+        .capture("third", 5, ConfigFileAccess::Private, &mut 0)
+        .unwrap();
+    image.directories.push(later);
+    let compare = |image: &CapturedProfile| {
+        let original = image.original_three_pass().unwrap_err();
+        let scoped = image.revalidate().unwrap_err();
+        assert_eq!(original.to_string(), scoped.to_string());
+        scoped
+    };
+    image.original_three_pass().unwrap();
+    image.revalidate().unwrap();
+    let first = &image.directories[1];
+    first
+        .directory
+        .write_atomic("first", b"other", PublishMode::Replace)
+        .unwrap();
+    std::fs::remove_file(first.directory.path().join("second")).unwrap();
+    let later = &image.directories[2];
+    std::fs::rename(
+        later.directory.path().join("third"),
+        later.directory.path().join("other"),
+    )
+    .unwrap();
+    assert!(
+        matches!(compare(&image), Error::Invalid(message) if message == "original service directory inventory differs")
+    );
+    std::fs::rename(
+        later.directory.path().join("other"),
+        later.directory.path().join("third"),
+    )
+    .unwrap();
+    assert!(
+        matches!(compare(&image), Error::Invalid(message) if message == "retained service profile input custody differs")
+    );
+    image.directories[1].inputs.swap(0, 1);
+    assert!(matches!(compare(&image), Error::Io(error) if error.kind() == io::ErrorKind::NotFound));
+    image.directories[1]
+        .directory
+        .write_atomic("second", b"second", PublishMode::CreateNew)
+        .unwrap();
+    image.directories[1]
+        .directory
+        .write_atomic("first", b"first", PublishMode::Replace)
+        .unwrap();
+    image.original_three_pass().unwrap();
+    image.revalidate().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn scoped_profile_closes_original_descendant_on_error_and_refuses_identical_replacement() {
+    let (_temporary, image) = small();
+    let (generation, descendants) = image.directories.split_first().unwrap();
+    let captured = &descendants[0].directory;
+    let name = captured.path();
+    let moved = name.with_file_name("original");
+    let result = generation
+        .directory
+        .read_tree_scope_with_root(|tree, root| {
+            CapturedProfile::revalidate_directory(generation, descendants, tree, root, &mut || {
+                std::fs::rename(name, &moved)?;
+                let replacement = generation.directory.create_child("inputs")?;
+                replacement.write_atomic("first", b"first", PublishMode::CreateNew)?;
+                replacement.write_atomic("second", b"second", PublishMode::CreateNew)?;
+                Err(invalid())
+            })
+        });
+    assert!(matches!(result, Err(Error::Io(_))));
+    assert!(image.revalidate().is_err());
+    assert!(image.original_three_pass().is_err());
+    std::fs::remove_dir_all(name).unwrap();
+    std::fs::rename(&moved, name).unwrap();
+    image.original_three_pass().unwrap();
     image.revalidate().unwrap();
 }

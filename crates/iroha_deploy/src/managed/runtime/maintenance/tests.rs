@@ -273,3 +273,59 @@ fn grouped_native_read_keeps_another_owners_overdue_signed_publication_ahead_of_
     assert_eq!(only_discovery_was_due.next_monotonic, fresh.next_monotonic);
     assert_eq!(only_discovery_was_due.next_utc, fresh.next_utc);
 }
+
+#[test]
+fn expensive_read_is_scheduled_early_inside_its_original_discovery_lease() {
+    let mono = Instant::now();
+    let utc = now_ms().unwrap();
+    let long = signed_window(utc, 86_400_000);
+    let mut timing = Timing::select(utc + 86_400_000, long, long, mono, utc).unwrap();
+    let original = timing.expiry;
+    timing
+        .reserve_refresh(Duration::from_secs(20), mono, utc)
+        .unwrap();
+    assert_eq!(timing.next_utc, utc + 1_000);
+    assert_eq!(timing.expiry, original);
+    assert!(timing.due_at(mono + RETRY_DELAY, utc));
+    assert_eq!(TURN_MAXIMUM, Duration::from_secs(15));
+    assert!(!original.current_at(mono + DISCOVERY_FRESHNESS, utc));
+    assert!(!original.current_at(mono, utc + 30_000));
+
+    let short = Timing::select(utc + 4_000, long, long, mono, utc).unwrap();
+    assert_eq!(short.next_utc, utc + 2_000);
+    let mut slow = short;
+    slow.reserve_refresh(Duration::from_secs(35), mono, utc)
+        .unwrap();
+    assert_eq!(slow.next_utc, utc + 1_000);
+    assert_eq!(slow.expiry, short.expiry);
+    // A slow completed read can already be due when the worker receives it.
+    let completed = mono + Duration::from_secs(2);
+    assert!(slow.due_at(completed, utc + 2_000));
+    // A failed turn cannot spin or postpone the original expiry.
+    defer_failed_slot(std::iter::once(&mut slow), 0, completed, utc + 2_000).unwrap();
+    assert!(!slow.due_at(completed, utc + 2_000));
+    assert!(slow.due_at(completed + RETRY_DELAY, utc + 2_000));
+    assert_eq!(slow.expiry, short.expiry);
+}
+
+#[test]
+fn failed_discovery_turn_leaves_time_for_a_complete_bounded_retry() {
+    let mono = Instant::now();
+    let utc = now_ms().unwrap();
+    let signed = signed_window(utc, 86_400_000);
+    let mut timing = Timing::select(utc + 86_400_000, signed, signed, mono, utc).unwrap();
+    let expiry = timing.expiry;
+    // The first failed discovery in the installed four-validator run took 5,756 ms.
+    let first = Duration::from_millis(5_756);
+    timing.reserve_refresh(first, mono, utc).unwrap();
+    assert_eq!(
+        timing.next_monotonic + first + RETRY_DELAY + TURN_MAXIMUM,
+        mono + DISCOVERY_FRESHNESS
+    );
+    assert_eq!(
+        timing.next_utc + 5_756 + 1_000 + 15_000,
+        expiry.utc_ceiling()
+    );
+    assert_eq!(timing.expiry, expiry);
+    assert!(!timing.expiry.current_at(mono + DISCOVERY_FRESHNESS, utc));
+}

@@ -119,11 +119,11 @@ fn automatic_amounts_keep_underwriting_distinct_from_price_bond_and_overfunded_b
     original.validate(&plan).unwrap();
     assert_eq!(
         original.economics.top_up,
-        "24".parse::<XorQuantity>().unwrap()
+        "48".parse::<XorQuantity>().unwrap()
     );
     assert_eq!(
         original.economics.price_bond,
-        "0.75".parse::<Quantity>().unwrap()
+        "1.5".parse::<Quantity>().unwrap()
     );
     assert_eq!(original.top_up().unwrap().amount, original.economics.top_up);
     let approval = selected(&original, Stage::Approval);
@@ -138,7 +138,7 @@ fn automatic_amounts_keep_underwriting_distinct_from_price_bond_and_overfunded_b
     let credit = selected(&original, Stage::Credit);
     let intent = credit.credit(&original).unwrap();
     assert_eq!(intent.partition.revision, 3);
-    assert_eq!(intent.record.bonded, Quantity::from(24u64));
+    assert_eq!(intent.record.bonded, Quantity::from(48u64));
     assert_eq!(
         intent.record.onboarding_epoch,
         original.economics.onboarding_epoch
@@ -157,14 +157,14 @@ fn automatic_amounts_keep_underwriting_distinct_from_price_bond_and_overfunded_b
     projected.partition.credit_cap = "1".parse().unwrap();
     projected.partition.updated_at_unix += 1;
     projected.validate(Stage::Approval, &lagged).unwrap();
-    let overfunded = claims(&owner, "32");
+    let overfunded = claims(&owner, "64");
     overfunded.validate(&plan).unwrap();
     assert!(overfunded.top_up().is_none());
     let funded = selected(&overfunded, Stage::Credit)
         .credit(&overfunded)
         .unwrap();
     assert_eq!(funded.partition.revision, 1);
-    assert_eq!(funded.record.bonded, Quantity::from(32u64));
+    assert_eq!(funded.record.bonded, Quantity::from(64u64));
     assert!(
         selected(&overfunded, Stage::Approval)
             .validate(Stage::Approval, &overfunded)

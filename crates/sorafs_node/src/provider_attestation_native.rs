@@ -348,6 +348,48 @@ impl NativeStore {
             Ok(journal)
         })
     }
+    fn validate_inventory_scope(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+    ) -> Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        scope.validate()?;
+        if scope.network_id != self.binding.network_id {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+    fn inventory_entry(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> Result<
+        Option<MusubiProviderAttestationInventoryReadbackV1>,
+        MusubiProviderAttestationInventoryErrorV1,
+    > {
+        key.validate()
+            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::InvalidItem)?;
+        if key.provider_id != self.binding.provider_id
+            || key.archive_id != scope.archive_id
+            || key.replication_order != scope.replication_order
+        {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::Unavailable)?;
+        let inventory = self
+            .inventory_file()
+            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::Rejected)?;
+        inventory
+            .entries
+            .into_iter()
+            .find(|entry| entry.item.scope() == scope && entry.item.key() == key)
+            .map(|entry| {
+                MusubiProviderAttestationInventoryReadbackV1::try_new(entry.item, entry.revision)
+            })
+            .transpose()
+    }
     fn inventory_file(&self) -> io::Result<InventoryFile> {
         norito::with_decode_limits_scope(self.limits(), || {
             let value: InventoryFile = self.read(INVENTORY)?;
@@ -716,44 +758,35 @@ impl MusubiProviderAttestationInventoryReaderV1 for NativeMusubiProviderAttestat
         >,
     > {
         Box::pin(async move {
-            scope.validate()?;
-            if scope.network_id != self.shared.binding.network_id {
-                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
-            }
+            self.shared.validate_inventory_scope(scope)?;
             let scope = scope.clone();
             self.shared
                 .run_blocking(
                     MusubiProviderAttestationInventoryErrorV1::Unavailable,
-                    move |store| {
-                        key.validate()
-                            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::InvalidItem)?;
-                        if key.provider_id != store.binding.provider_id
-                            || key.archive_id != scope.archive_id
-                            || key.replication_order != scope.replication_order
-                        {
-                            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
-                        }
-                        let _gate = store
-                            .gate
-                            .lock()
-                            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::Unavailable)?;
-                        let inventory = store
-                            .inventory_file()
-                            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::Rejected)?;
-                        inventory
-                            .entries
-                            .into_iter()
-                            .find(|entry| entry.item.scope() == &scope && entry.item.key() == key)
-                            .map(|entry| {
-                                MusubiProviderAttestationInventoryReadbackV1::try_new(
-                                    entry.item,
-                                    entry.revision,
-                                )
-                            })
-                            .transpose()
-                    },
+                    move |store| store.inventory_entry(&scope, key),
                 )
                 .await
+        })
+    }
+    fn get_on_blocking_worker(
+        &self,
+        _runtime: &tokio::runtime::Handle,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> Result<
+        Option<MusubiProviderAttestationInventoryReadbackV1>,
+        MusubiProviderAttestationInventoryErrorV1,
+    > {
+        self.shared.validate_inventory_scope(scope)?;
+        let _permit = self
+            .shared
+            .jobs
+            .try_acquire()
+            .map_err(|_| MusubiProviderAttestationInventoryErrorV1::Unavailable)?;
+        // The caller already owns the blocking worker. Its outer decoder charges the actual
+        // inventory and validation work while the store keeps its original policy and lock.
+        norito::with_decode_limits_scope(self.shared.limits(), || {
+            self.shared.inventory_entry(scope, key)
         })
     }
     fn inventory<'a>(
@@ -767,10 +800,7 @@ impl MusubiProviderAttestationInventoryReaderV1 for NativeMusubiProviderAttestat
         >,
     > {
         Box::pin(async move {
-            scope.validate()?;
-            if scope.network_id != self.shared.binding.network_id {
-                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
-            }
+            self.shared.validate_inventory_scope(scope)?;
             let scope = scope.clone();
             self.shared
                 .run_blocking(

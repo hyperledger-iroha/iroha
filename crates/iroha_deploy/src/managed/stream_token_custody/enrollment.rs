@@ -280,11 +280,22 @@ impl ManagedStreamTokenCustody {
         minimum_block_hash: [u8; 32],
         block: &VerifiedSumeragiBlock,
         deadline: Instant,
-    ) -> Result<()> {
+    ) -> Result<Option<()>> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
-        let current = self.read_current_at(&policy.binding, block, deadline)?;
+        let first = if norito::core::decode_limits_active() {
+            0
+        } else {
+            // Offset the custody read from this provider's simultaneous discovery read.
+            let provider = self.authority.provider_id()?;
+            usize::from(self.authority.provider_inventory(provider)?.slot) + 1
+        };
+        let Some(current) =
+            self.capture_available_current_at(&policy.binding, block, deadline, first)?
+        else {
+            return Ok(None);
+        };
         self.verify_enrollment_at(
             enrollment,
             policy,
@@ -292,10 +303,11 @@ impl ManagedStreamTokenCustody {
                 height: minimum_height,
                 block_hash: minimum_block_hash,
             },
-            &current,
+            &current.state,
             now_ms()?,
             deadline,
-        )
+        )?;
+        Ok(Some(()))
     }
 
     /// Check historical enrollment against a separately authenticated same-cut current proof.

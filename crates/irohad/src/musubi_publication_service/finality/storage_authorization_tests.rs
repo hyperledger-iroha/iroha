@@ -52,6 +52,30 @@ impl MusubiProviderReadbackBackendV1 for UnusedReadback {
     }
 }
 
+pub(super) fn request(fixture: &ReaderFixture) -> MusubiStorageCoordinationRequestV1 {
+    let query = &fixture.query;
+    let archive = &fixture.archive;
+    MusubiStorageCoordinationRequestV1 {
+        version: 1,
+        operation_id: [0x81; 32],
+        generation: 1,
+        prior_location_ids: Vec::new(),
+        network_id: query.network_id,
+        publisher: archive.registered_by.clone(),
+        commitment: archive.commitment.clone(),
+        verification_lock_digest: MusubiVerificationLockDigestV1::new([0x74; 32]),
+        staging_receipt: archive.staging_receipt.clone(),
+        expected_policy_revision: query.expected_policy_revision,
+        finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
+            version: 1,
+            network_id: query.network_id,
+            transaction_hash: query.transaction_hash,
+            snapshot: query.snapshot,
+            registration: query.registration.clone(),
+        },
+    }
+}
+
 pub(super) fn dispatch(
     backend: Box<dyn MusubiStorageCoordinationBackendV1>,
     request: &MusubiStorageCoordinationRequestV1,
@@ -130,4 +154,62 @@ pub(super) fn dispatch(
         422 => Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         other => panic!("unexpected native storage barrier response: {other}"),
     }
+}
+
+#[test]
+fn fresh_storage_coordination_can_start_before_a_cached_pin_exists() {
+    use crate::musubi_publication_service::storage_coordination::FinalizedRegistrationCheckedStorageBackendV1;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct UnstartedPin(Arc<AtomicUsize>);
+    impl MusubiStorageCoordinationBackendV1 for UnstartedPin {
+        fn verify_current_registration(
+            &self,
+            _: &MusubiStorageCoordinationRequestV1,
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            Err(MusubiPublicationServiceBackendErrorV1::Retryable)
+        }
+        fn verify_coordination_source(
+            &self,
+            _: &MusubiStorageCoordinationRequestV1,
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn coordinate_storage(
+            &mut self,
+            _: &VerifiedStorageCoordinationRequestV1<'_>,
+        ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
+        {
+            assert_eq!(self.0.fetch_add(1, Ordering::SeqCst), 1);
+            Err(MusubiPublicationServiceBackendErrorV1::Retryable)
+        }
+    }
+
+    let fixture = reader_fixture();
+    let request = request(&fixture);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let checked = || {
+        FinalizedRegistrationCheckedStorageBackendV1::new(
+            fixture.reader.clone(),
+            Box::new(UnstartedPin(Arc::clone(&calls))),
+        )
+    };
+    assert_eq!(
+        checked().verify_current_registration(&request),
+        Err(MusubiPublicationServiceBackendErrorV1::Retryable)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let mut wrong = request.clone();
+    wrong.finalized_registration.transaction_hash[0] ^= 1;
+    assert_eq!(
+        dispatch(Box::new(checked()), &wrong),
+        Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        dispatch(Box::new(checked()), &request),
+        Err(MusubiPublicationServiceBackendErrorV1::Retryable)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
