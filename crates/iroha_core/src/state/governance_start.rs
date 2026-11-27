@@ -162,6 +162,10 @@ pub(crate) fn parliament_error<E: std::fmt::Debug>(
     let local = error.is_local() && !cfg!(all(test, sumeragi_core_mutation = "HC805"));
     match error {
         AnonymousPassWorldErrorV1::Storage(error) if local => StateBlockStartError::Storage(error),
+        AnonymousPassWorldErrorV1::Execution(original) if local => StateBlockStartError::ExecutionDeferred(original),
+        AnonymousPassWorldErrorV1::Receipt(
+            iroha_data_model::governance::anonymous_ballot::AnonymousBallotCodecErrorV1::DecodeUnavailable(original),
+        ) if local => StateBlockStartError::ExecutionDeferred(original.into()),
         AnonymousPassWorldErrorV1::Output(_) if local => {
             StateBlockStartError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable.into())
         }

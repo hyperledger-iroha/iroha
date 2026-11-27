@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_data_model::query::error::QueryExecutionFail;
+use ivm_abi::error::VmDeferral;
 
 #[test]
 fn ascending_native_continuation_charges_one_reverse_and_one_forward_source_pass() {
@@ -909,7 +910,9 @@ fn state_certificate_signed_availability_scratch_uses_original_query_allowance()
             .vec_reserve_error()
             .unwrap();
         assert_eq!(returned_layout, layout);
-        let ivm::error::VMError::AllocatorDeferred(owner) = returned.into_vm_error() else {
+        let ivm::error::VMError::Deferred(VmDeferral::AllocatorDeferred(owner)) =
+            returned.into_vm_error()
+        else {
             panic!("same allocator owner");
         };
         let owner = owner.into_buffer_error().unwrap_err();

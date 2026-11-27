@@ -6,6 +6,7 @@ use crate::{
     smartcontracts::ivm::cache::IvmCache,
     sumeragi::test_chain::{CertifiedTestChain, PreparedTestChainConfig, Signers},
 };
+use ivm_abi::error::{VmDeferral, VmTrap};
 
 fn certified_root() -> (DataspaceChain, CertifiedTestChain) {
     let parent = chain(4, 200);
@@ -274,7 +275,7 @@ fn signed_private_host_query_keeps_scope_refusal_out_of_completed_vm_errors() {
     );
     assert_eq!(error.fault_kind(), None);
     assert_eq!(error.metered_gas(), None);
-    let ivm::VMError::DecodeDeferred(original) = error else {
+    let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)) = error else {
         panic!("scope refusal lost its original decoder owner: {error:?}");
     };
     assert_eq!(
@@ -289,7 +290,7 @@ fn signed_private_host_query_keeps_scope_refusal_out_of_completed_vm_errors() {
     // shared counter owner and opaque scope survive the VM/Core round trip.
     let expected = original.clone();
     let deferred = crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
-        ivm::VMError::DecodeDeferred(original),
+        ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)),
     )
     .unwrap();
     assert_eq!(
@@ -298,7 +299,8 @@ fn signed_private_host_query_keeps_scope_refusal_out_of_completed_vm_errors() {
     );
     assert_eq!(deferred.decode_refusal(), Some(&expected));
     assert!(deferred.allocation_refusal().is_none());
-    let ivm::VMError::DecodeDeferred(restored) = deferred.into_vm_error() else {
+    let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(restored)) = deferred.into_vm_error()
+    else {
         panic!("the original scoped refusal became a reason-only VM error");
     };
     assert_eq!(restored, expected);
@@ -329,14 +331,14 @@ fn signed_private_contract_lookup_does_not_turn_scope_refusal_into_vm_permission
     .unwrap();
     assert!(matches!(
         QueryStateRef::View(&view).contract_instance_by_address(&address),
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     ));
     let error = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
         || QueryStateRef::View(&view).contract_instance_by_address(&address),
     )
     .unwrap_err();
-    let ivm::VMError::DecodeDeferred(original) = error else {
+    let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)) = error else {
         panic!("scope refusal lost its original decoder owner: {error:?}");
     };
     assert_eq!(
@@ -351,7 +353,7 @@ fn signed_private_contract_lookup_does_not_turn_scope_refusal_into_vm_permission
     // shared counter owner and opaque scope survive the VM/Core round trip.
     let expected = original.clone();
     let deferred = crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
-        ivm::VMError::DecodeDeferred(original),
+        ivm::VMError::Deferred(VmDeferral::DecodeDeferred(original)),
     )
     .unwrap();
     assert_eq!(
@@ -360,14 +362,15 @@ fn signed_private_contract_lookup_does_not_turn_scope_refusal_into_vm_permission
     );
     assert_eq!(deferred.decode_refusal(), Some(&expected));
     assert!(deferred.allocation_refusal().is_none());
-    let ivm::VMError::DecodeDeferred(restored) = deferred.into_vm_error() else {
+    let ivm::VMError::Deferred(VmDeferral::DecodeDeferred(restored)) = deferred.into_vm_error()
+    else {
         panic!("the original scoped refusal became a reason-only VM error");
     };
     assert_eq!(restored, expected);
     assert_eq!(restored.resource_error(), resource);
     assert!(matches!(
         QueryStateRef::View(&view).contract_instance_by_address(&address),
-        Err(ivm::VMError::DecodeError)
+        Err(ivm::VMError::Trap(VmTrap::DecodeError))
     ));
     assert_eq!(view.height(), 1);
     assert_eq!(chain.kura().blocks_count(), 1);

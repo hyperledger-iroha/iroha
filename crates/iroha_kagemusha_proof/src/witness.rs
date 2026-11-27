@@ -458,8 +458,16 @@ pub struct StateV1<F> {
 }
 
 /// The state commitment `P(kgwcore1, core || rest digest)`.
-fn commit<F: PoseidonField>(core: &[F; CORE_FIELDS], rest_digest: F) -> F {
+fn commit<F: PoseidonField>(
+    core: &[F; CORE_FIELDS],
+    rest_digest: F,
+    #[cfg(test)] prior_root: Option<F>,
+) -> F {
     let mut inputs = core.to_vec();
+    #[cfg(test)]
+    if let Some(root) = prior_root {
+        inputs.insert(core_index::CREDENTIAL + 1, root);
+    }
     inputs.push(rest_digest);
     hash_with_domain(CORE_DOMAIN, &inputs)
 }
@@ -468,7 +476,12 @@ impl<F: PoseidonField> StateV1<F> {
     /// The state commitment `P(kgwcore1, core || P(kgwrest1, rest))`.
     #[must_use]
     pub fn commitment(&self) -> F {
-        commit(&self.core.fields(), self.rest.digest())
+        commit(
+            &self.core.fields(),
+            self.rest.digest(),
+            #[cfg(test)]
+            None,
+        )
     }
 }
 
@@ -695,6 +708,9 @@ pub struct StepWitness<F> {
     /// The scheme-level relation identity the statement carries (G1
     /// `KagemushaWalletSchemeV1::relation_id`).
     pub relation_id: [u8; 32],
+    /// Prior credential root shared by the two candidate Core30 head commitments.
+    #[cfg(test)]
+    pub(crate) core30_prior_root: Option<F>,
     /// The predecessor state.
     pub predecessor: StateV1<F>,
     /// The successor's fresh state nonce.
@@ -956,6 +972,26 @@ pub(crate) fn field_value<F: PoseidonField>(bytes: &[u8; 32]) -> F {
     canonical_field(bytes).unwrap_or(F::ZERO)
 }
 
+impl<F> StepWitness<F> {
+    /// Build an ordinary step from its monetary inputs and predecessor.
+    #[must_use]
+    pub fn new(
+        relation_id: [u8; 32],
+        predecessor: StateV1<F>,
+        successor_nonce: F,
+        inputs: StepInputs<F>,
+    ) -> Self {
+        Self {
+            relation_id,
+            #[cfg(test)]
+            core30_prior_root: None,
+            predecessor,
+            successor_nonce,
+            inputs,
+        }
+    }
+}
+
 impl<F: PoseidonField> StepWitness<F> {
     /// Whether every carried Poseidon digest is canonically encoded.
     #[must_use]
@@ -1122,7 +1158,12 @@ impl<F: PoseidonField> StepWitness<F> {
             .as_ref()
             .map_or(state.core.roots.quota_usage, |quota| quota.usage_root);
         let rest_digest = state.rest.digest::<F>();
-        let predecessor = commit(&core, rest_digest);
+        let predecessor = commit(
+            &core,
+            rest_digest,
+            #[cfg(test)]
+            self.core30_prior_root,
+        );
         let request = self.request_body();
         let credit = request.credit_id::<F>();
         let mut successor_core = core;
@@ -1191,7 +1232,12 @@ impl<F: PoseidonField> StepWitness<F> {
             StepRelation::Send => successor_core[core_index::SEND_CHAIN] = chain,
             StepRelation::Receive => successor_core[core_index::RECEIVE_CHAIN] = chain,
         }
-        let successor = commit(&successor_core, rest_digest);
+        let successor = commit(
+            &successor_core,
+            rest_digest,
+            #[cfg(test)]
+            self.core30_prior_root,
+        );
         let mut statement = [F::ZERO; STATEMENT_FIELDS];
         let [relation_lo, relation_hi] = digest_fields::<F>(&self.relation_id);
         let header = [

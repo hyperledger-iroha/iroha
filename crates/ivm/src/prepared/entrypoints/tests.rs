@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::encoding::wide as enc;
+use crate::error::{VmDeferral, VmTrap};
 use crate::instruction::wide;
 use iroha_allocation::AllocationRefusal;
 
@@ -152,14 +153,14 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
             Some(&budget),
             crate::IvmEngine::C10
         ),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
     assert_eq!(budget.peak_reserved_bytes(), 0);
     budget.set_limit_bytes(bytes + scratch - 1);
     assert!(
-        matches!(Entrypoints::prepare(&descriptors, instructions, &graph, 0, Some(&budget), crate::IvmEngine::C10), Err(VMError::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. })) if requested_bytes == scratch)
+        matches!(Entrypoints::prepare(&descriptors, instructions, &graph, 0, Some(&budget), crate::IvmEngine::C10), Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity { requested_bytes, .. }))) if requested_bytes == scratch)
     );
     assert_eq!(budget.peak_reserved_bytes(), bytes);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -174,9 +175,9 @@ fn original_pool_refusals_refund_index_and_retry_the_same_descriptors() {
             Some(&budget),
             crate::IvmEngine::C10
         ),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::Capacity { .. }
-        ))
+        )))
     ));
     drop(occupied);
     let index = Entrypoints::prepare(
@@ -214,7 +215,7 @@ fn malformed_indexes_refund_both_allocations_and_empty_index_needs_no_credit() {
                 Some(&budget),
                 crate::IvmEngine::C10
             ),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
     }

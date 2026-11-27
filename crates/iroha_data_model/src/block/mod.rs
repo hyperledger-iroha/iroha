@@ -441,7 +441,7 @@ impl SignedBlock {
                 .position(|hash| hash == *input_hash)?,
         )
         .ok()?;
-        let (output_index, _) = self.network_output_at(input_index)?;
+        let (output_index, _) = self.network_execution_output_at(input_index)?;
         let output = self
             .execution_outputs()
             .get(usize::try_from(output_index).ok()?)?

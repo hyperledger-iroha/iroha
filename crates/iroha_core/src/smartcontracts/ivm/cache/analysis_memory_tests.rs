@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_allocation::{AllocationBudget, AllocationRefusal};
+use ivm_abi::error::VmDeferral;
 use std::{
     future::Future,
     pin::Pin,
@@ -67,7 +68,9 @@ fn contract_analysis_refuses_original_pool_then_shares_cached_result_until_final
     let failure = cache.analyze_program(&summary, &program).unwrap_err();
     assert!(matches!(
         failure.into_vm_error(),
-        ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+        ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+            AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. }
+        ))
     ));
     assert_eq!(budget.reserved_bytes(), baseline);
     assert!(cache.with_local(|local| local.analyses.is_empty()));
@@ -78,7 +81,9 @@ fn contract_analysis_refuses_original_pool_then_shares_cached_result_until_final
             .analyze_program(&summary, &program)
             .unwrap_err()
             .into_vm_error(),
-        ivm::VMError::AllocationDeferred(AllocationRefusal::Capacity { .. })
+        ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+            AllocationRefusal::Capacity { .. }
+        ))
     ));
     assert!(cache.with_local(|local| local.analyses.is_empty()));
     drop(occupied);
@@ -117,7 +122,9 @@ fn generic_analysis_retries_original_refusal_without_retention_or_output_copy() 
             .analyze_generic_program(&summary)
             .unwrap_err()
             .into_vm_error(),
-        ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { .. })
+        ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+            AllocationRefusal::ExceedsLimit { .. }
+        ))
     ));
     assert_eq!(budget.reserved_bytes(), baseline);
     budget.set_limit_bytes(LIMIT);
@@ -155,7 +162,9 @@ fn foreign_summary_cannot_supply_execution_credit_to_another_states_analysis() {
             .analyze_program(&summary, &program)
             .unwrap_err()
             .into_vm_error(),
-        ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+        ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
+            AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. }
+        ))
     ));
     assert_eq!(first_budget.reserved_bytes(), original);
     assert_eq!(second_budget.peak_reserved_bytes(), 0);

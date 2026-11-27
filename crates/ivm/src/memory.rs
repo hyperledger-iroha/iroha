@@ -10,6 +10,7 @@
 //! * **Output** – read/write buffer beginning at `0x0021_0000`.
 //! * **Stack** – starts at `0x0030_0000`; ABI V1 derives a deterministic
 //!   64&nbsp;KiB–4&nbsp;MiB active limit from the invocation gas budget.
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     branch_hint::{likely, unlikely},
     byte_merkle_tree::ByteMerkleTree,
@@ -77,11 +78,9 @@ pub struct Memory {
     /// allocated storage. Meaningless while `tree` is `None`.
     root: HashOf<MerkleTree<[u8; 32]>>,
     /// Leaf digests and canonical nodes, allocated by the first root or path
-    /// request. Every leaf outside `dirty_chunks` is current.
+    /// request; a funded image admits them from its original pool then. Every
+    /// leaf outside `dirty_chunks` is current.
     tree: Option<ByteMerkleTree>,
-    /// Accounting held for Merkle storage this image has not allocated, until
-    /// the allocation takes it over. `Some` exactly while `tree` is `None`.
-    tree_deferred: Option<DeferredMerkle>,
     /// Flag indicating that a write is pending since the last commit.
     dirty: bool,
     /// Prepaid bitmap of Merkle leaves whose digests are pending.
@@ -169,31 +168,6 @@ impl DerefMut for MemoryImage {
 /// Bytes committed by one memory Merkle leaf.
 const MERKLE_CHUNK_BYTES: usize = 32;
 
-/// Accounting an image holds for Merkle storage it has not allocated.
-///
-/// Deferring the allocation changes no admission. An image is accounted at its
-/// whole committed footprint from construction: `retention` is the cache charge
-/// the allocated storage will carry, and a funded image also keeps the
-/// storage's prepaid execution `credit`, unspent. Caches and pools therefore
-/// admit, retain and refuse images exactly as they did when the storage was
-/// allocated with the image; only the allocation and its hashing move to the
-/// first root or path request.
-struct DeferredMerkle {
-    credit: Option<ExecutionMemoryLease>,
-    retention: crate::cache_memory::MemoryReservation,
-}
-
-impl DeferredMerkle {
-    /// Account for the storage of `leaves` leaves, keeping a funded image's `credit`.
-    fn new(leaves: usize, credit: Option<ExecutionMemoryLease>) -> Result<Self, VMError> {
-        let bytes = ByteMerkleTree::memory_plan(leaves)?.requested_bytes();
-        Ok(Self {
-            credit,
-            retention: crate::cache_memory::MemoryReservation::active(bytes),
-        })
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MemoryGeometry {
     pub(crate) bytes: usize,
@@ -244,7 +218,7 @@ impl Memory {
         recorder: DiagnosticMemoryAccessRecorder,
     ) -> Result<(), VMError> {
         if self.diagnostic_access_recorder.is_some() {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::Deferred(VmDeferral::HostUnavailable));
         }
         self.diagnostic_access_recorder = Some(recorder);
         Ok(())
@@ -298,9 +272,9 @@ impl Memory {
         let demand = heap_rows
             .checked_add(code_len.max(self.code_length as usize))
             .and_then(|rows| rows.checked_add(output_rows))
-            .ok_or(VMError::ExecutionDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable,
-            ))?;
+            )))?;
         recorder.ensure_remaining(demand)
     }
 
@@ -322,11 +296,6 @@ impl Memory {
             && self.read_log.lock().try_retain()
             && self.write_log.lock().try_retain()
             && self.tree.as_ref().is_none_or(ByteMerkleTree::try_retain)
-            && self.merkle_credit_intact()
-            && self
-                .tree_deferred
-                .as_ref()
-                .is_none_or(|deferred| deferred.retention.try_retain())
             && self.dirty_chunks.try_retain()
             && self.modified_chunks.try_retain()
             && self.call_frames.try_retain()
@@ -338,9 +307,6 @@ impl Memory {
         self.write_log.lock().make_active();
         if let Some(tree) = &self.tree {
             tree.make_active();
-        }
-        if let Some(deferred) = &self.tree_deferred {
-            deferred.retention.make_active();
         }
         self.dirty_chunks.make_active();
         self.modified_chunks.make_active();
@@ -389,23 +355,6 @@ impl Memory {
     pub fn merkle_storage_allocated(&self) -> bool {
         self.tree.is_some()
     }
-    /// Whether a funded image still holds the whole prepaid credit of Merkle
-    /// storage it has not allocated.
-    ///
-    /// A refused allocation takes its credit back at once. Only when the pool
-    /// has meanwhile given that capacity away is the image left short; it then
-    /// re-admits on its next request and must not be retained idle as prepaid.
-    fn merkle_credit_intact(&self) -> bool {
-        match self
-            .tree_deferred
-            .as_ref()
-            .and_then(|deferred| deferred.credit.as_ref())
-        {
-            Some(credit) => ByteMerkleTree::memory_plan(self.merkle_leaf_count())
-                .is_ok_and(|plan| credit.remaining_bytes() >= plan.requested_bytes()),
-            None => true,
-        }
-    }
     /// Rehash only the pending Merkle leaves, drain them and return the new root.
     fn rehash_pending(
         tree: &mut ByteMerkleTree,
@@ -434,51 +383,36 @@ impl Memory {
     }
     /// Allocate the Merkle storage on first use and commit every pending leaf.
     ///
-    /// The allocation is the zero tree the pending bitmap is relative to; a
-    /// funded image builds it from its retained prepaid credit.
+    /// The allocation is the zero tree the pending bitmap is relative to. A
+    /// funded image admits it from its original pool here, as its write and read
+    /// logs admit their rows; an image without a pool allocates it locally.
     ///
     /// # Errors
-    /// Defers locally when leaf or node storage cannot be allocated. The image
-    /// and its pending bitmap are unchanged and the request can be repeated: a
-    /// refused funded attempt takes its prepaid credit back from the pool at
-    /// once, and an image the pool could not give it back to re-admits it here.
+    /// Defers locally when the pool refuses the admission or leaf or node
+    /// storage cannot be allocated. The image and its pending bitmap are
+    /// unchanged, a refused attempt returns everything it had admitted to the
+    /// pool, and the request can be repeated.
     fn committed_tree(&mut self) -> Result<&ByteMerkleTree, VMError> {
         let leaves = self.merkle_leaf_count();
         let tree = match &mut self.tree {
             Some(tree) => tree,
             deferred @ None => {
-                let tree = match self
-                    .tree_deferred
-                    .as_mut()
-                    .and_then(|deferred| deferred.credit.as_mut())
-                {
-                    Some(credit) => {
-                        let plan = ByteMerkleTree::memory_plan(leaves)?;
-                        if credit.remaining_bytes() < plan.requested_bytes() {
-                            // An earlier refused attempt could not take its
-                            // credit back; the original pool must admit it again.
-                            credit.readmit(plan).map_err(VMError::AllocationDeferred)?;
-                        }
-                        match ByteMerkleTree::new_funded(leaves, MERKLE_CHUNK_BYTES, credit) {
-                            Ok(tree) => tree,
-                            Err(error) => {
-                                // The refused attempt dropped the charges it had
-                                // split, refunding them to the pool. Take the
-                                // whole credit back now so the image stays
-                                // prepaid; a refusal leaves it short until the
-                                // next request re-admits it.
-                                let _ = credit.readmit(plan);
-                                return Err(error);
-                            }
-                        }
+                let tree = match self.call_frames.allocation_budget() {
+                    Some(budget) => {
+                        let mut credit = ExecutionMemoryLease::reserve(
+                            budget,
+                            ByteMerkleTree::memory_plan(leaves)?,
+                        )
+                        .map_err(|cause| {
+                            VMError::Deferred(VmDeferral::AllocationDeferred(cause))
+                        })?;
+                        ByteMerkleTree::new_funded(leaves, MERKLE_CHUNK_BYTES, &mut credit)?
                     }
                     None => ByteMerkleTree::new(leaves, MERKLE_CHUNK_BYTES)?,
                 };
                 // The zero root is current only for an image nothing has written.
                 self.root = tree.root_hash();
                 self.dirty |= !self.dirty_chunks.is_empty();
-                // The allocated storage carries its charges itself from here.
-                self.tree_deferred = None;
                 deferred.insert(tree)
             }
         };
@@ -514,9 +448,9 @@ impl Memory {
         self.dirty
     }
     fn merkle_leaf_index(&self, addr: u64) -> Result<usize, VMError> {
-        let addr = usize::try_from(addr).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let addr = usize::try_from(addr).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if addr >= self.data.len() {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         Ok(addr / 32)
     }
@@ -525,7 +459,7 @@ impl Memory {
     /// memory image.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. In particular, the exclusive end address is not rounded into the final tree leaf.
     /// Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_path(&mut self, addr: u64) -> Result<Vec<[u8; 32]>, VMError> {
@@ -537,7 +471,7 @@ impl Memory {
     /// Pending writes are committed first to keep the root/path in sync.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_root_and_path(
         &mut self,
@@ -553,7 +487,7 @@ impl Memory {
     /// only to that path fragment and is not a membership commitment.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] unless `addr` names an exact byte in this memory
     /// image. Defers locally when the first request cannot allocate the Merkle storage.
     pub fn merkle_compact(
         &mut self,
@@ -561,7 +495,8 @@ impl Memory {
         depth_cap: Option<usize>,
     ) -> Result<(CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>), VMError> {
         let leaf_index = self.merkle_leaf_index(addr)?;
-        let leaf_index = u32::try_from(leaf_index).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let leaf_index =
+            u32::try_from(leaf_index).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         let (full_root, path) = self.merkle_root_and_path(addr)?;
         let mut depth = path.len().min(32);
         if let Some(cap) = depth_cap {
@@ -661,7 +596,7 @@ impl Memory {
     /// immutable ABI stack policy in `IvmConfig`.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` is outside the
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when `stack_limit` is outside the
     /// ABI V1 range, is not exactly aligned, or the resulting memory geometry
     /// is not representable on the host. Local allocation refusal defers execution.
     /// Only the image and its two leaf bitmaps are allocated here; the Merkle
@@ -669,7 +604,9 @@ impl Memory {
     pub fn new_with_stack_limit(stack_limit: u64) -> Result<Self, VMError> {
         let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
         let data = crate::cache_memory::OwnedAllocation::try_zeroed(total_size).map_err(|_| {
-            VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
         })?;
         Self::new_with_image(
             stack_limit,
@@ -685,20 +622,19 @@ impl Memory {
         budget: &AllocationBudget,
     ) -> Result<Self, VMError> {
         let total_size = Self::image_bytes_for_stack_limit(stack_limit)?;
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let leaf_count = total_size.div_ceil(MERKLE_CHUNK_BYTES).max(1);
         let mut plan = ExecutionMemoryPlan::array::<u8>(total_size).map_err(|_| unavailable())?;
-        // Admit the Merkle storage with the image: its credit is retained
-        // unspent so the first root request never needs a new pool admission.
-        plan.include_child(ByteMerkleTree::memory_plan(leaf_count)?)
-            .map_err(|_| unavailable())?;
         for _ in 0..2 {
             plan.include_child(DirtyChunks::memory_plan(leaf_count)?)
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         }
-        let mut lease =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let image = ExecutionBuffer::zeroed(total_size, &mut lease).map_err(|_| unavailable())?;
         Self::new_with_image(
             stack_limit,
@@ -713,13 +649,13 @@ impl Memory {
         if !(Self::MIN_STACK_SIZE..=Self::STACK_SIZE).contains(&stack_limit)
             || !stack_limit.is_multiple_of(Self::STACK_ALIGNMENT)
         {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let total_size = Memory::STACK_START
             .checked_add(stack_limit)
             .and_then(|size| size.checked_add(Memory::STACK_SLOP))
-            .ok_or(VMError::MemoryOutOfBounds)?;
-        usize::try_from(total_size).map_err(|_| VMError::MemoryOutOfBounds)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+        usize::try_from(total_size).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))
     }
 
     fn new_with_image(
@@ -730,19 +666,6 @@ impl Memory {
         active_budget: Option<&AllocationBudget>,
     ) -> Result<Self, VMError> {
         let leaf_count = total_size.div_ceil(MERKLE_CHUNK_BYTES).max(1);
-        let credit = lease
-            .as_deref_mut()
-            .map(|lease| {
-                lease
-                    .partition(ByteMerkleTree::memory_plan(leaf_count)?)
-                    .map_err(|_| {
-                        VMError::ExecutionDeferred(
-                            crate::error::ExecutionDeferral::AllocationUnavailable,
-                        )
-                    })
-            })
-            .transpose()?;
-        let tree_deferred = Some(DeferredMerkle::new(leaf_count, credit)?);
         let dirty_chunks = DirtyChunks::new(leaf_count, lease.as_deref_mut())?;
         let modified_chunks = DirtyChunks::new(leaf_count, lease)?;
         let mut mem = Memory {
@@ -760,7 +683,6 @@ impl Memory {
             output_cursor: 0,
             root: HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32])),
             tree: None,
-            tree_deferred,
             dirty: false,
             dirty_chunks,
             modified_chunks,
@@ -780,12 +702,14 @@ impl Memory {
     /// Preload data into the input region. Used by tests/host before execution.
     pub fn preload_input(&mut self, offset: u64, bytes: &[u8]) -> Result<(), VMError> {
         if offset > Memory::INPUT_SIZE {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let len = bytes.len() as u64;
-        let end_off = offset.checked_add(len).ok_or(VMError::MemoryOutOfBounds)?;
+        let end_off = offset
+            .checked_add(len)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if end_off > Memory::INPUT_SIZE {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let start = (Memory::INPUT_START + offset) as usize;
         let end = start + bytes.len();
@@ -813,37 +737,40 @@ impl Memory {
         align: u64,
     ) -> Result<u64, VMError> {
         if !align.is_power_of_two() {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let mask = align - 1;
         let off = cursor
             .checked_add(mask)
             .map(|value| value & !mask)
-            .ok_or(VMError::MemoryOutOfBounds)?;
-        let len = u64::try_from(bytes.len()).map_err(|_| VMError::MemoryOutOfBounds)?;
-        let end = off.checked_add(len).ok_or(VMError::MemoryOutOfBounds)?;
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+        let len =
+            u64::try_from(bytes.len()).map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
+        let end = off
+            .checked_add(len)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if end > Memory::INPUT_SIZE {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         self.preload_input(off, bytes)?;
         *cursor = end;
         Memory::INPUT_START
             .checked_add(off)
-            .ok_or(VMError::MemoryOutOfBounds)
+            .ok_or(VMError::Trap(VmTrap::MemoryOutOfBounds))
     }
     #[inline]
     pub fn alloc(&mut self, size: u64) -> Result<u64, VMError> {
         let aligned = size
             .checked_add(7)
             .map(|v| v & !7)
-            .ok_or(VMError::OutOfMemory)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
         if aligned != 0 {
             let new_alloc = self
                 .heap_alloc
                 .checked_add(aligned)
-                .ok_or(VMError::OutOfMemory)?;
+                .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
             if unlikely(new_alloc > self.heap_limit) {
-                return Err(VMError::OutOfMemory);
+                return Err(VMError::Trap(VmTrap::OutOfMemory));
             }
             let addr = Memory::HEAP_START + self.heap_alloc;
             self.heap_alloc = new_alloc;
@@ -857,16 +784,16 @@ impl Memory {
         let aligned = additional
             .checked_add(7)
             .map(|v| v & !7)
-            .ok_or(VMError::OutOfMemory)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
         if aligned == 0 {
             return Ok(self.heap_limit);
         }
         let new_limit = self
             .heap_limit
             .checked_add(aligned)
-            .ok_or(VMError::OutOfMemory)?;
+            .ok_or(VMError::Trap(VmTrap::OutOfMemory))?;
         if unlikely(new_limit > self.heap_max_limit) {
-            return Err(VMError::OutOfMemory);
+            return Err(VMError::Trap(VmTrap::OutOfMemory));
         }
         self.heap_limit = new_limit;
         Ok(self.heap_limit)
@@ -886,7 +813,7 @@ impl Memory {
     /// Override the active heap limit, keeping the already-allocated region valid.
     pub fn set_heap_limit(&mut self, limit: u64) -> Result<(), VMError> {
         if limit < self.heap_alloc || limit > self.heap_max_limit {
-            return Err(VMError::OutOfMemory);
+            return Err(VMError::Trap(VmTrap::OutOfMemory));
         }
         self.heap_limit = limit;
         Ok(())
@@ -897,7 +824,7 @@ impl Memory {
     /// use it to apply deterministic governance limits before guest execution.
     pub fn set_heap_max_limit(&mut self, limit: u64) -> Result<(), VMError> {
         if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
-            return Err(VMError::OutOfMemory);
+            return Err(VMError::Trap(VmTrap::OutOfMemory));
         }
         self.heap_max_limit = limit;
         self.heap_limit = self.heap_limit.min(limit);
@@ -941,19 +868,20 @@ impl Memory {
     /// The complete request is validated before any bytes or metadata change.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when the program overlaps the
+    /// Returns [`crate::error::VmTrap::MemoryOutOfBounds`] when the program overlaps the
     /// heap boundary or is not representable in the physical memory image.
     pub fn load_code(&mut self, code: &[u8]) -> Result<(), VMError> {
         let len = code.len();
         let code_region_end = usize::try_from(Memory::HEAP_START)
-            .map_err(|_| VMError::MemoryOutOfBounds)?
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?
             .min(self.data.len());
         if len > code_region_end {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
-        let old_len = usize::try_from(self.code_length).map_err(|_| VMError::MemoryOutOfBounds)?;
+        let old_len = usize::try_from(self.code_length)
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         if old_len > code_region_end {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let modified_len = len.max(old_len);
         if let Some(recorder) = &self.diagnostic_access_recorder {
@@ -1004,16 +932,16 @@ impl Memory {
             if likely(perm.contains(required)) {
                 Ok(())
             } else {
-                Err(VMError::MemoryAccessViolation {
+                Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                     addr: addr as u32,
                     perm: required,
-                })
+                }))
             }
         } else {
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 addr: addr as u32,
                 perm: required,
-            })
+            }))
         }
     }
     /// Load an 8-bit value from memory.
@@ -1022,6 +950,26 @@ impl Memory {
         self.check_perm(addr, 1, Perm::READ)?;
         self.record_read_range(addr, 1, DiagnosticMemoryAccessKind::Read)?;
         Ok(self.data[addr as usize])
+    }
+    /// Read an aligned instruction operand while the interpreter exclusively owns its memory.
+    /// The read set and diagnostic log are admitted together, before a result can leave this call.
+    #[inline]
+    pub(crate) fn load_guest_word<const N: usize>(
+        &mut self,
+        addr: u64,
+        kind: DiagnosticMemoryAccessKind,
+    ) -> Result<[u8; N], VMError> {
+        debug_assert!(matches!(N, 4 | 8 | 16));
+        if unlikely(!addr.is_multiple_of(N as u64)) {
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
+        }
+        self.check_perm(addr, N as u32, Perm::READ)?;
+        self.record_exclusive_read_range(addr, N as u64, kind)?;
+        Ok(self.data[addr as usize..addr as usize + N]
+            .try_into()
+            .expect("range has fixed width"))
     }
     /// Load a 32-bit value (little-endian) from memory.
     #[inline]
@@ -1043,7 +991,9 @@ impl Memory {
         kind: DiagnosticMemoryAccessKind,
     ) -> Result<u32, VMError> {
         if unlikely(!addr.is_multiple_of(4)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 4, Perm::READ)?;
         let bytes: [u8; 4] = self.data[addr as usize..addr as usize + 4]
@@ -1076,20 +1026,27 @@ impl Memory {
         pc: u64,
         instruction: u32,
     ) -> Result<(), VMError> {
-        let end = pc.checked_add(4).ok_or(VMError::DecodeError)?;
+        let end = pc
+            .checked_add(4)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         // The prepared-program owner already authenticates the instruction
         // boundary relative to its admitted executable origin. A variable-size
         // contract prefix can place that origin at any physical byte alignment.
         if end > self.code_length {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
-        let start = usize::try_from(pc).map_err(|_| VMError::DecodeError)?;
+        let start = usize::try_from(pc).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let bytes = self
             .data
-            .get(start..start.checked_add(4).ok_or(VMError::DecodeError)?)
-            .ok_or(VMError::DecodeError)?;
+            .get(
+                start
+                    ..start
+                        .checked_add(4)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?,
+            )
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         if bytes != instruction.to_le_bytes() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         recorder.record_read(pc, bytes, DiagnosticMemoryAccessKind::InstructionFetch)
     }
@@ -1097,7 +1054,9 @@ impl Memory {
     #[inline]
     pub fn load_u64(&self, addr: u64) -> Result<u64, VMError> {
         if unlikely(!addr.is_multiple_of(8)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 8, Perm::READ)?;
         self.record_read_range(addr, 8, DiagnosticMemoryAccessKind::Read)?;
@@ -1114,11 +1073,11 @@ impl Memory {
             .region_perm(address, 8)
             .is_some_and(|perm| perm.contains(Perm::READ))
         {
-            return Err(VMError::MemoryOutOfBounds);
+            return Err(VMError::Trap(VmTrap::MemoryOutOfBounds));
         }
         let bytes = self.data[address as usize..address as usize + 8]
             .try_into()
-            .map_err(|_| VMError::MemoryOutOfBounds)?;
+            .map_err(|_| VMError::Trap(VmTrap::MemoryOutOfBounds))?;
         self.record_read_range(address, 8, DiagnosticMemoryAccessKind::CallResultRead)?;
         Ok((address, u64::from_le_bytes(bytes)))
     }
@@ -1126,7 +1085,9 @@ impl Memory {
     #[inline]
     pub fn load_u128(&self, addr: u64) -> Result<u128, VMError> {
         if unlikely(!addr.is_multiple_of(16)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 16, Perm::READ)?;
         let bytes: [u8; 16] = self.data[addr as usize..addr as usize + 16]
@@ -1138,9 +1099,11 @@ impl Memory {
     /// Copy `out.len()` bytes starting at `addr` into `out`.
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
-        let len = u64::try_from(out.len()).map_err(|_| VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: Perm::READ,
+        let len = u64::try_from(out.len()).map_err(|_| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::READ,
+            })
         })?;
         let (start, end) = self.checked_region_bounds_for(addr, len, Perm::READ)?;
         self.record_read_range(addr, len, DiagnosticMemoryAccessKind::HostRead)?;
@@ -1154,16 +1117,20 @@ impl Memory {
         len: u64,
         required: Perm,
     ) -> Result<(usize, usize), VMError> {
-        let violation = || VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: required,
+        let violation = || {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: required,
+            })
         };
         let len_u32 = u32::try_from(len).map_err(|_| violation())?;
         self.check_perm(addr, len_u32, required)?;
         let start = usize::try_from(addr).map_err(|_| violation())?;
-        let len_usize = usize::try_from(len).map_err(|_| VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: required,
+        let len_usize = usize::try_from(len).map_err(|_| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: required,
+            })
         })?;
         let Some(end) = start.checked_add(len_usize) else {
             return Err(violation());
@@ -1195,9 +1162,11 @@ impl Memory {
     /// Copy bytes from `bytes` into memory starting at `addr`.
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
-        let len = u64::try_from(bytes.len()).map_err(|_| VMError::MemoryAccessViolation {
-            addr: addr as u32,
-            perm: Perm::WRITE,
+        let len = u64::try_from(bytes.len()).map_err(|_| {
+            VMError::Trap(VmTrap::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::WRITE,
+            })
         })?;
         let (start, end) = self.checked_region_bounds_for(addr, len, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, len)?;
@@ -1224,7 +1193,9 @@ impl Memory {
     #[inline]
     pub fn store_u32(&mut self, addr: u64, value: u32) -> Result<(), VMError> {
         if unlikely(!addr.is_multiple_of(4)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 4, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, 4)?;
@@ -1240,7 +1211,9 @@ impl Memory {
     #[inline]
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
         if unlikely(!addr.is_multiple_of(8)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 8, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, 8)?;
@@ -1256,7 +1229,9 @@ impl Memory {
     #[inline]
     pub fn store_u128(&mut self, addr: u64, value: u128) -> Result<(), VMError> {
         if unlikely(!addr.is_multiple_of(16)) {
-            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+            return Err(VMError::Trap(VmTrap::MisalignedAccess {
+                addr: addr as u32,
+            }));
         }
         self.check_perm(addr, 16, Perm::WRITE)?;
         let output_cursor = self.checked_output_append_cursor(addr, 16)?;
@@ -1410,19 +1385,21 @@ impl Memory {
     /// The caller holds exclusive VM access until the clone is complete.
     pub(crate) fn runtime_template_memory_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
         let mut plan = ExecutionMemoryPlan::array::<u8>(self.data.len())
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(DirtyChunks::memory_plan(self.dirty_chunks.chunks())?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(DirtyChunks::memory_plan(self.modified_chunks.chunks())?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(self.read_log.lock().memory_plan()?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         plan.include_child(self.write_log.lock().memory_plan()?)
-            .map_err(VMError::AllocationDeferred)?;
-        // A copy admits its Merkle storage whether or not this image has
-        // allocated its own, and keeps the credit until its first root request.
-        plan.include_child(ByteMerkleTree::memory_plan(self.merkle_leaf_count())?)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        // A copy holds Merkle storage only if this image has allocated its own;
+        // otherwise it admits it, like this image, on its first root request.
+        if let Some(tree) = &self.tree {
+            plan.include_child(ByteMerkleTree::memory_plan(tree.leaf_count())?)
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        }
         Ok(plan)
     }
 
@@ -1433,8 +1410,11 @@ impl Memory {
         &self,
         mut lease: Option<&mut ExecutionMemoryLease>,
     ) -> Result<Self, VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         if !self.call_frames.is_empty() {
             return Err(unavailable());
         }
@@ -1451,26 +1431,11 @@ impl Memory {
         };
         let reads = self.with_read_log(|log| log.try_copy(lease.as_deref_mut()))?;
         let copied_writes = self.with_write_log(|log| log.try_copy(lease.as_deref_mut()))?;
-        let (tree, tree_deferred) = match &self.tree {
-            Some(tree) => (
-                Some(tree.try_clone_for_runtime_template(lease.as_deref_mut())?),
-                None,
-            ),
-            // The copy stays deferred with its own accounting: the same cache
-            // charge and, from a lease, its own prepaid Merkle credit.
-            None => {
-                let leaves = self.merkle_leaf_count();
-                let credit = lease
-                    .as_deref_mut()
-                    .map(|lease| {
-                        lease
-                            .partition(ByteMerkleTree::memory_plan(leaves)?)
-                            .map_err(|_| unavailable())
-                    })
-                    .transpose()?;
-                (None, Some(DeferredMerkle::new(leaves, credit)?))
-            }
-        };
+        let tree = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.try_clone_for_runtime_template(lease.as_deref_mut()))
+            .transpose()?;
         let mut copied = Self {
             // An empty frame stack has no nested owned buffers; retain its
             // scalar completed-result descriptor for exact runtime snapshots.
@@ -1485,7 +1450,6 @@ impl Memory {
             output_cursor: self.output_cursor,
             root: self.root,
             tree,
-            tree_deferred,
             dirty: self.dirty,
             dirty_chunks: self.dirty_chunks.try_copy(lease.as_deref_mut())?,
             modified_chunks: self.modified_chunks.try_copy(lease)?,
@@ -1583,33 +1547,75 @@ impl Memory {
         len: u64,
         kind: DiagnosticMemoryAccessKind,
     ) -> Result<(), VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        self.with_read_log(|reads| {
+            Self::append_read_range(
+                reads,
+                &self.data,
+                self.diagnostic_access_recorder.as_ref(),
+                addr,
+                len,
+                kind,
+            )
+        })
+    }
+
+    /// The interpreter owns the memory exclusively during a guest access. Its read log keeps
+    /// the same original-pool reservation and deferred-refund scope as a shared host read.
+    fn record_exclusive_read_range(
+        &mut self,
+        addr: u64,
+        len: u64,
+        kind: DiagnosticMemoryAccessKind,
+    ) -> Result<(), VMError> {
+        let reads = self.read_log.get_mut();
+        let data = &self.data;
+        let recorder = self.diagnostic_access_recorder.as_ref();
+        let mut append = || Self::append_read_range(reads, data, recorder, addr, len, kind);
+        match self.call_frames.allocation_budget() {
+            Some(budget) => budget.with_deferred_refund_notifications(|_| append()),
+            None => append(),
+        }
+    }
+
+    fn append_read_range(
+        reads: &mut ReadLog,
+        data: &[u8],
+        recorder: Option<&DiagnosticMemoryAccessRecorder>,
+        addr: u64,
+        len: u64,
+        kind: DiagnosticMemoryAccessKind,
+    ) -> Result<(), VMError> {
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         #[cfg(test)]
         if REFUSE_NEXT_READ_TRACKING.with(|refuse| refuse.replace(false)) {
             return Err(unavailable());
         }
-        self.with_read_log(|reads| {
-            let replacement = reads.prepare_growth()?;
-            if let Some(recorder) = &self.diagnostic_access_recorder {
-                let start = usize::try_from(addr).map_err(|_| unavailable())?;
-                let len = usize::try_from(len).map_err(|_| unavailable())?;
-                let end = start.checked_add(len).ok_or_else(unavailable)?;
-                let bytes = self.data.get(start..end).ok_or_else(unavailable)?;
-                recorder.record_read(addr, bytes, kind)?;
-            }
-            // Both logs accept the complete access before caller output changes.
-            reads.record_prepared(replacement, AccessRange { addr, len });
-            Ok(())
-        })
+        let replacement = reads.prepare_growth()?;
+        if let Some(recorder) = recorder {
+            let start = usize::try_from(addr).map_err(|_| unavailable())?;
+            let len = usize::try_from(len).map_err(|_| unavailable())?;
+            let end = start.checked_add(len).ok_or_else(unavailable)?;
+            let bytes = data.get(start..end).ok_or_else(unavailable)?;
+            recorder.record_read(addr, bytes, kind)?;
+        }
+        // Both logs accept the complete access before caller output changes.
+        reads.record_prepared(replacement, AccessRange { addr, len });
+        Ok(())
     }
     fn prepare_write_tracking(
         &mut self,
         addr: u64,
         bytes: &[u8],
     ) -> Result<WriteLogEntry, VMError> {
-        let unavailable =
-            || VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let copied = self.with_exclusive_write_log(|log| log.prepare(addr, bytes))?;
         let start = usize::try_from(addr).map_err(|_| unavailable())?;
         let end = start.checked_add(bytes.len()).ok_or_else(unavailable)?;
@@ -1668,10 +1674,10 @@ impl Memory {
             // Relaxed monotonic append: allow forward writes at or beyond the
             // current cursor; disallow rewinding into already-written region.
             if off < self.output_cursor {
-                return Err(VMError::MemoryAccessViolation {
+                return Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                     addr: addr as u32,
                     perm: Perm::WRITE,
-                });
+                }));
             }
             let new_end = off.saturating_add(len);
             return Ok(self.output_cursor.max(new_end));
@@ -1682,6 +1688,7 @@ impl Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::merkle_utils::compute_memory_leaf_digest;
     use iroha_crypto::{Hash, HashOf, MerkleProof};
 
@@ -1703,15 +1710,15 @@ mod tests {
         local.store_u8(Memory::STACK_START, 0xa5).unwrap();
         let leaf_count = funded.merkle_leaf_count();
         funded.dirty_chunks.extend(0..=leaf_count / 2);
-        // The Merkle storage is admitted with the image and allocated by the
-        // root request below, out of the same retained credit.
+        // The image holds no Merkle storage or credit until the root request
+        // below admits both from its original pool.
         assert!(!funded.merkle_storage_allocated());
         assert_eq!(
             budget.reserved_bytes(),
-            image_bytes + leaf_bytes + node_bytes + bitmap_bytes + log_bytes
+            image_bytes + bitmap_bytes + log_bytes
         );
         assert_eq!(funded.root().unwrap(), local.root().unwrap());
-        assert!(funded.merkle_storage_allocated() && funded.tree_deferred.is_none());
+        assert!(funded.merkle_storage_allocated());
         assert_eq!(
             budget.reserved_bytes(),
             image_bytes + leaf_bytes + node_bytes + bitmap_bytes + log_bytes
@@ -1727,12 +1734,8 @@ mod tests {
         let frame_backing_bytes = crate::call_frame::frame_backing_bytes_for_test();
         let stack_limit = Memory::MIN_STACK_SIZE;
         let image_bytes = Memory::image_bytes_for_stack_limit(stack_limit).unwrap();
-        let leaf_bytes = image_bytes.div_ceil(32) * 32;
-        let node_bytes =
-            MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(image_bytes.div_ceil(32))
-                .unwrap();
         let bitmap_bytes = 2 * image_bytes.div_ceil(32).div_ceil(64) * 8;
-        let base_bytes = image_bytes + leaf_bytes + node_bytes + bitmap_bytes;
+        let base_bytes = image_bytes + bitmap_bytes;
         let budget = AllocationBudget::new(base_bytes);
         let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
         assert_eq!(budget.reserved_bytes(), base_bytes);
@@ -1751,7 +1754,7 @@ mod tests {
         let top = Memory::STACK_START + 128;
         assert!(matches!(
             memory.call_frames.prepare_root(top, &callable, tables, top),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), base_bytes);
         budget.set_limit_bytes(base_bytes + frame_backing_bytes + 17);
@@ -1779,14 +1782,8 @@ mod tests {
             .unwrap()
             .requested_bytes();
         let bitmap_bytes = 2 * source.merkle_leaf_count().div_ceil(64) * 8;
-        assert_eq!(
-            fixed_bytes,
-            source.data.len()
-                + ByteMerkleTree::memory_plan(source.merkle_leaf_count())
-                    .unwrap()
-                    .requested_bytes()
-                + bitmap_bytes
-        );
+        // A copy of an image without Merkle storage plans none.
+        assert_eq!(fixed_bytes, source.data.len() + bitmap_bytes);
         for entries in [0, 1, 3, 4, 7, 8, 14, 15, 28, 29, 63, 64, 65, 127, 128] {
             source.dirty_chunks.clear();
             source.modified_chunks.clear();
@@ -1824,38 +1821,59 @@ mod tests {
         let bitmap_bytes = 2 * leaf_count.div_ceil(64) * 8;
         let node_bytes =
             MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(leaf_count).unwrap();
-        let total_bytes = image_bytes + leaf_count * 32 + node_bytes + bitmap_bytes;
-        let budget = AllocationBudget::new(total_bytes - 1);
+        // The constructor admits the image and both bitmaps, not Merkle storage.
+        let fixed_bytes = image_bytes + bitmap_bytes;
+        let tree_bytes = leaf_count * 32 + node_bytes;
+        let budget = AllocationBudget::new(fixed_bytes - 1);
         assert!(matches!(
             Memory::new_with_stack_limit_funded(stack_limit, &budget),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         assert_eq!(budget.reserved_bytes(), 0);
-        budget.set_limit_bytes(total_bytes);
+        budget.set_limit_bytes(fixed_bytes);
         let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), fixed_bytes);
         budget.set_limit_bytes(0);
         let dirty_words = memory.dirty_chunks.words().as_ptr();
         let modified_words = memory.modified_chunks.words().as_ptr();
         memory.preload_input(0, &[0xa5; 129]).unwrap();
         assert!(matches!(
             memory.store_u64(Memory::STACK_START, 0x1234),
-            Err(VMError::AllocationDeferred(_))
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
         ));
         let log_bytes = 4 * std::mem::size_of::<WriteLogEntry>() + 8;
-        budget.set_limit_bytes(total_bytes + log_bytes);
+        budget.set_limit_bytes(fixed_bytes + log_bytes);
         memory.store_u64(Memory::STACK_START, 0x1234).unwrap();
-        budget.set_limit_bytes(0);
-        // The first root request allocates the Merkle storage from credit the
-        // constructor retained, without a new pool admission.
+        // The first root request admits the Merkle storage from the same pool:
+        // one byte short defers it without touching the pending bitmap.
+        budget.set_limit_bytes(fixed_bytes + log_bytes + tree_bytes - 1);
+        let pending = memory.dirty_chunks.len();
+        assert!(matches!(
+            memory.root(),
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::Capacity { .. }
+            )))
+        ));
+        assert!(!memory.merkle_storage_allocated());
+        assert_eq!(memory.dirty_chunks.len(), pending);
+        assert_eq!(budget.reserved_bytes(), fixed_bytes + log_bytes);
+        budget.set_limit_bytes(fixed_bytes + log_bytes + tree_bytes);
         memory.root().unwrap();
+        budget.set_limit_bytes(0);
         assert!(memory.dirty_chunks.is_empty());
         assert_eq!(memory.dirty_chunks.words().as_ptr(), dirty_words);
         assert_eq!(memory.modified_chunks.words().as_ptr(), modified_words);
-        assert_eq!(budget.reserved_bytes(), total_bytes + log_bytes);
+        assert_eq!(
+            budget.reserved_bytes(),
+            fixed_bytes + log_bytes + tree_bytes
+        );
         let owner = std::sync::Arc::new(memory);
         let borrower = std::sync::Arc::clone(&owner);
         drop(owner);
-        assert_eq!(budget.reserved_bytes(), total_bytes + log_bytes);
+        assert_eq!(
+            budget.reserved_bytes(),
+            fixed_bytes + log_bytes + tree_bytes
+        );
         drop(borrower);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -1906,9 +1924,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_vec_growth_for_test();
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START + 4, 9),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.root().unwrap(), root);
         assert_eq!(memory.output_used_len(), 4);
@@ -1942,9 +1960,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u8(next, 0x5a),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 0);
         assert_eq!(memory.root().unwrap(), initial_root);
@@ -1960,9 +1978,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_bytes(next, &[0xa5, 0xc3, 0x7e]),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 1);
         assert_eq!(memory.read_output_used(), &[0x5a]);
@@ -1979,9 +1997,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u32(next, 0x1234_5678),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 4);
         memory.store_u32(next, 0x1234_5678).unwrap();
@@ -1990,9 +2008,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u64(next, 0x0102_0304_0506_0708),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 8);
         memory.store_u64(next, 0x0102_0304_0506_0708).unwrap();
@@ -2001,9 +2019,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u128(next, 0x1020_3040_5060_7080_90a0_b0c0_d0e0_f000),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 16);
         memory
@@ -2026,20 +2044,59 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START, 8),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::WRITE,
                 ..
-            })
+            }))
         ));
         assert_eq!(memory.output_used_len(), 1);
         assert_eq!(memory.read_output_used(), &[7]);
         assert!(matches!(
             memory.store_u8(Memory::OUTPUT_START + 1, 8),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(memory.output_used_len(), 1);
+    }
+
+    #[test]
+    fn exclusive_guest_load_tracks_the_exact_range_and_retries_a_local_refusal() {
+        let mut memory = Memory::new();
+        let addr = Memory::STACK_START;
+        memory.store_u128(addr, 0x10000000000000007).unwrap();
+        REFUSE_NEXT_READ_TRACKING.with(|v| v.set(true));
+        assert!(matches!(
+            memory.load_guest_word::<8>(addr + 1, DiagnosticMemoryAccessKind::Read),
+            Err(VMError::Trap(VmTrap::MisalignedAccess { .. }))
+        ));
+        assert!(matches!(
+            memory.load_guest_word::<8>(addr, DiagnosticMemoryAccessKind::Read),
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
+                crate::error::ExecutionDeferral::AllocationUnavailable
+            )))
+        ));
+        assert!(memory.try_read_log_snapshot().unwrap().is_empty());
+        assert_eq!(
+            u64::from_le_bytes(
+                memory
+                    .load_guest_word(addr, DiagnosticMemoryAccessKind::Read)
+                    .unwrap()
+            ),
+            7
+        );
+        assert_eq!(
+            u128::from_le_bytes(
+                memory
+                    .load_guest_word(addr, DiagnosticMemoryAccessKind::Read)
+                    .unwrap()
+            ),
+            0x10000000000000007
+        );
+        assert_eq!(
+            &*memory.try_read_log_snapshot().unwrap(),
+            &[AccessRange { addr, len: 8 }, AccessRange { addr, len: 16 }]
+        );
     }
 
     #[test]
@@ -2057,9 +2114,9 @@ mod tests {
             REFUSE_NEXT_READ_TRACKING.set(true);
             assert!(matches!(
                 read(&memory),
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     crate::error::ExecutionDeferral::AllocationUnavailable
-                ))
+                )))
             ));
             assert!(
                 memory
@@ -2073,9 +2130,9 @@ mod tests {
         REFUSE_NEXT_READ_TRACKING.set(true);
         assert!(matches!(
             memory.load_bytes(address, &mut output),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(output, [0xa5, 0xc3]);
         assert!(
@@ -2088,16 +2145,16 @@ mod tests {
         REFUSE_NEXT_READ_TRACKING.set(true);
         assert!(matches!(
             memory.load_u8(0),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
         assert!(matches!(
             memory.load_u8(address),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(
             memory
@@ -2139,9 +2196,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_vec_growth_for_test();
         assert!(matches!(
             memory.load_u8(address),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert_eq!(
             memory
@@ -2290,10 +2347,10 @@ mod tests {
         assert_eq!(memory.code_len(), 0);
         assert!(matches!(
             memory.load_u8(0),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
 
         let boundary = usize::try_from(Memory::HEAP_START).unwrap();
@@ -2310,7 +2367,7 @@ mod tests {
         let invalid = vec![0x5A; boundary + 1];
         assert!(matches!(
             memory.load_code(&invalid),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert_eq!(memory.code_len(), Memory::HEAP_START);
         assert_eq!(
@@ -2521,7 +2578,6 @@ mod tests {
             output_cursor: 0,
             root,
             tree: Some(tree),
-            tree_deferred: None,
             dirty: false,
             dirty_chunks: DirtyChunks::new(8, None).unwrap(),
             modified_chunks: DirtyChunks::new(8, None).unwrap(),
@@ -2565,7 +2621,6 @@ mod tests {
             output_cursor: 0,
             root,
             tree: Some(tree),
-            tree_deferred: None,
             dirty: false,
             dirty_chunks: DirtyChunks::new(8, None).unwrap(),
             modified_chunks: DirtyChunks::new(8, None).unwrap(),
@@ -2604,12 +2659,12 @@ mod tests {
         // Offset equal to INPUT_SIZE should be rejected even for empty writes.
         assert!(matches!(
             mem.preload_input(Memory::INPUT_SIZE, &[1]),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         // Writing past the end should also fail.
         assert!(matches!(
             mem.preload_input(Memory::INPUT_SIZE - 1, &[1, 2]),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
     /// VM stage of the resource contract (`specs/zk_resource_contract.json`, groups
@@ -2632,11 +2687,11 @@ mod tests {
         over.push(0xA5);
         assert!(matches!(
             mem.preload_input(0, &over),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             mem.preload_input(1, &window),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         // The heap holds exactly HEAP_MAX_SIZE bytes.
         let mut mem = Memory::new();
@@ -2644,19 +2699,25 @@ mod tests {
             (mem.alloc(Memory::HEAP_MAX_SIZE)).expect("expected successful fixture result"),
             Memory::HEAP_START
         );
-        assert!(matches!(mem.alloc(1), Err(VMError::OutOfMemory)));
-        assert!(matches!(mem.grow_heap(1), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.alloc(1),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
+        assert!(matches!(
+            mem.grow_heap(1),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         let mut mem = Memory::new();
         assert!(matches!(
             mem.alloc(Memory::HEAP_MAX_SIZE + 1),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         // A governed heap limit below the ABI maximum is enforced the same way and cannot
         // be raised above the ABI maximum or grown past by the guest.
         let mut mem = Memory::new();
         assert!(matches!(
             mem.set_heap_max_limit(Memory::HEAP_MAX_SIZE + 1),
-            Err(VMError::OutOfMemory)
+            Err(VMError::Trap(VmTrap::OutOfMemory))
         ));
         mem.set_heap_max_limit(Memory::HEAP_MAX_SIZE)
             .expect("the ABI maximum itself");
@@ -2665,8 +2726,14 @@ mod tests {
             (mem.alloc(4_096)).expect("expected successful fixture result"),
             Memory::HEAP_START
         );
-        assert!(matches!(mem.alloc(8), Err(VMError::OutOfMemory)));
-        assert!(matches!(mem.grow_heap(8), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.alloc(8),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
+        assert!(matches!(
+            mem.grow_heap(8),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         // No guest region, nor all of them together, holds a 9,437,184-byte proof: large
         // proofs reach a contract only through host-held attachment handles (I.2).
         const {
@@ -2688,7 +2755,7 @@ mod tests {
             let mut cursor = 1;
             assert!(matches!(
                 mem.input_write_aligned(&mut cursor, &[0xA5], align),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
             assert_eq!(cursor, 1, "failed allocation must preserve the cursor");
         }
@@ -2696,7 +2763,7 @@ mod tests {
         let mut cursor = u64::MAX;
         assert!(matches!(
             mem.input_write_aligned(&mut cursor, &[0xA5], 8),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert_eq!(cursor, u64::MAX);
         assert_eq!(
@@ -2708,7 +2775,10 @@ mod tests {
     #[test]
     fn alloc_rejects_overflow_sizes() {
         let mut mem = Memory::new();
-        assert!(matches!(mem.alloc(u64::MAX), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.alloc(u64::MAX),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         // Heap cursor should remain unchanged after failure.
         assert_eq!(mem.heap_alloc, 0);
         let small = mem.alloc(16).expect("small allocation succeeds");
@@ -2725,8 +2795,14 @@ mod tests {
             (mem.alloc(64)).expect("expected successful fixture result"),
             Memory::HEAP_START
         );
-        assert!(matches!(mem.grow_heap(8), Err(VMError::OutOfMemory)));
-        assert!(matches!(mem.alloc(1), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.grow_heap(8),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
+        assert!(matches!(
+            mem.alloc(1),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
     }
     #[test]
     fn grow_heap_rejects_overflow() {
@@ -2734,7 +2810,10 @@ mod tests {
         mem.set_heap_limit(Memory::HEAP_MAX_SIZE - 64)
             .expect("lower heap limit before bounded grow");
         let original_limit = mem.heap_limit();
-        assert!(matches!(mem.grow_heap(u64::MAX), Err(VMError::OutOfMemory)));
+        assert!(matches!(
+            mem.grow_heap(u64::MAX),
+            Err(VMError::Trap(VmTrap::OutOfMemory))
+        ));
         assert_eq!(mem.heap_limit(), original_limit);
         // Growing within bounds still works.
         mem.grow_heap(32).expect("bounded grow succeeds");
@@ -2747,7 +2826,10 @@ mod tests {
         mem.store_u128(base, 0x0123_4567_89AB_CDEF_0123_4567_89AB_CDEF)
             .expect("initial append succeeds");
         let err = mem.store_u128(base, 0xDEAD_BEEF_DEAD_BEEF_DEAD_BEEF_DEAD_BEEF);
-        assert!(matches!(err, Err(VMError::MemoryAccessViolation { .. })));
+        assert!(matches!(
+            err,
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation { .. }))
+        ));
         mem.store_u128(base + 16, 0x1111_2222_3333_4444_5555_6666_7777_8888)
             .expect("append at cursor succeeds");
     }
@@ -2757,10 +2839,10 @@ mod tests {
         let err = mem.load_region(Memory::HEAP_START, u64::from(u32::MAX) + 1);
         assert!(matches!(
             err,
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
     }
     #[test]
@@ -2770,17 +2852,17 @@ mod tests {
         let mut output = [0_u8; 2];
         assert!(matches!(
             mem.load_bytes(final_heap_byte, &mut output),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::READ,
                 ..
-            })
+            }))
         ));
         assert!(matches!(
             mem.store_bytes(final_heap_byte, &[1, 2]),
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::WRITE,
                 ..
-            })
+            }))
         ));
     }
     #[test]
@@ -2818,17 +2900,17 @@ mod tests {
         let err = mem.store_u8(mem.stack_top(), 1);
         assert!(matches!(
             err,
-            Err(VMError::MemoryAccessViolation {
+            Err(VMError::Trap(VmTrap::MemoryAccessViolation {
                 perm: Perm::WRITE,
                 ..
-            })
+            }))
         ));
     }
     #[test]
     fn explicit_unaligned_stack_limit_is_rejected() {
         assert!(matches!(
             Memory::new_with_stack_limit(0x60a04),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
     #[test]
@@ -2845,19 +2927,19 @@ mod tests {
 
         assert!(matches!(
             Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE - 1),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             Memory::new_with_stack_limit(0),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             Memory::new_with_stack_limit(Memory::STACK_SIZE + 1),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(matches!(
             Memory::new_with_stack_limit(u64::MAX),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
     }
     #[test]
@@ -2871,15 +2953,15 @@ mod tests {
         for invalid in [memory.stack_top(), u64::MAX] {
             assert!(matches!(
                 memory.merkle_path(invalid),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
             assert!(matches!(
                 memory.merkle_root_and_path(invalid),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
             assert!(matches!(
                 memory.merkle_compact(invalid, None),
-                Err(VMError::MemoryOutOfBounds)
+                Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
             ));
         }
     }
@@ -3097,7 +3179,7 @@ mod tests {
         let end = untouched.data.len() as u64;
         assert!(matches!(
             untouched.merkle_path(end),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert!(!untouched.merkle_storage_allocated());
     }
@@ -3110,9 +3192,9 @@ mod tests {
         crate::cache_memory::refuse_next_owned_allocation_for_test();
         assert!(matches!(
             memory.root(),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
+            )))
         ));
         assert!(!memory.merkle_storage_allocated());
         assert!(memory.dirty_for_testing());
@@ -3123,170 +3205,118 @@ mod tests {
     }
 
     #[test]
-    fn refused_funded_merkle_allocation_keeps_its_prepaid_credit_for_the_next_request() {
+    fn funded_image_admits_merkle_storage_from_its_pool_and_returns_a_refused_admission() {
         let stack_limit = Memory::MIN_STACK_SIZE;
         let budget = AllocationBudget::new(usize::MAX);
         let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
         memory.preload_input(0, &[0x3c; 9]).unwrap();
         let template = memory.try_clone_for_runtime_template(None).unwrap();
-        let reserved = budget.reserved_bytes();
-        // The leaves are built from the retained credit before the nodes are
-        // refused; the attempt's charges go back to the pool and are re-admitted.
-        crate::byte_merkle_tree::refuse_next_node_allocation_for_test();
-        assert!(matches!(
-            memory.root(),
-            Err(VMError::ExecutionDeferred(
-                crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
-        ));
-        assert!(!memory.merkle_storage_allocated());
-        assert_eq!(memory.dirty_chunks.len(), 1);
-        assert_eq!(budget.reserved_bytes(), reserved);
-        assert!(memory.merkle_credit_intact());
-        // The refused image is still a prepaid, reusable runtime: a warm reset
-        // and the next request allocate from the same credit with no admission.
-        memory.store_u8(Memory::HEAP_START, 7).unwrap();
-        memory.reset_from_template(&template).unwrap();
-        let logged = budget.reserved_bytes();
-        budget.set_limit_bytes(0);
-        let mut expected = template.try_clone_for_runtime_template(None).unwrap();
-        assert_eq!(memory.root().unwrap(), expected.root().unwrap());
-        assert!(memory.merkle_storage_allocated() && memory.tree_deferred.is_none());
-        assert_eq!(budget.reserved_bytes(), logged);
-        drop(memory);
-        assert_eq!(budget.reserved_bytes(), 0);
-    }
-
-    #[test]
-    fn merkle_credit_the_pool_gave_away_is_readmitted_by_a_later_request() {
-        let stack_limit = Memory::MIN_STACK_SIZE;
-        let budget = AllocationBudget::new(usize::MAX);
-        let mut memory = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
-        memory.preload_input(0, &[0x3c; 9]).unwrap();
         let tree_bytes = ByteMerkleTree::memory_plan(memory.merkle_leaf_count())
             .unwrap()
             .requested_bytes();
         let reserved = budget.reserved_bytes();
-        // With the pool closed, the refused attempt cannot take its credit back.
-        budget.set_limit_bytes(0);
+        // The leaves are admitted and built before the nodes are refused; the
+        // refused attempt returns its whole admission to the pool.
         crate::byte_merkle_tree::refuse_next_node_allocation_for_test();
         assert!(matches!(
             memory.root(),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::AllocationUnavailable
-            ))
-        ));
-        assert_eq!(budget.reserved_bytes(), reserved - tree_bytes);
-        // The short image is not a prepaid runtime any more: it is refused idle
-        // retention and its requests defer on the pool, not on the allocator.
-        assert!(!memory.merkle_credit_intact());
-        assert!(!memory.try_retain());
-        assert!(matches!(
-            memory.root(),
-            Err(VMError::AllocationDeferred(
-                iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
-            ))
-        ));
-        assert!(matches!(
-            memory.merkle_path(Memory::INPUT_START),
-            Err(VMError::AllocationDeferred(_))
+            )))
         ));
         assert!(!memory.merkle_storage_allocated());
         assert_eq!(memory.dirty_chunks.len(), 1);
-        // Once the pool has capacity again the same request re-admits the
-        // credit, allocates and returns the root of the unchanged image.
+        assert_eq!(budget.reserved_bytes(), reserved);
+        // A pool one byte short refuses the admission itself, with its release
+        // observation, and changes nothing either.
+        budget.set_limit_bytes(reserved + tree_bytes - 1);
+        assert!(matches!(
+            memory.root(),
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::Capacity { .. }
+            )))
+        ));
+        assert!(matches!(
+            memory.merkle_path(Memory::INPUT_START),
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
+        ));
+        assert!(!memory.merkle_storage_allocated());
+        assert_eq!(memory.dirty_chunks.len(), 1);
+        assert_eq!(budget.reserved_bytes(), reserved);
+        // The refused image is still a reusable runtime: after a warm reset the
+        // same request admits, allocates and returns the template's root.
         budget.set_limit_bytes(usize::MAX);
-        let mut value = [0; 9];
-        memory.load_bytes(Memory::INPUT_START, &mut value).unwrap();
-        assert_eq!(value, [0x3c; 9]);
+        memory.store_u8(Memory::HEAP_START, 7).unwrap();
+        memory.reset_from_template(&template).unwrap();
+        let before_root = budget.reserved_bytes();
         let mut local = Memory::new_with_stack_limit(stack_limit).unwrap();
         local.preload_input(0, &[0x3c; 9]).unwrap();
         assert_eq!(memory.root().unwrap(), local.root().unwrap());
-        assert!(memory.merkle_storage_allocated() && memory.merkle_credit_intact());
+        assert!(memory.merkle_storage_allocated());
+        assert_eq!(budget.reserved_bytes(), before_root + tree_bytes);
+        drop(template);
         drop(memory);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 
     #[test]
-    fn funded_copy_of_a_deferred_image_keeps_its_merkle_credit_until_the_first_root() {
+    fn copy_plans_merkle_storage_only_when_its_source_has_allocated_it() {
         let budget = AllocationBudget::new(usize::MAX);
         let mut source =
             Memory::new_with_stack_limit_funded(Memory::MIN_STACK_SIZE, &budget).unwrap();
         source.preload_input(1, &[0xc3; 40]).unwrap();
+        let tree_plan = ByteMerkleTree::memory_plan(source.merkle_leaf_count()).unwrap();
         let source_bytes = budget.reserved_bytes();
+        // A copy of an image without Merkle storage plans and holds none.
         let plan = source.runtime_template_memory_plan().unwrap();
         let mut lease = ExecutionMemoryLease::reserve(&budget, plan).unwrap();
         let mut copy = source
             .try_clone_for_runtime_template(Some(&mut lease))
             .unwrap();
-        // The copy took its whole plan: the image, both bitmaps and, unspent,
-        // the credit of the Merkle storage it has not allocated.
         assert_eq!(lease.remaining_bytes(), 0);
         drop(lease);
         assert!(!copy.merkle_storage_allocated());
-        let tree_bytes = ByteMerkleTree::memory_plan(copy.merkle_leaf_count())
-            .unwrap()
-            .requested_bytes();
-        // The copy holds both charges of the storage it has not allocated.
         assert_eq!(
-            copy.tree_deferred.as_ref().map(|deferred| (
-                deferred
-                    .credit
-                    .as_ref()
-                    .map(ExecutionMemoryLease::remaining_bytes),
-                deferred.retention.bytes()
-            )),
-            Some((Some(tree_bytes), tree_bytes))
+            budget.reserved_bytes(),
+            source_bytes + plan.requested_bytes()
         );
-        let reserved = budget.reserved_bytes();
-        assert_eq!(reserved, source_bytes + plan.requested_bytes());
-        // The retained credit pays for either storage without a new pool admission.
-        budget.set_limit_bytes(0);
+        // Each image admits its own storage from the shared pool on request.
         assert_eq!(copy.root().unwrap(), source.root().unwrap());
-        assert!(copy.merkle_storage_allocated() && copy.tree_deferred.is_none());
-        assert_eq!(budget.reserved_bytes(), reserved);
-        // A copy of the allocated image copies its storage instead of deferring it.
-        budget.set_limit_bytes(usize::MAX);
+        assert!(copy.merkle_storage_allocated() && source.merkle_storage_allocated());
+        assert_eq!(
+            budget.reserved_bytes(),
+            source_bytes + plan.requested_bytes() + 2 * tree_plan.requested_bytes()
+        );
+        // A copy of the allocated image plans and copies its storage.
         let allocated_plan = copy.runtime_template_memory_plan().unwrap();
-        assert_eq!(allocated_plan, plan);
+        assert_eq!(
+            allocated_plan.requested_bytes(),
+            plan.requested_bytes() + tree_plan.requested_bytes()
+        );
         let mut lease = ExecutionMemoryLease::reserve(&budget, allocated_plan).unwrap();
         let mut second = copy
             .try_clone_for_runtime_template(Some(&mut lease))
             .unwrap();
         assert_eq!(lease.remaining_bytes(), 0);
         drop(lease);
-        assert!(second.merkle_storage_allocated() && second.tree_deferred.is_none());
+        assert!(second.merkle_storage_allocated());
+        budget.set_limit_bytes(0);
         assert_eq!(second.root().unwrap(), source.root().unwrap());
-        drop(second);
-        drop(copy);
-        drop(source);
-        assert_eq!(budget.reserved_bytes(), 0);
-    }
-
-    #[test]
-    fn unfunded_copy_of_a_funded_deferred_image_holds_no_credit() {
-        let stack_limit = Memory::MIN_STACK_SIZE;
-        let budget = AllocationBudget::new(usize::MAX);
-        let mut funded = Memory::new_with_stack_limit_funded(stack_limit, &budget).unwrap();
-        funded.preload_input(0, &[7; 17]).unwrap();
-        let tree_bytes = ByteMerkleTree::memory_plan(funded.merkle_leaf_count())
-            .unwrap()
-            .requested_bytes();
-        assert!(
-            funded
-                .tree_deferred
-                .as_ref()
-                .is_some_and(|deferred| deferred.credit.is_some())
-        );
+        // An unfunded copy of the deferred funded image still belongs to its
+        // pool: it holds no storage and admits it there on its first request.
+        budget.set_limit_bytes(usize::MAX);
+        let mut fresh =
+            Memory::new_with_stack_limit_funded(Memory::MIN_STACK_SIZE, &budget).unwrap();
+        fresh.preload_input(1, &[0xc3; 40]).unwrap();
+        let mut unfunded = fresh.try_clone_for_runtime_template(None).unwrap();
+        assert!(!unfunded.merkle_storage_allocated());
         let reserved = budget.reserved_bytes();
-        let mut copy = funded.try_clone_for_runtime_template(None).unwrap();
-        // The copy keeps the cache charge of its unallocated storage but no credit.
-        assert!(!copy.merkle_storage_allocated());
-        assert!(copy.tree_deferred.as_ref().is_some_and(|deferred| {
-            deferred.credit.is_none() && deferred.retention.bytes() == tree_bytes
-        }));
-        assert_eq!(budget.reserved_bytes(), reserved);
-        assert_eq!(copy.root().unwrap(), funded.root().unwrap());
-        assert_eq!(budget.reserved_bytes(), reserved);
+        assert_eq!(unfunded.root().unwrap(), source.root().unwrap());
+        assert_eq!(
+            budget.reserved_bytes(),
+            reserved + tree_plan.requested_bytes()
+        );
+        drop((unfunded, fresh, second, copy, source));
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 }

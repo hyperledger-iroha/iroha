@@ -2,6 +2,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, syscalls};
+use ivm_abi::error::VmTrap;
 use std::{
     any::Any,
     sync::{Arc, Mutex},
@@ -13,19 +14,29 @@ struct CaptureHost {
     out: Arc<Mutex<Vec<u8>>>,
 }
 impl IVMHost for CaptureHost {
-    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+    fn prepare_syscall(
+        &self,
+        number: u32,
+        _vm: ivm::host::SyscallQuote<'_>,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_COMMIT_OUTPUT => Ok(0),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
-    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+    fn syscall(
+        &mut self,
+        number: u32,
+        vm: &mut dyn ivm::host::SyscallContext,
+    ) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_COMMIT_OUTPUT => {
-                *self.out.lock().expect("output mutex poisoned") = vm.read_output().to_vec();
+                *self.out.lock().expect("output mutex poisoned") = vm
+                    .inspect_public_bytes(Memory::OUTPUT_START, Memory::OUTPUT_SIZE)?
+                    .to_vec();
                 Ok(0)
             }
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
         }
     }
     /// Downcast support for hosts with extra methods/state.

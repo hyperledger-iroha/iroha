@@ -1,5 +1,5 @@
+import CryptoKit
 import Foundation
-import LocalAuthentication
 import NoritoBridge
 import SpartanDeviceFixture
 import SwiftUI
@@ -85,17 +85,37 @@ private func decimal(_ value: KagemushaWalletUInt128V1) -> String {
   } while high != 0 || low != 0
   return String(decoding: digits.reversed(), as: UTF8.self)
 }
+private func scaled(_ value: KagemushaWalletUInt128V1, _ scale: Int) -> String {
+  let digits = decimal(value)
+  guard scale > 0 else { return digits }
+  let padded = String(repeating: "0", count: max(0, scale + 1 - digits.count)) + digits
+  return String(padded.dropLast(scale)) + "." + String(padded.suffix(scale))
+}
 private func hex(_ bytes: Data) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
 
 private final class RuntimeBridge: @unchecked Sendable {
   let platform: KagemushaWalletApplePlatformV1
+  let manifestDigest: String
+  private let manifest: Data
+  private let resources: URL
   let update: @Sendable (String) -> Void
-  let showReview: @MainActor @Sendable (KagemushaSpartanReviewProjectionV1) -> Void
+  let showReview: @MainActor @Sendable (KagemushaSpartanReviewProjectionV1, Data, Int, FixtureWait<Bool>) -> Void
   private let failureLock = NSLock()
   private var callbackFailure: String?
   init(update: @escaping @Sendable (String) -> Void,
-    showReview: @escaping @MainActor @Sendable (KagemushaSpartanReviewProjectionV1) -> Void) throws {
-    platform = try .init(applicationIdentifierPrefix: "YLWWUD25VZ")
+    showReview: @escaping @MainActor @Sendable (KagemushaSpartanReviewProjectionV1, Data, Int, FixtureWait<Bool>) -> Void) throws {
+    guard let resources = Bundle.main.resourceURL?.appendingPathComponent("native-device", isDirectory: true),
+      ["program-bundle.norito", "parameter-manifest.norito", "parameter-signature.bin"].allSatisfy({
+        FileManager.default.fileExists(atPath: resources.appendingPathComponent($0).path)
+      }) else { throw FixtureFailure("Complete authenticated program artifacts are absent") }
+    self.resources = resources
+    manifest = try Data(contentsOf: resources.appendingPathComponent("parameter-manifest.norito"))
+    let digest = SHA256.hash(data: manifest)
+    manifestDigest = kagemushaWalletAppleHex(digest)
+    let group = try KagemushaWalletApplePlatformV1.keychainAccessGroup(
+      applicationIdentifierPrefix: "YLWWUD25VZ", bundleIdentifier: Bundle.main.bundleIdentifier)
+    platform = .init(appAttest: KagemushaWalletAppleAppAttestServiceV1(),
+      accessGroup: group, system: .live, keychainNamespace: digest)
     self.update = update; self.showReview = showReview
   }
   private func callbackFailed(_ error: any Error) {
@@ -118,45 +138,26 @@ private final class RuntimeBridge: @unchecked Sendable {
     _ = try result.wait()
   }
 
-  func confirm(_ bytes: Data) throws {
-    let review = try KagemushaSpartanReviewProjectionV1(bytes)
+  func presentDebitReview(_ original: Data) throws {
+    guard original.count == 324, original[32] <= 28 else { throw FixtureFailure("Invalid Send review and asset") }
+    let asset = Data(original.prefix(32))
+    let review = try KagemushaSpartanReviewProjectionV1(Data(original.dropFirst(33)))
     guard review.operation == .send else { throw FixtureFailure("Expected a Send review") }
-    let result = FixtureWait<Bool>()
+    let shown = FixtureWait<Bool>()
     Task { @MainActor [self] in
-      showReview(review)
-      let authentication = LAContext()
-      authentication.touchIDAuthenticationAllowableReuseDuration = 0
-      authentication.localizedCancelTitle = "Cancel payment"
-      var failure: NSError?
-      guard authentication.canEvaluatePolicy(.deviceOwnerAuthentication, error: &failure) else {
-        result.finish(.failure(FixtureFailure("Device authentication unavailable: \(String(describing: failure))")))
-        return
-      }
-      do {
-        let reason = "Confirm experimental Send of \(decimal(review.amount)) plus fee \(decimal(review.fee)) to wallet \(hex(review.receiverWalletId))."
-        FileHandle.standardError.write(Data("SPARTAN_CONFIRMATION_REQUIRED\n".utf8))
-        guard try await authentication.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) else {
-          throw FixtureFailure("Device confirmation was not granted")
-        }
-        FileHandle.standardError.write(Data("SPARTAN_CONFIRMATION_GRANTED\n".utf8))
-        result.finish(.success(true))
-      } catch { result.finish(.failure(FixtureFailure("Device confirmation: \(error)"))) }
-      authentication.invalidate()
+      showReview(review, asset, Int(original[32]), shown)
     }
-    _ = try result.wait()
+    guard try shown.wait() else { throw FixtureFailure("Send review canceled") }
   }
 
   func run() throws -> String {
-    guard let resources = Bundle.main.resourceURL?.appendingPathComponent("native-device", isDirectory: true),
-      ["program-bundle.norito", "parameter-manifest.norito", "parameter-signature.bin"].allSatisfy({
-        FileManager.default.fileExists(atPath: resources.appendingPathComponent($0).path)
-      }) else { throw FixtureFailure("Complete authenticated program artifacts are absent") }
     let rootPath: String
     switch platform.custodyRootPath() {
     case .success(let path): rootPath = path
     case .failure(let reason): throw FixtureFailure("Protected custody unavailable: \(reason)")
     }
-    let root = URL(fileURLWithPath: rootPath, isDirectory: true).appendingPathComponent("spartan-runtime-fixture", isDirectory: true)
+    let root = fixtureCustodyDirectory(
+      root: URL(fileURLWithPath: rootPath, isDirectory: true), manifest: manifest)
     var isDirectory: ObjCBool = false
     if FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) {
       guard isDirectory.boolValue else { throw FixtureFailure("Custody root is not a directory") }
@@ -184,9 +185,12 @@ private final class RuntimeBridge: @unchecked Sendable {
             } catch { owner.callbackFailed(error); return -1 }
           },
           { context, bytes, count in
-            guard let context, let bytes, count == 291 else { return -1 }
+            guard let context, let bytes, count == 324 else { return -1 }
             let owner = Unmanaged<RuntimeBridge>.fromOpaque(context).takeUnretainedValue()
-            do { try owner.confirm(Data(bytes: bytes, count: count)); return 0 }
+            do {
+              try owner.presentDebitReview(Data(bytes: bytes, count: count))
+              return 0
+            }
             catch { owner.callbackFailed(error); return -1 }
           }, output.baseAddress, output.count, &length)
       }
@@ -204,6 +208,15 @@ private final class RuntimeBridge: @unchecked Sendable {
 @MainActor private final class RuntimeModel: ObservableObject {
   @Published var status = "Ready to run the complete experimental wallet on this iPhone"
   @Published var review: KagemushaSpartanReviewProjectionV1?
+  @Published var asset: Data?
+  @Published var scale = 0
+  @Published private(set) var awaitingReview = false
+  private var decision: FixtureWait<Bool>?
+  func decide(_ approved: Bool) {
+    guard let decision else { return }
+    self.decision = nil; awaitingReview = false
+    decision.finish(.success(approved))
+  }
   @Published var running = false
   @Published var waitingForBuild = false
   func waitForBuild() {
@@ -218,7 +231,12 @@ private final class RuntimeBridge: @unchecked Sendable {
     do {
       let bridge = try RuntimeBridge(update: { [weak self] text in
         Task { @MainActor in self?.status = text }
-      }, showReview: { [weak self] review in self?.review = review })
+      }, showReview: { [weak self] review, asset, scale, decision in
+        guard let self else { decision.finish(.success(false)); return }
+        self.decide(false)
+        self.review = review; self.asset = asset; self.scale = scale
+        self.decision = decision; self.awaitingReview = true
+      })
       DispatchQueue.global(qos: .userInitiated).async { [weak self] in
         let result: String
         do { result = "PASS: \(try bridge.run())" } catch { result = "FAILED: \(error)" }
@@ -226,9 +244,14 @@ private final class RuntimeBridge: @unchecked Sendable {
           UIApplication.shared.isIdleTimerDisabled = false
           self?.status = result; self?.running = false
           let record: [String: String] = ["schema": "kagemusha-spartan-device-runtime-v1",
-            "result": result, "finished": ISO8601DateFormatter().string(from: Date())]
-          if let data = try? JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: URL.documentsDirectory.appendingPathComponent("spartan-runtime-result.json"), options: [.atomic, .completeFileProtection])
+            "manifest_sha256": bridge.manifestDigest, "result": result,
+            "finished": ISO8601DateFormatter().string(from: Date())]
+          do {
+            let data = try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+            let name = "spartan-runtime-result-" + bridge.manifestDigest + ".json"
+            try data.write(to: URL.documentsDirectory.appendingPathComponent(name), options: [.atomic, .completeFileProtection])
+          } catch {
+            self?.status = "FAILED: Could not retain fixture report: \(error)"
           }
         }
       }
@@ -248,10 +271,16 @@ private final class RuntimeBridge: @unchecked Sendable {
           Text("Experimental wallet runtime").font(.title2)
           Text(model.status).textSelection(.enabled)
           if let review = model.review {
-            Text("Send \(decimal(review.amount)) · Fee \(decimal(review.fee))").font(.headline)
-            Text("Receiver\n\(hex(review.receiverWalletId))")
+            Text("Send \(scaled(review.amount, model.scale)) · Fee \(scaled(review.fee, model.scale))").font(.headline)
+            if let asset = model.asset { Text("Asset\n\(hex(asset))") }
+            Text("Receiver account digest\n\(hex(review.receiverAccountId))")
+            Text("Receiver wallet\n\(hex(review.receiverWalletId))")
             Text("Operation\n\(hex(review.operationId))")
             Text("Bound capsule\n\(hex(review.capsuleDigest))")
+            if model.awaitingReview {
+              Button("Authenticate this Send") { model.decide(true) }
+              Button("Cancel", role: .cancel) { model.decide(false) }
+            }
           }
           if !model.waitingForBuild {
             Button(model.running ? "Running" : "Run / resume retained operation") { model.start() }
@@ -259,6 +288,7 @@ private final class RuntimeBridge: @unchecked Sendable {
           }
         }.font(.system(.body, design: .monospaced)).padding()
       }
+      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in model.decide(false) }
       .task {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("-spartan-wait-for-build") { model.waitForBuild() }

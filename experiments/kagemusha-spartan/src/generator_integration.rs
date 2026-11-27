@@ -68,47 +68,30 @@ pub fn inherited_generator_claim<C: PastaCurve>(
     })
 }
 
-fn corrected<C: PastaCurve>(gens: &Gens<C>, us: Vec<F<C>>) -> Result<Claim<C>, &'static str> {
-    if us.len() != gens.g.len().ilog2() as usize {
-        return Err("generator claim dimension");
-    }
-    let g = iroha_pasta::msm::msm_secret::<C>(
-        &crate::ipa::s_vector(&us),
-        &gens.g,
-        iroha_pasta::msm::MemoryBudget::DEFAULT,
-    )
-    .map_err(|_| "generator correction resource bound")?
-    .to_affine();
-    Ok(Claim { g, us })
-}
-
-fn sources<C: PastaCurve>(
+fn prove_sources<C: PastaCurve>(
     gens: &Gens<C>,
+    relation: [u8; 32],
     proofs: &[(&crate::spartan::Proof<C>, &crate::verifier::Trace<C>)],
-) -> Result<Vec<Claim<C>>, &'static str> {
-    let mut out = Vec::with_capacity(4);
-    for slot in 0..2 {
-        let i = slot % proofs.len();
-        let (proof, tr) = proofs[i];
-        let own = Claim {
-            g: proof.ipa.g_final,
-            us: tr.us.clone(),
-        };
-        if i == 0 {
-            let inherited = inherited_generator_claim(tr, gens)?;
-            if !gc::decide(gens, &own) || !gc::decide(gens, &inherited) {
-                return Err("wallet predecessor generator claim");
-            }
-            out.extend([own, inherited]);
-        } else {
-            out.push(corrected(gens, own.us)?);
-            out.push(corrected(
-                gens,
-                inherited_words(tr, gens.g.len().ilog2() as usize)?[4..].to_vec(),
-            )?);
-        }
-    }
-    Ok(out)
+    entropy: &crate::fs::ProofEntropy,
+    purpose: &[u8],
+) -> Result<(gc::Fold<C>, gc::Trace<C>), &'static str>
+where
+    F<C>: Scalar,
+{
+    let (proof, tr) = proofs[0];
+    let own = Claim {
+        g: proof.ipa.g_final,
+        us: tr.us.clone(),
+    };
+    let inherited = inherited_generator_claim(tr, gens)?;
+    let incoming = match proofs.get(1) {
+        Some((_, trace)) => Some([
+            trace.us.as_slice(),
+            &inherited_words(trace, gens.g.len().ilog2() as usize)?[4..],
+        ]),
+        None => None,
+    };
+    gc::prove_predecessors(gens, relation, [own, inherited], incoming, entropy, purpose)
 }
 
 impl GeneratorFolds {
@@ -139,20 +122,20 @@ impl GeneratorFolds {
             .iter()
             .map(|p| (&p.proof_s, &p.tr_s))
             .collect::<Vec<_>>();
-        let (p, tp) = gc::prove(
+        let (p, tp) = prove_sources(
             &gens.p,
             relation,
-            sources(&gens.p, &ps)?,
+            &ps,
             entropy,
             b"primary inherited generator fold",
-        );
-        let (s, ts) = gc::prove(
+        )?;
+        let (s, ts) = prove_sources(
             &gens.s,
             relation,
-            sources(&gens.s, &ss)?,
+            &ss,
             entropy,
             b"secondary inherited generator fold",
-        );
+        )?;
         let mu = zeroize::Zeroizing::new(entropy.stream(b"pair binding privacy mask").scalar());
         Ok(Self { p, s, tp, ts, mu })
     }

@@ -1,18 +1,20 @@
 //! Inspect a Norito-framed `SignedBlock` (e.g., encoded genesis) for debugging.
 use iroha_crypto::{KeyPair, SignatureOf};
+use iroha_data_model::block::execution_output::{TransactionRejectionRef, TransactionResultRef};
 use iroha_data_model::{
     block::{BlockHeader, BlockSignature, decode_framed_signed_block},
     prelude::SetParameter,
-    transaction::{ExecutableBatchItem, executable::Executable, signed::TransactionResult},
+    transaction::{ExecutableBatchItem, executable::Executable},
 };
 use iroha_primitives::nonzero;
 use std::{convert::TryFrom, env, error::Error, fs};
 fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_random()
 }
-fn execution_result_description(result: Option<&TransactionResult>) -> String {
+fn execution_result_description(result: Option<TransactionResultRef<'_>>) -> String {
     match result.map(|result| result.as_ref()) {
-        Some(Err(err)) => format!("execution error: {err:?}"),
+        Some(Err(TransactionRejectionRef::Baseline(err))) => format!("execution error: {err:?}"),
+        Some(Err(TransactionRejectionRef::C10(err))) => format!("C10 execution error: {err:?}"),
         Some(Ok(_)) => "execution result: Ok (details not printed)".into(),
         None => "execution result: not attached".into(),
     }
@@ -223,8 +225,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 let result = u32::try_from(idx)
                     .ok()
-                    .and_then(|index| block.network_output_at(index))
-                    .map(|(_, output)| &output.result);
+                    .and_then(|index| block.network_execution_output_at(index))
+                    .map(|(_, output)| output.result());
                 println!("  tx[{idx}] {}", execution_result_description(result));
             }
         }
@@ -248,16 +250,17 @@ mod tests {
             execution_result_description(None),
             "execution result: not attached"
         );
+        use iroha_data_model::transaction::TransactionResult;
         let success = TransactionResult::new(Ok(Vec::new()));
         assert_eq!(
-            execution_result_description(Some(&success)),
+            execution_result_description(Some((&success).into())),
             "execution result: Ok (details not printed)"
         );
         let rejection = TransactionResult::new(Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted("example rejection".into()),
         )));
         assert_eq!(
-            execution_result_description(Some(&rejection)),
+            execution_result_description(Some((&rejection).into())),
             format!("execution error: {:?}", rejection.as_ref().unwrap_err())
         );
     }

@@ -78,6 +78,7 @@ const NO_RECOVERY_ROOT_DOMAIN_V1: &[u8] =
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnSessionPublicV1 {
     /// Canonical network/genesis binding.
@@ -148,6 +149,7 @@ impl TimedOvnSessionPublicV1 {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnReleaseIdentityPublicV1 {
     /// Long-lived TLE threshold key session.
@@ -362,7 +364,15 @@ impl TimedOvnParliamentReducerBindingV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnRegistrationOpenStateV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnRegistrationOpenStateV1 {
     version: u16,
@@ -467,7 +477,15 @@ impl TimedOvnRegistrationOpenStateV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnRegistrationClosedStateV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnRegistrationClosedStateV1 {
     registration: TimedOvnRegistrationOpenStateV1,
@@ -545,7 +563,15 @@ impl TimedOvnRegistrationClosedStateV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnSurvivorsFrozenStateV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnSurvivorsFrozenStateV1 {
     registration: TimedOvnRegistrationClosedStateV1,
@@ -794,7 +820,15 @@ impl TimedOvnSurvivorsFrozenStateV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnAggregateTranscriptV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnAggregateTranscriptV1 {
     /// Digest of every immutable timed-OVN session binding.
@@ -973,7 +1007,15 @@ impl TimedOvnAggregateTranscriptV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnCorpusAccumulatorV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnCorpusAccumulatorV1 {
     session_digest: [u8; 32],
@@ -1099,7 +1141,15 @@ impl TimedOvnCorpusAccumulatorV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnCorpusOpenStateV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnCorpusOpenStateV1 {
     frozen: TimedOvnSurvivorsFrozenStateV1,
@@ -1176,7 +1226,15 @@ impl TimedOvnCorpusOpenStateV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnEvidenceStateV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnEvidenceStateV1 {
     /// Fixed evidence format version.
@@ -1363,6 +1421,7 @@ impl TimedOvnEvidenceStateV1 {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnPublicTallyV1 {
     /// Number of Aye ballots.
@@ -1387,7 +1446,15 @@ impl From<TimedOvnTallyV1> for TimedOvnPublicTallyV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnReleasedEvidenceV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    iroha_schema::IntoSchema,
 )]
 pub struct TimedOvnReleasedEvidenceV1 {
     /// Fixed evidence format version.
@@ -1493,6 +1560,7 @@ pub enum TimedOvnLifecyclePhaseV1 {
 )]
 #[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnLifecycleStateV1")]
 #[norito(tag = "phase", content = "state", deny_unknown_fields)]
+#[derive(iroha_schema::IntoSchema)]
 pub enum TimedOvnLifecycleStateV1 {
     /// Registration is open; no participant corpus is frozen yet.
     Registered(TimedOvnRegistrationOpenStateV1),

@@ -1,4 +1,5 @@
 use ivm::{IVM, IVMHost, SyscallPolicy};
+use ivm_abi::error::VmTrap;
 #[test]
 fn unknown_syscalls_rejected_by_policy_function() {
     // Pick a number outside known ABI list
@@ -13,5 +14,8 @@ fn default_host_rejects_unknown_syscalls() {
     let mut vm = IVM::new(0);
     let mut host = ivm::host::DefaultHost::new();
     let res = host.syscall(0xFFFF, &mut vm);
-    assert!(matches!(res, Err(ivm::VMError::UnknownSyscall(_))));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::UnknownSyscall(_)))
+    ));
 }

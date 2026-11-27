@@ -6,6 +6,7 @@ use ivm::{
     host::{DefaultHost, IVMHost},
     numeric::NumericFaultV1,
 };
+use ivm_abi::error::VmTrap;
 #[path = "../../../fixtures/kotodama/frame_emission/cases.rs"]
 mod cases;
 
@@ -96,7 +97,7 @@ fn assert_outcome(case: &cases::Case, vm: &IVM, result: Result<(), VMError>) {
                 cases::Fault::DivisionByZero => NumericFaultV1::DivisionByZero,
             };
             assert!(
-                matches!((&(result), &(VMError::NumericFault(expected))), (Err(VMError::NumericFault(__actual_value)), VMError::NumericFault(__expected_value)) if __actual_value == __expected_value),
+                matches!((&(result), &(VMError::Trap(VmTrap::NumericFault(expected)))), (Err(VMError::Trap(VmTrap::NumericFault(__actual_value))), VMError::Trap(VmTrap::NumericFault(__expected_value))) if __actual_value == __expected_value),
                 "the exact checked fault must remain observable"
             );
             assert!(

@@ -35,7 +35,11 @@ pub(super) fn prepare_in_world(
     bytecode: &[u8],
 ) -> Result<ivm::PreparedContract, ExecutionAttemptError<String>> {
     cache
-        .get_or_prepare_in_world(world, ivm::contract_code_hash(bytecode), bytecode)
+        .get_or_prepare_for_profile(
+            ivm::contract_code_hash(bytecode),
+            bytecode,
+            crate::smartcontracts::ivm::profile::resolve_raw_artifact(world, bytecode).id(),
+        )
         .map_err(|error| vm_error("failed to prepare raw contract artifact", error))
 }
 #[cfg(test)]

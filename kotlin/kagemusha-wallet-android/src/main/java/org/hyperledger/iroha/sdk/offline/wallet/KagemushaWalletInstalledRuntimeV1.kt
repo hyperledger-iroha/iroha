@@ -122,6 +122,17 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
         closing = CompletableFuture.completedFuture(null)
         selected
     }
+    /** Open the signed program owner Native preinstalled from its carrier. No program, manifest or
+     * signature bytes are supplied: Native answers only from the originals it authenticated at
+     * installation. An owner without them refuses and stays retained for its ordinary open.
+     * Worker-only. Success transfers this same installed Native owner once. */
+    fun openInstalledSpartan(): KagemushaSpartanRuntimeV1 = synchronized(gate) {
+        requireLive()
+        check(admission.canTransferToEnrollment()) { "account admission already started" }
+        val selected = runtime.openInstalledSpartan()
+        closing = CompletableFuture.completedFuture(null)
+        selected
+    }
     /** Retry ordinary refusal using the same originals, Native challenge and account signature.
      * Explicit future cancellation retires custody; successful admission transfers it once.
      */

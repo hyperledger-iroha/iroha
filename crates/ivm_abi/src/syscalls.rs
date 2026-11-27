@@ -830,7 +830,7 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
 /// This function centralizes the mapping between `ProgramMetadata.abi_version` and the set of
 /// syscalls available to programs compiled against that ABI. Hosts should call this before
 /// attempting to handle a syscall to ensure stable first-release behavior; unknown or disallowed
-/// numbers must be rejected with `VMError::UnknownSyscall`.
+/// numbers must be rejected with `VmTrap::UnknownSyscall`.
 pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
 }
@@ -882,6 +882,7 @@ pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
 pub fn is_generic_program_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     is_syscall_allowed(policy, number)
         && match policy {
+            crate::SyscallPolicy::AbiV1GenericCarrier => true,
             crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle => {
                 GENERIC_PROGRAM_DENIED_SYSCALLS_V1
                     .binary_search(&number)
@@ -1499,8 +1500,12 @@ const fn abi_v1_syscall_numbers() -> [u32; ABI_V1_SYSCALL_COUNT] {
 const ABI_V1_SYSCALL_NUMBERS: [u32; ABI_V1_SYSCALL_COUNT] = abi_v1_syscall_numbers();
 /// Return the canonical syscall list for the first-release ABI policy.
 pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
-    let (crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
-    &ABI_V1_SYSCALL_NUMBERS
+    match policy {
+        crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle => {
+            &ABI_V1_SYSCALL_NUMBERS
+        }
+        crate::SyscallPolicy::AbiV1GenericCarrier => generic_carrier::SYSCALLS,
+    }
 }
 /// Return a symbolic name for a syscall number, when known.
 /// This is used for documentation/tests; hosts should match on numbers directly.
@@ -1593,6 +1598,10 @@ pub fn render_abi_hashes_markdown_table() -> String {
         (
             RUNTIME_LIFECYCLE_HOST_PROFILE,
             crate::SyscallPolicy::AbiV1RuntimeLifecycle,
+        ),
+        (
+            GENERIC_CARRIER_HOST_PROFILE,
+            crate::SyscallPolicy::AbiV1GenericCarrier,
         ),
     ];
     let mut out = String::new();
@@ -3107,7 +3116,6 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
     })
 }
 fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSurfaceError> {
-    let (crate::SyscallPolicy::AbiV1 | crate::SyscallPolicy::AbiV1RuntimeLifecycle) = policy;
     let syscalls =
         collect_abi_syscall_surface(syscalls_for_policy(policy), syscalls_doc_gen::DOCS)?;
     let mut pointer_type_ids = crate::pointer_abi::policy_pointer_types(policy)
@@ -3230,7 +3238,9 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         durable_state,
     })
 }
+mod generic_carrier;
 mod runtime_lifecycle;
+pub use generic_carrier::GENERIC_CARRIER_HOST_PROFILE;
 pub use runtime_lifecycle::{
     RUNTIME_LIFECYCLE_HOST_PROFILE, SMARTCONTRACT_INSTRUCTION_TAG_COMPLETE_RUNTIME_OBLIGATION,
     SMARTCONTRACT_INSTRUCTION_TAG_REGISTER_RUNTIME_OBLIGATION,
@@ -3240,15 +3250,18 @@ fn build_abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<Vec<u8>,
     match policy {
         crate::SyscallPolicy::AbiV1 => encode_abi_surface(&collect_abi_surface(policy)?),
         crate::SyscallPolicy::AbiV1RuntimeLifecycle => runtime_lifecycle::descriptor(),
+        crate::SyscallPolicy::AbiV1GenericCarrier => generic_carrier::descriptor(),
     }
 }
 fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8], AbiSurfaceError> {
     use std::sync::OnceLock;
     static ABI_V1: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
     static RUNTIME_LIFECYCLE: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
+    static GENERIC_CARRIER: OnceLock<Result<Vec<u8>, AbiSurfaceError>> = OnceLock::new();
     let cached = match policy {
         crate::SyscallPolicy::AbiV1 => &ABI_V1,
         crate::SyscallPolicy::AbiV1RuntimeLifecycle => &RUNTIME_LIFECYCLE,
+        crate::SyscallPolicy::AbiV1GenericCarrier => &GENERIC_CARRIER,
     };
     match cached.get_or_init(|| build_abi_surface_descriptor(policy)) {
         Ok(descriptor) => Ok(descriptor.as_slice()),

@@ -6,6 +6,7 @@ use iroha_data_model::smart_contract::entrypoint::{
     EntrypointValueTypeV1,
 };
 use ivm::{IVM, VMError, encoding::wide as enc, instruction::wide};
+use ivm_abi::error::VmTrap;
 use ivm_abi::{
     call::{CallSchemaV1, CallTypeNodeV1},
     metadata::{LITERAL_SECTION_MAGIC, LiteralKindV1, encode_literal_descriptor},
@@ -236,42 +237,54 @@ fn one_word_aggregate_and_pointer_schemas_remain_unsupported_before_partition() 
 #[test]
 fn full_word_aliases_and_missing_initialization_are_native_faults_without_owners() {
     for (kind, word, initialized, expected) in [
-        (root::PublicLeafKind::Bool, 2, true, VMError::DecodeError),
+        (
+            root::PublicLeafKind::Bool,
+            2,
+            true,
+            VMError::Trap(VmTrap::DecodeError),
+        ),
         (
             root::PublicLeafKind::Bool,
             u64::MAX,
             true,
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         ),
         (
             root::PublicLeafKind::Bool,
             0xffff_ffff_0000_0001,
             true,
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         ),
         (
             root::PublicLeafKind::Bool,
             0xffff_ffff_0000_0002,
             true,
-            VMError::DecodeError,
+            VMError::Trap(VmTrap::DecodeError),
         ),
-        (root::PublicLeafKind::Unit, 1, true, VMError::DecodeError),
+        (
+            root::PublicLeafKind::Unit,
+            1,
+            true,
+            VMError::Trap(VmTrap::DecodeError),
+        ),
         // A root that never initializes its result word breaks the call-table protocol.
         (
             root::PublicLeafKind::Bool,
             0,
             false,
-            VMError::ControlFlowViolation,
+            VMError::Trap(VmTrap::ControlFlowViolation),
         ),
     ] {
         let contract = artifact(kind, word, 0, initialized, false);
         assert!(matches!(
             (ordinary(&contract, 10_000).run(), &expected),
-            (Err(VMError::DecodeError), VMError::DecodeError)
-                | (
-                    Err(VMError::ControlFlowViolation),
-                    VMError::ControlFlowViolation
-                )
+            (
+                Err(VMError::Trap(VmTrap::DecodeError)),
+                VMError::Trap(VmTrap::DecodeError)
+            ) | (
+                Err(VMError::Trap(VmTrap::ControlFlowViolation)),
+                VMError::Trap(VmTrap::ControlFlowViolation)
+            )
         ));
         let budget = AllocationBudget::new(128 * 1024 * 1024);
         let mut parent =
@@ -290,14 +303,14 @@ fn full_word_aliases_and_missing_initialization_are_native_faults_without_owners
             ),
             (
                 Err(ivm::execution_packets::CaptureError::Execution(
-                    VMError::DecodeError
+                    VMError::Trap(VmTrap::DecodeError)
                 )),
-                VMError::DecodeError
+                VMError::Trap(VmTrap::DecodeError)
             ) | (
                 Err(ivm::execution_packets::CaptureError::Execution(
-                    VMError::ControlFlowViolation
+                    VMError::Trap(VmTrap::ControlFlowViolation)
                 )),
-                VMError::ControlFlowViolation
+                VMError::Trap(VmTrap::ControlFlowViolation)
             )
         ));
         assert_eq!(budget.reserved_bytes(), 0);
@@ -346,8 +359,13 @@ fn every_public_leaf_gas_prefix_preserves_the_exact_ordinary_outcome() {
                     assert!(
                         matches!(
                             (&actual, &expected),
-                            (VMError::OutOfGas, VMError::OutOfGas)
-                                | (VMError::DecodeError, VMError::DecodeError)
+                            (
+                                VMError::Trap(VmTrap::OutOfGas),
+                                VMError::Trap(VmTrap::OutOfGas)
+                            ) | (
+                                VMError::Trap(VmTrap::DecodeError),
+                                VMError::Trap(VmTrap::DecodeError)
+                            )
                         ),
                         "{kind:?}, word {word}, gas {gas}: actual {actual:?}, expected {expected:?}"
                     );

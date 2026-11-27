@@ -13,6 +13,7 @@ use iroha_data_model::{
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
+use ivm_abi::error::VmTrap;
 use mv::storage::StorageReadOnly;
 use std::num::NonZeroU64;
 
@@ -224,7 +225,7 @@ fn malformed_registry_remains_completed_validation_rejection() {
         .hydrate_zk_snapshots_for_execution(&mut host)
         .unwrap_err();
     assert!(matches!(error, ValidationFail::InternalError(message)
-        if message == format!("invalid ZK snapshot state: {}", VMError::NoritoInvalid)));
+        if message == format!("invalid ZK snapshot state: {}", VMError::Trap(VmTrap::NoritoInvalid))));
     assert!(!transaction.is_execution_deferred());
     assert!(transaction.borrow_execution_deferral().is_none());
     transaction.ensure_execution_ready().unwrap();

@@ -16,7 +16,11 @@ use crate::{bootstrap, p256, request::CompletedRequest};
 
 #[path = "engine.rs"]
 pub(crate) mod engine;
-pub use engine::{NativeEngine, ParameterManifest};
+pub use engine::{
+    BootstrapActivationPackage, MAX_ACTIVATION_CLAIM_BYTES, VerifiedActivationClaim,
+    credential_signing_message_for_body, CredentialIssuerParameters, MAX_UNLOAD_CLAIM_BYTES, NativeEngine, PARAMETER_MANIFEST_VERSION, ParameterManifest,
+    UnloadDestinations, VerifiedUnloadClaim, VerifiedCreditStatus, SpartanWalletMap, SpartanWalletMaps, wallet_send_replay_key, wallet_receive_replay_key, OpenRequestPeer, decode_open_request_peer, encode_open_request_peer,
+};
 #[cfg(test)]
 pub(crate) use engine::{test_full_chain_native, test_measure_chain_native};
 #[cfg(any(test, feature = "device-fixture"))]
@@ -25,17 +29,94 @@ pub mod device_fixture;
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod tests;
+#[path = "native_sent_delivery.rs"]
+mod sent_delivery;
+pub use sent_delivery::VerifiedSentDelivery;
+#[path = "native_open_request.rs"]
+mod open_request;
 #[path = "native_witness.rs"]
 mod witness_codec;
+#[path = "native_funding.rs"]
+mod funding;
+#[path = "native_owned_unload.rs"]
+mod owned_unload;
+
+/// Matrix accumulator coordinates of the compiled four-operation producer profile.
+pub(crate) const PRODUCER_MATRIX_DIMENSIONS: ((usize, usize), (usize, usize)) =
+    ((24, 25), (24, 24));
+
+/// Native compiler's qualified primary and secondary program digests, in
+/// Receive, Send, Bootstrap, Control order. An unpublished compiler profile
+/// cannot acquire a device provider or select a wallet generation.
+pub fn built_in_producer_programs() -> Option<([[u8; 32]; 4], [[u8; 32]; 4])> {
+    // v4 p18-s17. Each canonical program was byte-identical across compiler passes 4 and 5.
+    Some((
+        [
+            [
+                0x3c, 0xad, 0x0e, 0x02, 0x19, 0x04, 0xa8, 0xd0,
+                0xd9, 0x60, 0x66, 0x2e, 0xac, 0xb3, 0x95, 0x59,
+                0xe4, 0x8f, 0x8c, 0xfa, 0x48, 0xa2, 0x36, 0xf0,
+                0x33, 0x56, 0x7f, 0x30, 0x73, 0xc2, 0x75, 0xed,
+            ],
+            [
+                0x6f, 0x9c, 0x3c, 0x33, 0x06, 0x21, 0x1d, 0xd1,
+                0xea, 0x33, 0x56, 0x36, 0x41, 0xa0, 0x86, 0xe6,
+                0xbf, 0x3d, 0x1d, 0xf4, 0xdb, 0xe1, 0xa3, 0xee,
+                0x05, 0x3f, 0x9e, 0x5e, 0xcc, 0x05, 0xfa, 0xed,
+            ],
+            [
+                0x95, 0x6d, 0x00, 0x7c, 0x57, 0xb1, 0xa7, 0x85,
+                0x0d, 0x0c, 0x21, 0x4e, 0x31, 0x7e, 0x93, 0x09,
+                0x4b, 0xe7, 0x57, 0xe6, 0x89, 0x2e, 0xb7, 0x14,
+                0x42, 0xd3, 0x6b, 0x1f, 0x59, 0xc5, 0x67, 0x4c,
+            ],
+            [
+                0xb7, 0xca, 0xae, 0xc2, 0xc0, 0xf9, 0xe5, 0x04,
+                0xed, 0x68, 0x64, 0x9d, 0x35, 0xd9, 0x7e, 0x15,
+                0x20, 0x7c, 0xdd, 0x03, 0x10, 0x6b, 0xac, 0x54,
+                0xab, 0x34, 0x30, 0x62, 0x84, 0x3c, 0x63, 0xa4,
+            ],
+        ],
+        [
+            [
+                0xd4, 0x50, 0xda, 0x3d, 0x4c, 0x75, 0x6b, 0x2a,
+                0xe4, 0x69, 0xe6, 0x22, 0x1d, 0xc2, 0xbb, 0x2a,
+                0x31, 0x1b, 0x72, 0x27, 0x62, 0x70, 0x59, 0xa3,
+                0x25, 0x15, 0xa2, 0x5f, 0x86, 0x6a, 0x3d, 0x40,
+            ],
+            [
+                0x35, 0x1b, 0xbc, 0xab, 0xba, 0x5e, 0x1e, 0x3a,
+                0xcd, 0xcb, 0xe5, 0x03, 0x59, 0xe2, 0x8f, 0xac,
+                0x01, 0x61, 0x8c, 0xd4, 0xff, 0x69, 0xee, 0x2b,
+                0x1f, 0x7b, 0xaf, 0xb1, 0x15, 0x82, 0x3e, 0x97,
+            ],
+            [
+                0x21, 0x31, 0xd9, 0x27, 0xe6, 0x03, 0x50, 0xeb,
+                0xd3, 0x75, 0x35, 0x01, 0x35, 0x47, 0xb7, 0x8d,
+                0x43, 0x13, 0xfa, 0xac, 0x72, 0xb7, 0x26, 0x2d,
+                0xb3, 0x58, 0x51, 0xd5, 0x04, 0x7a, 0xd9, 0x43,
+            ],
+            [
+                0xb0, 0x85, 0x78, 0xf9, 0x69, 0x7f, 0x40, 0x16,
+                0xb3, 0xf7, 0x0d, 0xe9, 0x30, 0x03, 0xa9, 0xef,
+                0x38, 0x46, 0x42, 0x16, 0x3a, 0x36, 0x33, 0x13,
+                0x7e, 0x3b, 0x44, 0xe0, 0x62, 0x39, 0x54, 0x0f,
+            ],
+        ],
+    ))
+}
 
 pub const FUTURE_ARTIFACT_VERSION: u16 = 1;
+const RECOVERY_CAPSULE_VERSION: u16 = 2;
 pub const MAX_RECOVERY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_CUSTODY_FRAME_BYTES: usize = MAX_RECOVERY_BYTES + 16 * 1024;
-pub const MAX_PROGRAM_BUNDLE_BYTES: usize = 256 * 1024 * 1024;
+/// Maximum complete compact program bundle. The wallet carrier applies its own
+/// aggregate limit across the bundle, signed manifest and remaining originals.
+pub const MAX_PROGRAM_BUNDLE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Four complete public verifier programs per curve, ordered Receive, Send,
-/// Bootstrap, Load. Encoding or decoding this object grants no authority.
+/// Bootstrap, Control. Encoding or decoding this object grants no authority.
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha.research.kagemusha_spartan.native.ProgramBundle.v1")]
 pub struct ProgramBundle {
@@ -44,7 +125,7 @@ pub struct ProgramBundle {
     pub secondary: [Vec<u8>; 4],
 }
 impl ProgramBundle {
-    pub fn encode(&self) -> Result<Vec<u8>> {
+    fn validate(&self) -> Result<()> {
         if self.version != 1
             || self
                 .primary
@@ -63,6 +144,11 @@ impl ProgramBundle {
         if total > MAX_PROGRAM_BUNDLE_BYTES {
             return Err(Error::ResourceLimit);
         }
+        Ok(())
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.validate()?;
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::V1_LAYOUT_FLAGS);
         let bytes = norito::to_bytes(self).map_err(|e| Error::Rejected(e.to_string()))?;
         if bytes.len() > MAX_PROGRAM_BUNDLE_BYTES {
@@ -97,9 +183,13 @@ impl ProgramBundle {
             Ok(value)
         })
         .map_err(|_| Error::Malformed("bounded program bundle"))?;
-        if bundle.encode()? != bytes {
-            return Err(Error::Malformed("canonical program bundle"));
-        }
+        bundle.validate()?;
+        norito::verify_exact_canonical_frame_with_layout(
+            &bundle,
+            bytes,
+            norito::core::WireLayout::Fixed,
+        )
+        .map_err(|_| Error::Malformed("canonical program bundle"))?;
         Ok(bundle)
     }
 }
@@ -137,6 +227,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Native-only result of total fixed-profile parsing and actual verification.
 /// A false verdict may authorize only the Receive relation's Burn outcome.
 pub(crate) struct IncomingCandidate {
+    payment_digest: Fp,
     profile: [Fp; 64],
     proof_digest: Fp,
     valid: bool,
@@ -156,6 +247,10 @@ impl IncomingCandidate {
     }
 }
 
+#[path = "native_debit.rs"]
+mod debit;
+pub use debit::{DebitApprovalEvidence, DebitAuthorizationSource, DebitBoundary};
+
 /// Native custody's protected same-boot anchor and a fresh platform observation.
 /// Implementations read these from local custody and the OS; peer wire data must
 /// never supply this interface.
@@ -171,9 +266,11 @@ pub trait TimeSource: Send + Sync {
         iroha_data_model::kagemusha::KagemushaWalletAnchoredTimeV1,
         iroha_data_model::kagemusha::KagemushaWalletMonotonicReadingV1,
     )>;
+    /// Fresh OS reading against the same direct anchor used for this preparation.
     fn observe(
         &self,
         wallet: &[u8; 32],
+        operation_id: &[u8; 32],
     ) -> Result<(
         iroha_data_model::kagemusha::KagemushaWalletAnchoredTimeV1,
         iroha_data_model::kagemusha::KagemushaWalletMonotonicReadingV1,
@@ -183,10 +280,34 @@ pub trait TimeSource: Send + Sync {
 /// Parameter admission owns the actual fixed keys, trusted scope and compiled
 /// matrix polynomials. A byte identifier or a decoded carrier is insufficient.
 pub struct AuthenticatedParameters {
+    // Local identity of this successful installation, including its trusted authorities.
+    installation: Arc<()>,
     id: [u8; 32],
-    inner: engine::ParameterSet,
+    manifest_digest: [u8; 32],
+    confirmation: ConfirmationScope,
+    inner: Arc<engine::ParameterSet>,
 }
+/// Production installation never gains debit authority from a prepared review alone.
+#[derive(Clone, Copy)]
+enum ConfirmationScope {
+    Installed,
+    /// Only constructed by the isolated public-issuer fixture or crate unit tests.
+    #[cfg(any(test, feature = "device-fixture"))]
+    FixtureSend,
+}
+
 impl AuthenticatedParameters {
+    /// Clone the compact verifier selected when the signed scheme was installed.
+    pub fn genesis_commit_verifier(&self) -> iroha_data_model::sumeragi_finality::SumeragiCommitVerifierV1 {
+        self.inner.finality.clone()
+    }
+
+    /// Canonical kgwparm1 digest of the exact signed manifest, including every program pin.
+    pub fn manifest_digest(&self) -> &[u8; 32] {
+        &self.manifest_digest
+    }
+
+    /// Relation label carried in proof and custody frames.
     pub fn id(&self) -> &[u8; 32] {
         &self.id
     }
@@ -207,6 +328,13 @@ pub enum ExactOperationWitness {
         receipt_original: Arc<[u8]>,
         finality_original: Arc<[u8]>,
     },
+    /// A signed TimeAnchor floor update. No local direct-exchange observation is created.
+    RefreshTimeAnchor(Box<crate::control::Witness>),
+    /// Future Control-Unload. Native authenticates both payout destinations before review.
+    Unload {
+        step: Box<crate::control::Witness>,
+        destinations: Box<UnloadDestinations>,
+    },
     Send(Box<crate::send::Witness>),
     Receive {
         step: Box<crate::receive::Witness>,
@@ -217,10 +345,36 @@ pub enum ExactOperationWitness {
     },
 }
 impl ExactOperationWitness {
+    /// Counterparty fixed in the completed Request for a local policy check on a fresh operation.
+    pub fn policy_counterparties(&self) -> [Option<[u8;32]>;2] {
+        let first=self.counterparty_account();
+        let second=match self {
+            Self::Receive{step,..} => Some(step.payer.body[98..130].try_into().expect("fixed credential account")),
+            _=>None,
+        };
+        [first,second.filter(|value|Some(*value)!=first)]
+    }
+    pub fn counterparty_account(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::Send(step) => Some(
+                step.request.body[162..194]
+                    .try_into()
+                    .expect("fixed receiver account"),
+            ),
+            Self::Receive { step, .. } => Some(
+                step.request.body[98..130]
+                    .try_into()
+                    .expect("fixed payer account"),
+            ),
+            _ => None,
+        }
+    }
+
     pub fn credential(&self) -> &Credential {
         match self {
             Self::Bootstrap(w) => &w.input.credential,
             Self::Load { step, .. } => &step.credential,
+            Self::RefreshTimeAnchor(w) | Self::Unload { step: w, .. } => &w.credential,
             Self::Send(w) => &w.credential,
             Self::Receive { step, .. } => &step.credential,
         }
@@ -245,6 +399,7 @@ impl Drop for ExactOperationWitness {
 #[derive(Clone)]
 pub struct VerifiedWalletHead {
     parameters_id: [u8; 32],
+    manifest_digest: [u8; 32],
     profile: [Fp; 64],
     pair: Arc<[u8]>,
     credential: Credential,
@@ -253,9 +408,19 @@ pub struct VerifiedWalletHead {
     enrollment_marker: Option<[u8; 32]>,
 }
 impl VerifiedWalletHead {
+    fn require_parameters(&self, parameters: &AuthenticatedParameters) -> Result<()> {
+        if &self.parameters_id != parameters.id()
+            || &self.manifest_digest != parameters.manifest_digest()
+        {
+            return Err(Error::AuthorityMismatch("verified head parameter manifest"));
+        }
+        Ok(())
+    }
+
     pub fn profile(&self) -> &[Fp; 64] {
         &self.profile
     }
+    /// The complete retained HeadFrame, including both original proofs and their authenticated public projection.
     pub fn exact_pair(&self) -> &[u8] {
         &self.pair
     }
@@ -276,6 +441,7 @@ impl VerifiedWalletHead {
 #[derive(Clone)]
 pub struct VerifiedIncomingPayment {
     parameters_id: [u8; 32],
+    manifest_digest: [u8; 32],
     bytes: Arc<[u8]>,
     profile: [Fp; 64],
     digest: Fp,
@@ -286,6 +452,15 @@ pub struct VerifiedIncomingPayment {
     pair: Arc<[u8]>,
 }
 impl VerifiedIncomingPayment {
+    fn require_parameters(&self, parameters: &AuthenticatedParameters) -> Result<()> {
+        if self.parameters_id != parameters.id || self.manifest_digest != parameters.manifest_digest
+        {
+            return Err(Error::AuthorityMismatch(
+                "verified Payment parameter manifest",
+            ));
+        }
+        Ok(())
+    }
     pub fn exact_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -318,16 +493,84 @@ impl VerifiedIncomingPayment {
     }
 }
 
+/// Derived from the exact frozen Payment during preparation or cold resume.
+/// This in-process witness is never serialized into a custody record.
+struct PreparedReceive {
+    pair: crate::full::UniformPair,
+    pair_bytes: Vec<u8>,
+    can_credit: bool,
+}
+
 /// Preparation is not publication. Only the engine can construct it after
 /// checking every monetary/admission predicate under authenticated inputs.
 pub struct PreparedOperation {
+    // Present only after a cold reconstruction checked the captured predecessor and
+    // reproduced the exact capsule. Neither identity is part of the wallet wire.
+    resumed_under: Option<(Arc<()>, Arc<()>)>,
+    manifest_digest: [u8; 32],
     parameters_id: [u8; 32],
     capsule: RecoveryCapsule,
     witness: Arc<ExactOperationWitness>,
     receipt_body: [u8; 338],
+    receive: Option<Box<PreparedReceive>>,
     predecessor: VerifiedWalletHead,
 }
 impl PreparedOperation {
+    fn require_receive_admission(&self) -> Result<()> {
+        if matches!(self.witness.as_ref(), ExactOperationWitness::Receive { .. })
+            && !self.receive.as_ref().is_some_and(|incoming| incoming.can_credit)
+        {
+            return Err(Error::Rejected("incoming Payment cannot credit this receiver".into()));
+        }
+        Ok(())
+    }
+    /// Stable peer action identity of the exact admitted witness, independent of later heads.
+    pub fn transfer_replay_key(&self) -> Result<Option<[u8;32]>> {
+        self.witness.transfer_replay_key()
+    }
+
+    /// Original complete Payment frozen into this Receive before its irreversible selection.
+    pub fn received_payment_original(&self) -> Option<&[u8]> {
+        match self.witness.as_ref() {
+            ExactOperationWitness::Receive { incoming_payment, .. } => Some(incoming_payment),
+            _ => None,
+        }
+    }
+    /// Both the specialized Request account and the payer credential account, if they differ.
+    pub fn policy_counterparties(&self) -> [Option<[u8;32]>;2] {self.witness.policy_counterparties()}
+
+    /// Read the same completed Request counterparty from this immutable Native preparation.
+    pub fn counterparty_account(&self) -> Option<[u8; 32]> {
+        self.witness.counterparty_account()
+    }
+
+    fn successor_opening(&self) -> (&[Fp; 30], &[Fp; 6]) {
+        match self.witness.as_ref() {
+            ExactOperationWitness::Bootstrap(step) => (&step.input.core, &step.input.rest),
+            ExactOperationWitness::Load { step, .. } => (&step.after_core, &step.after_rest),
+            ExactOperationWitness::Send(step) => (&step.after_core, &step.after_rest),
+            ExactOperationWitness::Receive { step, .. } => (&step.after_core, &step.after_rest),
+            ExactOperationWitness::Unload { step, .. }
+            | ExactOperationWitness::RefreshTimeAnchor(step) => {
+                (&step.after_core, &step.after_rest)
+            }
+        }
+    }
+
+    /// Time policy and signed-anchor digest of this authenticated successor.
+    /// A local clock observation is still required for a time-controlled Send.
+    pub fn successor_time_policy(&self) -> Result<(u64, [u8; 32])> {
+        let (core, rest) = self.successor_opening();
+        let response = core[25].to_repr();
+        if response[8..].iter().any(|byte| *byte != 0) {
+            return Err(Error::Malformed("time anchor response limit"));
+        }
+        Ok((
+            u64::from_le_bytes(response[..8].try_into().unwrap()),
+            rest[5].to_repr(),
+        ))
+    }
+
     pub fn capsule_digest(&self) -> &[u8; 32] {
         self.receipt_body[274..306]
             .try_into()
@@ -336,16 +579,44 @@ impl PreparedOperation {
     pub fn credential(&self) -> &Credential {
         self.witness.credential()
     }
-    /// Fixed 291-byte financial review projection, version 1. All terms come
-    /// from this sealed checked operation and bind its exact frozen capsule.
+    /// Version 1 financial review (291 bytes), or version 2 signed TimeAnchor
+    /// review (243 bytes). Both bind the exact checked and frozen capsule.
+    /// The signed issuer time and resulting floor do not assert OS clock custody.
     pub fn review_bytes(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(291);
-        out.extend_from_slice(&1u16.to_le_bytes());
+        let refresh = match self.witness.as_ref() {
+            ExactOperationWitness::RefreshTimeAnchor(step) => Some(step),
+            _ => None,
+        };
+        let mut out = Vec::with_capacity(if refresh.is_some() { 243 } else { 291 });
+        let version: u16 = match self.witness.as_ref() {
+            ExactOperationWitness::Unload { .. } => 3,
+            ExactOperationWitness::RefreshTimeAnchor(_) => 2,
+            _ => 1,
+        };
+        out.extend_from_slice(&version.to_le_bytes());
         out.push(self.capsule.kind());
         out.extend_from_slice(self.capsule.scheme());
         out.extend_from_slice(self.capsule.wallet());
         out.extend_from_slice(self.capsule.operation_id());
         out.extend_from_slice(&RecoveryCapsule::frame_digest(&self.capsule.encode()?));
+        if let ExactOperationWitness::Unload { step, destinations } = self.witness.as_ref() {
+            destinations.append_review(step, &self.capsule, &mut out)?;
+            return Ok(out);
+        }
+        if let Some(step) = refresh {
+            out.extend_from_slice(step.after_rest[5].to_repr().as_ref());
+            out.extend_from_slice(
+                &crate::time_anchor::issuer_time(&step.authority.anchor).to_le_bytes(),
+            );
+            let floor = step.after_core[28].to_repr();
+            if floor[8..].iter().any(|&x| x != 0) {
+                return Err(Error::Malformed("TimeAnchor review floor"));
+            }
+            out.extend_from_slice(&floor[..8]);
+            out.extend_from_slice(self.capsule.predecessor());
+            out.extend_from_slice(self.capsule.successor());
+            return Ok(out);
+        }
         let (amount, fee, receiver, account) = match self.witness.as_ref() {
             ExactOperationWitness::Send(w) => (
                 &w.request.body[242..258],
@@ -451,6 +722,41 @@ pub struct CompletedOperation {
     head: VerifiedWalletHead,
 }
 impl CompletedOperation {
+    fn released_core<'a>(&self, prepared: &'a PreparedOperation) -> Result<&'a [Fp; 30]> {
+        let (core, rest) = prepared.successor_opening();
+        let head = crate::monetary_state::commitment(core, rest);
+        let signed = self.head.profile();
+        if self.head.parameters_id != prepared.parameters_id
+            || self.head.manifest_digest != prepared.manifest_digest
+            || self.head.custody_digest != *prepared.capsule_digest()
+            || signed[crate::full::HEAD_IO] != head
+            || head.to_repr() != *prepared.capsule.successor()
+            || self.completion.operation_id() != prepared.capsule.operation_id()
+        {
+            return Err(Error::AuthorityMismatch("released state opening"));
+        }
+        if funding::uint(core[11])? != prepared.capsule.sequence() {
+            return Err(Error::AuthorityMismatch("released state sequence"));
+        }
+        Ok(core)
+    }
+    /// Next Load ordinal committed by this exact released wallet state.
+    pub fn next_load_ordinal(&self, prepared: &PreparedOperation) -> Result<u128> {
+        funding::uint(self.released_core(prepared)?[13])
+    }
+    /// Balance and lineage-adjusted burn committed by the released recursive head.
+    pub fn balance(&self, prepared: &PreparedOperation) -> Result<(u128, u128, u128)> {
+        let core = self.released_core(prepared)?;
+        let gross = funding::uint(core[9])?;
+        let burned = funding::uint(
+            self.head.profile()
+                [crate::bootstrap_context::LINEAGE_IO + crate::bootstrap_context::BURNED_TOTAL],
+        )?;
+        let spendable = gross
+            .checked_sub(burned)
+            .ok_or(Error::Malformed("released balance below lineage burn"))?;
+        Ok((gross, burned, spendable))
+    }
     pub fn completion(&self) -> &CompletionRecord {
         &self.completion
     }
@@ -466,11 +772,37 @@ mod sealed {
     pub trait Engine {}
 }
 pub trait Engine: sealed::Engine {
+    /// Called exclusively by the transaction provider after anchoring a real Selected marker.
+    fn require_selected_debit(
+        &self,
+        prepared: &PreparedOperation,
+        checkpoint: [u8; 32],
+        parameters: &AuthenticatedParameters,
+    ) -> Result<()>;
+
     /// Fresh time-dependent controls immediately before irreversible selection.
     /// Recovery of an already selected operation does not rerun this check.
     fn before_selection(
         &self,
         capsule: &RecoveryCapsule,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<()> {
+        self.prepare_selection(capsule, parameters).map(drop)
+    }
+
+    /// Reconstruct the exact static witness, then perform every live check
+    /// required for this selection. The provider may reuse this witness only
+    /// within the same dispatch under its installed manifest.
+    fn prepare_selection(
+        &self,
+        capsule: &RecoveryCapsule,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<PreparedOperation>;
+    /// Repeat all live controls with a witness this same owner has already
+    /// reconstructed under the current installation and finality reader.
+    fn recheck_selection(
+        &self,
+        prepared: &PreparedOperation,
         parameters: &AuthenticatedParameters,
     ) -> Result<()>;
     fn prepare(
@@ -483,6 +815,25 @@ pub trait Engine: sealed::Engine {
         &self,
         prepared: PreparedOperation,
         receipt: &HardwareAdvanceReceipt,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<CompletedOperation> {
+        self.finalize_selected(prepared, receipt, parameters)
+            .map(|(_, completed)| completed)
+    }
+    /// Return the checked witness to its owner for verifying the exact record
+    /// read back from storage during this dispatch.
+    fn finalize_selected(
+        &self,
+        prepared: PreparedOperation,
+        receipt: &HardwareAdvanceReceipt,
+        parameters: &AuthenticatedParameters,
+    ) -> Result<(PreparedOperation, CompletedOperation)>;
+    /// Authenticate the staged record against a preparation already checked
+    /// under this installation. A cold owner must reconstruct that preparation.
+    fn verify_staged_completion(
+        &self,
+        prepared: &PreparedOperation,
+        record: &CompletionRecord,
         parameters: &AuthenticatedParameters,
     ) -> Result<CompletedOperation>;
     fn verify_payment(
@@ -513,11 +864,12 @@ pub trait Engine: sealed::Engine {
     ) -> Result<CompletedOperation>;
 }
 
-#[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Capsule.v1")]
+#[derive(Clone, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.research.kagemusha_spartan.native.Capsule.v2")]
 struct CapsuleFrame {
     version: u16,
     parameters_id: [u8; 32],
+    manifest_digest: [u8; 32],
     scheme: [u8; 32],
     asset: [u8; 32],
     wallet: [u8; 32],
@@ -538,7 +890,7 @@ impl Drop for CapsuleFrame {
         zeroize::Zeroize::zeroize(&mut self.recovery);
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RecoveryCapsule {
     frame: CapsuleFrame,
 }
@@ -605,8 +957,8 @@ impl RecoveryCapsule {
     }
     fn validate(&self) -> Result<()> {
         let f = &self.frame;
-        if f.version != FUTURE_ARTIFACT_VERSION
-            || ![1, 2, 3, 4].contains(&f.kind)
+        if f.version != RECOVERY_CAPSULE_VERSION
+            || ![1, 2, 3, 4, 6, 7].contains(&f.kind)
             || f.receipt_body.len() != 338
             || f.recovery.is_empty()
             || f.recovery.len() > MAX_RECOVERY_BYTES
@@ -619,6 +971,7 @@ impl RecoveryCapsule {
             &f.asset,
             &f.wallet,
             &f.parameters_id,
+            &f.manifest_digest,
             &f.operation_id,
             &f.successor,
             &f.proof_digest,
@@ -656,7 +1009,7 @@ impl RecoveryCapsule {
         Ok(())
     }
     pub fn frame_digest(bytes: &[u8]) -> [u8; 32] {
-        custody_digest(b"spartan-future-capsule-v1", bytes)
+        custody_digest(b"spartan-future-capsule-v2", bytes)
     }
 }
 
@@ -676,7 +1029,7 @@ pub struct CompletionRecord {
     frame: CompletionFrame,
 }
 impl CompletionRecord {
-    /// Exact retained public output: 0 complete head, 1 Payment, 2 this record.
+    /// Exact retained public output: 0 head, 1 Payment, 2 completion, 3 Unload claim.
     /// Decoding output does not itself grant proof authority.
     pub fn output_part(&self, part: u32) -> Result<Vec<u8>> {
         if part == 2 {

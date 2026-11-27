@@ -1122,3 +1122,67 @@ fn sorafs_authority_activation_checks_inventory_before_publishing_any_definition
         }
     }
 }
+
+#[test]
+fn borrowed_ordered_timeline_matches_existing_successor_and_refuses_noncanonical_index() {
+    let storage = published();
+    let view = storage.view();
+    let lookup = PublishedDefinitions(&view);
+    let current = baseline();
+    let first = add_instruction(200);
+    let first_id = first.id().unwrap();
+    let scheduled = BTreeMap::from([(first_id, record(first.clone()))]);
+    let follow = ChangeSetV1 {
+        network: network(),
+        root: RootScopeV1::Universal,
+        predecessor: first.successor,
+        successor: first.successor,
+        effective_height: 300,
+        publish: Vec::new(),
+        transitions: Vec::new(),
+        qualification: [7; 32],
+    };
+    let id = follow.id().unwrap();
+    let borrowed: Vec<_> = scheduled.iter().collect();
+    assert_eq!(
+        successor_from_ordered_records(&follow, id, &current, &borrowed, &lookup).unwrap(),
+        successor(&follow, id, &current, &scheduled, &lookup).unwrap(),
+    );
+    let mut duplicate = borrowed.clone();
+    duplicate.push(borrowed[0]);
+    assert!(successor_from_ordered_records(&follow, id, &current, &duplicate, &lookup).is_err());
+    let mut same_height = follow.clone();
+    same_height.effective_height = 200;
+    assert!(
+        successor_from_ordered_records(
+            &same_height,
+            same_height.id().unwrap(),
+            &current,
+            &borrowed,
+            &lookup
+        )
+        .is_err()
+    );
+    let incompatible = add_instruction(300);
+    let incompatible_id = incompatible.id().unwrap();
+    assert_eq!(
+        successor_from_ordered_records(
+            &incompatible,
+            incompatible_id,
+            &current,
+            &borrowed,
+            &lookup
+        )
+        .unwrap_err()
+        .to_string(),
+        successor(
+            &incompatible,
+            incompatible_id,
+            &current,
+            &scheduled,
+            &lookup
+        )
+        .unwrap_err()
+        .to_string(),
+    );
+}

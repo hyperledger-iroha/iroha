@@ -5733,7 +5733,7 @@ def validate_smoke_prerequisite(
 
     try:
         campaign = smoke_campaign.validate_campaign(
-            campaign_root, expected_commit=commit
+            campaign_root, expected_commit=commit, kind="registered_release_smoke"
         )
         if smoke_campaign.source_seal(source_root.resolve(strict=True), commit) != campaign["source"]:
             raise RunnerError("execution source differs from the signed smoke source")

@@ -1090,6 +1090,33 @@ fn native_range_specificity(
         parameter_count: media_type.parameters.len(),
     })
 }
+/// Select the opt-in signed C10 manifest only for an explicit, positive media range.
+/// A wildcard alone keeps the original manifest interface. Equal explicit preferences
+/// follow the order in the request.
+pub(crate) fn prefers_c10_manifest(accept: Option<&HeaderValue>) -> bool {
+    use iroha_data_model::ivm_c10::manifest::REGISTERED_MANIFEST_MEDIA_TYPE;
+    let Some(ranges) = accept.and_then(|header| parse_accept_header(header).ok()) else {
+        return false;
+    };
+    let mut c10 = None;
+    let mut baseline = None;
+    for (index, range) in ranges.iter().enumerate() {
+        let media = &range.media_type;
+        let order = core::cmp::Reverse(index);
+        if media.has_concrete_type() && media.essence() == REGISTERED_MANIFEST_MEDIA_TYPE {
+            if media.parameters.is_empty() && c10.is_none() {
+                c10 = Some((range.quality, 3, order));
+            }
+        } else if let Some(specificity) = typed_range_specificity(media, ResponseFormat::Json) {
+            let next = (specificity.type_level, order, range.quality);
+            baseline = baseline.max(Some(next));
+        }
+    }
+    c10.is_some_and(|candidate| {
+        candidate.0 > 0
+            && baseline.is_none_or(|(level, order, quality)| candidate > (quality, level, order))
+    })
+}
 /// Negotiate the response format from an optional `Accept` header value.
 ///
 /// Omitted headers and wildcard-only ranges select JSON, so ordinary HTTP
@@ -3255,6 +3282,28 @@ pub mod extractors {
                         }
                     }
                 }
+            }
+        }
+        #[test]
+        fn c10_manifest_media_requires_positive_explicit_preference() {
+            use iroha_data_model::ivm_c10::manifest::REGISTERED_MANIFEST_MEDIA_TYPE as C10;
+            assert!(!super::super::prefers_c10_manifest(None));
+            for (header, expected) in [
+                (C10.to_owned(), true),
+                (format!("{C10};q=0.3, application/json;q=0"), true),
+                (format!("APPLICATION/JSON;q=0.8, {C10};q=0.4"), false),
+                (format!("{C10};q=0, */*"), false),
+                (format!("{C10}, application/json"), true),
+                (format!("application/json, {C10}"), false),
+                ("*/*".to_owned(), false),
+                (format!("{C10};q=invalid"), false),
+            ] {
+                let media = HeaderValue::from_str(&header).unwrap();
+                assert_eq!(
+                    super::super::prefers_c10_manifest(Some(&media)),
+                    expected,
+                    "{header}"
+                );
             }
         }
         #[test]

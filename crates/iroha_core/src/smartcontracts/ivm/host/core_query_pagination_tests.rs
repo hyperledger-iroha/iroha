@@ -369,7 +369,7 @@ fn execute_query_syscall_out_of_gas_when_budget_exhausted() {
     let err = host
         .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
         .expect_err("query should run out of gas");
-    assert!(matches!(err, ivm::VMError::OutOfGas));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::OutOfGas)));
 }
 #[test]
 fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
@@ -389,7 +389,7 @@ fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
     let err = host
         .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
         .expect_err("query should run out of gas on response bytes");
-    assert!(matches!(err, ivm::VMError::OutOfGas));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::OutOfGas)));
 }
 #[test]
 fn execute_query_syscall_rejects_continue_request() {
@@ -414,7 +414,7 @@ fn execute_query_syscall_rejects_continue_request() {
     let err = host
         .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, &mut vm)
         .expect_err("continue should be rejected");
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
 }
 
 #[test]
@@ -451,10 +451,10 @@ fn dispatched_failed_query_consumes_its_fail_closed_reserve() {
         .run_with_host(&mut host)
         .expect_err("continuation queries are rejected");
     assert!(matches!(
-        (&(error), &(ivm::VMError::PermissionDenied)),
+        (&(error), &(ivm::VMError::Trap(VmTrap::PermissionDenied))),
         (
-            ivm::VMError::PermissionDenied,
-            ivm::VMError::PermissionDenied
+            ivm::VMError::Trap(VmTrap::PermissionDenied),
+            ivm::VMError::Trap(VmTrap::PermissionDenied)
         )
     ));
     assert_eq!(

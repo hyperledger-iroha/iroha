@@ -1,6 +1,7 @@
 use crate::common;
 use common::assemble;
 use ivm::{IVM, Memory, encoding, instruction, syscalls};
+use ivm_abi::error::VmTrap;
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 #[test]
 fn test_heap_growth_allocation() {
@@ -54,7 +55,7 @@ fn test_heap_grow_oob() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(ivm::VMError::OutOfMemory)));
+    assert!(matches!(res, Err(ivm::VMError::Trap(VmTrap::OutOfMemory))));
 }
 #[test]
 fn test_heap_alloc_exact_limit() {
@@ -89,7 +90,7 @@ fn test_heap_alloc_oob() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     let res = vm.run();
-    assert!(matches!(res, Err(ivm::VMError::OutOfMemory)));
+    assert!(matches!(res, Err(ivm::VMError::Trap(VmTrap::OutOfMemory))));
 }
 #[test]
 fn test_default_heap_supports_large_alloc_without_growth() {

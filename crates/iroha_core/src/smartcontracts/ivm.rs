@@ -1,3 +1,4 @@
+use ivm_abi::error::{VmErrorRef, VmTrap};
 /// IVM integration helpers.
 ///
 /// This module currently only exposes a runtime cache used by other
@@ -93,7 +94,9 @@ pub(crate) fn validate_generic_execution_context(
             "private roots require address-bound contract execution".into(),
         ));
     }
-    if world.contract_manifests().get(&artifact_id).is_some() {
+    if world.contract_manifests().get(&artifact_id).is_some()
+        || world.c10_contract_manifests().get(&artifact_id).is_some()
+    {
         return Err(ValidationFail::NotPermitted(
             "generic IVM program hash is bound to a contract manifest in live state".to_owned(),
         ));
@@ -135,9 +138,19 @@ pub(crate) fn validate_manifest_hashes(
     actual_code_hash: Hash,
     actual_abi_hash: Hash,
 ) -> Result<(), IvmAdmissionError> {
-    let expected_code_hash = manifest
-        .code_hash
-        .ok_or(IvmAdmissionError::ManifestCodeHashMissing)?;
+    validate_manifest_hash_fields(
+        (manifest.code_hash, manifest.abi_hash),
+        actual_code_hash,
+        actual_abi_hash,
+    )
+}
+
+pub(crate) fn validate_manifest_hash_fields(
+    (code, abi): (Option<Hash>, Option<Hash>),
+    actual_code_hash: Hash,
+    actual_abi_hash: Hash,
+) -> Result<(), IvmAdmissionError> {
+    let expected_code_hash = code.ok_or(IvmAdmissionError::ManifestCodeHashMissing)?;
     if expected_code_hash != actual_code_hash {
         return Err(IvmAdmissionError::ManifestCodeHashMismatch(
             ManifestCodeHashMismatchInfo {
@@ -146,9 +159,7 @@ pub(crate) fn validate_manifest_hashes(
             },
         ));
     }
-    let expected_abi_hash = manifest
-        .abi_hash
-        .ok_or(IvmAdmissionError::ManifestAbiHashMissing)?;
+    let expected_abi_hash = abi.ok_or(IvmAdmissionError::ManifestAbiHashMissing)?;
     if expected_abi_hash != actual_abi_hash {
         return Err(IvmAdmissionError::ManifestAbiHashMismatch(
             ManifestAbiHashMismatchInfo {
@@ -272,19 +283,22 @@ pub fn map_vm_error_with_context_to_validation(
         // The declared rejection already owns its authenticated strings. Remove
         // metering wrappers only for that variant so all other displays retain
         // their original error context.
-        let error = if matches!(error.as_unmetered(), ivm::VMError::ContractAbort { .. }) {
+        let error = if matches!(
+            error.as_unmetered(),
+            VmErrorRef::Trap(VmTrap::ContractAbort { .. })
+        ) {
             error.into_unmetered()
         } else {
             error
         };
-        if let ivm::VMError::ContractAbort {
+        if let ivm::VMError::Trap(VmTrap::ContractAbort {
             contract,
             name,
             error_type,
             schema_hash,
             code,
             message,
-        } = error
+        }) = error
         {
             // Transfer the original completed output without cloning its backing.
             return ValidationFail::ContractRejected(ContractRejection {
@@ -317,6 +331,7 @@ mod tests {
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
+    use ivm_abi::error::VmTrap;
     fn manifest_with_hashes(code_hash: Option<Hash>, abi_hash: Option<Hash>) -> ContractManifest {
         ContractManifest {
             events: Vec::new(),
@@ -472,11 +487,11 @@ mod tests {
         // the trace bound without ZK mode by its text.
         let c10 = |error| projection::admission_error(ivm::IvmEngine::C10, error);
         assert_eq!(
-            c10(ivm::VMError::MissingMaxCycles),
+            c10(ivm::VMError::Trap(VmTrap::MissingMaxCycles)),
             IvmAdmissionError::MissingMaxCycles
         );
         assert!(matches!(
-            c10(ivm::VMError::MaxCyclesWithoutZk { max_cycles: 7 }),
+            c10(ivm::VMError::Trap(VmTrap::MaxCyclesWithoutZk { max_cycles: 7 })),
             IvmAdmissionError::BytecodeDecodingFailed(message) if message.contains('7')
         ));
         let zk_without_bound = ivm::ProgramMetadata {
@@ -596,7 +611,7 @@ mod tests {
     fn vm_error_maps_to_not_permitted() {
         let vm = ivm::IVM::try_new(100).unwrap();
         let err = crate::execution_attempt::expect_completed_rejection(
-            map_vm_error_with_context_to_validation(&vm, ivm::VMError::OutOfGas),
+            map_vm_error_with_context_to_validation(&vm, ivm::VMError::Trap(VmTrap::OutOfGas)),
         );
         assert!(
             matches!(err, ValidationFail::IvmFault(fault) if fault.kind == iroha_data_model::executor::fault::IvmFaultKindV1::OutOfGas)
@@ -646,14 +661,14 @@ mod tests {
             .iter()
             .find(|descriptor| descriptor.variant(18).is_some())
             .expect("declared error");
-        let ivm::VMError::ContractAbort {
+        let ivm::VMError::Trap(VmTrap::ContractAbort {
             contract,
             name,
             error_type,
             schema_hash,
             code,
             message,
-        } = &error
+        }) = &error
         else {
             panic!("declared require must retain its exact contract rejection: {error:?}");
         };

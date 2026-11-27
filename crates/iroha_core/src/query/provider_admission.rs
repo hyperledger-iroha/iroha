@@ -399,10 +399,10 @@ fn authenticate_genesis_record(
             .ok_or(invalid)?
             .verify(&anchor)
         || !genesis
-            .network_output_at(origin.entrypoint_index)
+            .network_execution_output_at(origin.entrypoint_index)
             .ok_or(invalid)?
             .1
-            .result
+            .result()
             .is_ok()
     {
         return Err(invalid);

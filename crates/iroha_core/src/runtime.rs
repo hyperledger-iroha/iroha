@@ -10,12 +10,15 @@ pub mod attestation;
 pub mod catalog;
 pub(crate) mod change_set;
 pub mod checkpoint;
+pub(crate) mod child_admin;
 pub mod committed_policy;
 pub(crate) mod containment;
 pub mod content_publish_permission;
 pub(crate) mod deferred_consent;
+mod draft_scope;
 pub(crate) mod envelope;
 pub(crate) mod execution;
+pub(crate) mod generic_carriers;
 pub mod ironwood;
 pub mod keyed_state;
 pub mod lifecycle_activation;
@@ -43,6 +46,7 @@ use iroha_data_model::runtime::{
 use mv::storage::Storage;
 
 pub use catalog::{CatalogError, ReleaseCatalog, release_catalog};
+pub use retirement::source_ownership;
 
 /// The definitions a new World is founded with: the baseline's.
 ///
@@ -69,8 +73,7 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
 /// Activate this release's additions on `world`'s universal root, in declaration order, up to and
 /// including `through`, as their governed change sets do at block start: publish each addition's
 /// definitions, install its storage (a cell at its published initial value) and move the
-/// selection. The independent authority, restricted-read, anonymous Parliament and runtime
-/// lifecycle additions activate alone. An addition already active stays as it is.
+/// selection. Independent additions, including the C10 execution service, activate alone. An addition already active stays as it is.
 ///
 /// Fixtures only. A network activates an addition through a governed change set
 /// (`specs/runtime_upgrades.md`); no production World is founded on one.
@@ -102,7 +105,9 @@ pub fn activate_additions_for_testing(
         || through == catalog::additions::NATIVE_AMX_CAPTURE.module
         || through == catalog::additions::NATIVE_GAME_CAPTURE.module
         || through == catalog::additions::CONTRACT_LIFECYCLE.module
+        || through == catalog::additions::IVM_C10.module
         || through == catalog::additions::RUNTIME_RETIREMENT.module
+        || through == catalog::additions::CHILD_ADMIN.module
     {
         &catalog.additions[last..=last]
     } else {
@@ -111,6 +116,8 @@ pub fn activate_additions_for_testing(
     for addition in additions {
         let current = block.runtime_selection.get().clone();
         if current.active.contains(&addition.implementation)
+            || (addition.module == catalog::additions::IVM_C10.module
+                && catalog::ivm_c10::selected(&current))
             || (addition.module == catalog::additions::RESTRICTED_DATASPACE_READ.module
                 && addition.rebinds.keys().all(|wire| {
                     current.bindings.iter().any(|binding| {
@@ -289,15 +296,31 @@ pub fn draftable_modules() -> Result<Vec<&'static str>, CatalogError> {
         .collect())
 }
 
-/// The change set that moves the universal root of `world`, on `network`, from its committed
+/// The change set that moves the authenticated root of `world`, on `network`, from its committed
 /// selection to the addition `module` of this release, effective at `effective_height`
-/// ([`ReleaseCatalog::activation`]); an operator endorses and proposes it.
+/// ([`ReleaseCatalog::activation`]); SORA Parliament or the founded child's administrator
+/// certificate authorizes scheduling, independently of validator support.
 ///
 /// # Errors
 /// `module` is not an addition of this release, or the change set does not apply to the
 /// committed selection (an earlier addition is not active yet, or this one already is), or
 /// the candidate would introduce an unfinished native export lifecycle.
 pub fn draft_addition(
+    world: &impl crate::state::WorldReadOnly,
+    network: iroha_data_model::NetworkId,
+    module: &str,
+    effective_height: u64,
+    qualification: [u8; 32],
+) -> Result<iroha_data_model::runtime::lifecycle::ChangeSetV1, CatalogError> {
+    let change =
+        draft_addition_for_selection(world, network, module, effective_height, qualification)?;
+    draft_scope::bind(world, network, change).map_err(|error| CatalogError::Addition {
+        module: module.into(),
+        reason: error.to_string(),
+    })
+}
+
+fn draft_addition_for_selection(
     world: &impl crate::state::WorldReadOnly,
     network: iroha_data_model::NetworkId,
     module: &str,

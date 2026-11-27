@@ -439,6 +439,7 @@ impl<'state> StateBlock<'state> {
         let StateBlockFields {
             genesis_crypto_policy: _genesis_crypto_policy,
             genesis_staking_policy: _genesis_staking_policy,
+            genesis_child_runtime: _genesis_child_runtime,
             local_storage_refusal: _,
             _read_releases: _,
             // Keep the linear finality/output and native-source owners alive

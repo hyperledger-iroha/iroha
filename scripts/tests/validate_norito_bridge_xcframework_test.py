@@ -51,7 +51,12 @@ LOAD_ORIGINAL_JNI_SYMBOLS = [
 ]
 SPARTAN_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_NativeSpartanBridge_" + method
-    for method in ("install", "beginAccount", "authorizeAccount", "prepare", "execute", "output", "verifyPayment", "discard")
+    for method in (
+        "install", "beginAccount", "authorizeAccount", "prepare", "creditStatus",
+        "epoch", "activationSettlement", "unloadSettlement", "issueOpenRequest",
+        "installBlacklist", "confirm", "time", "execute", "output", "verifyPayment",
+        "discard",
+    )
 ]
 KAGEMUSHA_JNI_SYMBOLS = [*WALLET_JNI_SYMBOLS, *SPARTAN_JNI_SYMBOLS, *LOAD_ORIGINAL_JNI_SYMBOLS]
 PRIVACY_JNI_SYMBOLS = [

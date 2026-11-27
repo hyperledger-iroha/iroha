@@ -4,6 +4,7 @@ use crate::{CliOutputFormat, Run, RunContext};
 use eyre::{Result, WrapErr as _, eyre};
 
 pub mod boundary;
+pub mod child_admin;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Runtime ABI helpers
@@ -21,6 +22,9 @@ pub enum Command {
     /// Migrations of storage this release compiles
     #[command(subcommand)]
     Migration(MigrationCommand),
+    /// Exact threshold certificates for an independently founded data space root
+    #[command(subcommand)]
+    ChildAdmin(child_admin::ChildAdminCommand),
     /// Show this node's release and whether it executes the committed selection and the
     /// successor of each scheduled change set
     Release,
@@ -37,6 +41,7 @@ impl Run for Command {
             Command::Contain(cmd) => cmd.run(context),
             Command::Boundary(cmd) => cmd.run(context),
             Command::Migration(cmd) => cmd.run(context),
+            Command::ChildAdmin(cmd) => cmd.run(context),
             Command::Release => {
                 let client = context.client_from_config()?;
                 let value = client.get_runtime_release_json()?;
@@ -105,6 +110,12 @@ impl Run for Command {
         }
     }
 }
+impl Command {
+    /// Only the child administrator's offline review/signature helpers need no client config.
+    pub(crate) fn allows_fallback_config(&self) -> bool {
+        matches!(self, Self::ChildAdmin(command) if command.allows_fallback_config())
+    }
+}
 #[derive(clap::Subcommand, Debug)]
 pub enum AbiCommand {
     /// Fetch the active ABI version from the node
@@ -141,9 +152,9 @@ pub enum UpgradeCommand {
     /// Show the committed selection, the attesting committee and every recorded change set
     List,
     /// Have the node draft, from its release catalog and the committed selection, the change set
-    /// that activates an addition of its release; endorse and propose the printed change set
+    /// that activates an addition of its release, bound to its authenticated root
     Draft(DraftArgs),
-    /// Submit the Parliament proposal that schedules a change set, with the trusted release
+    /// Submit the Universal root's SORA Parliament proposal, with the trusted release
     /// signers' endorsements the committed provenance policy requires
     Propose(ProposeArgs),
     /// Submit the Parliament proposal that withdraws a scheduled change set
@@ -299,9 +310,14 @@ pub struct ProposeArgs {
 impl Run for ProposeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use iroha::data_model::runtime::lifecycle::{
-            ChangeSetEndorsementV1, ChangeSetV1, RuntimeUpgradeActionV1,
+            ChangeSetEndorsementV1, ChangeSetV1, RootScopeV1, RuntimeUpgradeActionV1,
         };
         let change_set: ChangeSetV1 = read_json(&self.file, "change set")?;
+        if change_set.root != RootScopeV1::Universal {
+            return Err(eyre!(
+                "a child change set requires `ops runtime child-admin prepare ... schedule`, not a SORA Parliament proposal"
+            ));
+        }
         let provenance = self
             .endorsements
             .iter()
@@ -389,10 +405,11 @@ impl Run for AttestArgs {
         context.finish(drafted_attestation(&draft)?)
     }
 }
-/// The one `AttestRuntimeSupportV1` instruction a node drafted.
+/// The one root-scoped runtime support instruction a node drafted.
 fn drafted_attestation(
     draft: &norito::json::Value,
 ) -> Result<Vec<iroha::data_model::isi::InstructionBox>> {
+    use iroha::data_model::isi::child_runtime::AttestChildRuntimeSupportV1;
     use iroha::data_model::isi::runtime_upgrade::AttestRuntimeSupportV1;
     let [instruction] = draft
         .get("tx_instructions")
@@ -409,7 +426,8 @@ fn drafted_attestation(
             .ok_or_else(|| eyre!("the drafted instruction has no {name}"))
     };
     let wire_id = field("wire_id")?;
-    if wire_id != AttestRuntimeSupportV1::WIRE_ID {
+    if wire_id != AttestRuntimeSupportV1::WIRE_ID && wire_id != AttestChildRuntimeSupportV1::WIRE_ID
+    {
         return Err(eyre!(
             "the node drafted {wire_id}, not a runtime support attestation"
         ));
@@ -418,6 +436,25 @@ fn drafted_attestation(
         .map_err(|_| eyre!("the drafted instruction payload is not hex"))?;
     let instruction = iroha::data_model::isi::decode_instruction_from_pair(wire_id, &payload)
         .map_err(|error| eyre!("malformed drafted attestation: {error}"))?;
+    use iroha::data_model::runtime::lifecycle::RootScopeV1;
+    let scope_matches = instruction
+        .as_any()
+        .downcast_ref::<AttestRuntimeSupportV1>()
+        .is_some_and(|value| value.attestation.attestation.root == RootScopeV1::Universal)
+        || instruction
+            .as_any()
+            .downcast_ref::<AttestChildRuntimeSupportV1>()
+            .is_some_and(|value| {
+                matches!(
+                    value.attestation.attestation.root,
+                    RootScopeV1::DataSpace(_)
+                )
+            });
+    if !scope_matches {
+        return Err(eyre!(
+            "the drafted support instruction differs from its authenticated root scope"
+        ));
+    }
     Ok(vec![instruction])
 }
 #[derive(clap::Subcommand, Debug)]
@@ -657,26 +694,107 @@ mod tests {
 
     #[test]
     fn a_drafted_change_set_carries_the_identity_the_node_reported() {
-        let change_set = change_set();
-        let id_hex = hex::encode(change_set.id().expect("identity").0);
-        let body = norito::json::to_value(&change_set).expect("change-set JSON");
-        let draft = |id_hex: &str| {
-            let mut draft = norito::json::Map::new();
-            draft.insert("id_hex".into(), norito::json::Value::from(id_hex));
-            draft.insert("change_set".into(), body.clone());
-            norito::json::Value::Object(draft)
+        for root in [
+            RootScopeV1::Universal,
+            RootScopeV1::DataSpace(iroha_model_base::topology::DataSpaceId::new((1 << 40) + 7)),
+        ] {
+            let change_set = ChangeSetV1 {
+                root,
+                ..change_set()
+            };
+            let id_hex = hex::encode(change_set.id().expect("identity").0);
+            let body = norito::json::to_value(&change_set).expect("change-set JSON");
+            let draft = |id_hex: &str| {
+                let mut draft = norito::json::Map::new();
+                draft.insert("id_hex".into(), norito::json::Value::from(id_hex));
+                draft.insert("change_set".into(), body.clone());
+                norito::json::Value::Object(draft)
+            };
+            assert_eq!(
+                drafted_change_set(&draft(&id_hex)).expect("drafted"),
+                change_set
+            );
+            assert!(
+                drafted_change_set(&draft(&hex::encode([0xEE; 32]))).is_err(),
+                "a change set whose identity differs from the reported one is refused"
+            );
+            let mut without_change_set = norito::json::Map::new();
+            without_change_set.insert("id_hex".into(), norito::json::Value::from(id_hex.as_str()));
+            assert!(drafted_change_set(&norito::json::Value::Object(without_change_set)).is_err());
+        }
+    }
+
+    #[test]
+    fn a_child_change_cannot_be_submitted_as_a_universal_parliament_proposal() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("child-change.json");
+        let change = ChangeSetV1 {
+            root: RootScopeV1::DataSpace(iroha_model_base::topology::DataSpaceId::new(7)),
+            ..change_set()
         };
-        assert_eq!(
-            drafted_change_set(&draft(&id_hex)).expect("drafted"),
-            change_set
-        );
-        assert!(
-            drafted_change_set(&draft(&hex::encode([0xEE; 32]))).is_err(),
-            "a change set whose identity differs from the reported one is refused"
-        );
-        let mut without_change_set = norito::json::Map::new();
-        without_change_set.insert("id_hex".into(), norito::json::Value::from(id_hex.as_str()));
-        assert!(drafted_change_set(&norito::json::Value::Object(without_change_set)).is_err());
+        std::fs::write(&file, norito::json::to_json(&change).unwrap()).unwrap();
+        let mut context = Captured::default();
+        let error = ProposeArgs {
+            file,
+            endorsements: vec![],
+        }
+        .run(&mut context)
+        .unwrap_err();
+        assert!(error.to_string().contains("child-admin"));
+        assert!(context.submitted.is_none());
+    }
+
+    #[test]
+    fn drafted_support_requires_the_matching_universal_or_child_instruction() {
+        use iroha::data_model::{
+            isi::{
+                child_runtime::AttestChildRuntimeSupportV1, runtime_upgrade::AttestRuntimeSupportV1,
+            },
+            runtime::lifecycle::SupportAttestationV1,
+        };
+        let key =
+            iroha::crypto::KeyPair::from_seed(vec![52; 32], iroha::crypto::Algorithm::Ed25519);
+        let change = change_set();
+        for root in [
+            RootScopeV1::Universal,
+            RootScopeV1::DataSpace(iroha_model_base::topology::DataSpaceId::new(
+                (1_u64 << 43) + 1,
+            )),
+        ] {
+            let signed = SupportAttestationV1 {
+                network: change.network,
+                root,
+                change_set: change.id().unwrap(),
+                predecessor: change.predecessor,
+                successor: change.successor,
+                committee: [5; 32],
+                tested_checkpoint: 2,
+                valid_from: 9,
+                valid_until: 10,
+                release: [6; 32],
+                validator: key.public_key().clone(),
+            }
+            .sign(key.private_key())
+            .unwrap();
+            for child_wire in [false, true] {
+                let instruction: InstructionBox = if child_wire {
+                    AttestChildRuntimeSupportV1 {
+                        attestation: signed.clone(),
+                    }
+                    .into()
+                } else {
+                    AttestRuntimeSupportV1 {
+                        attestation: signed.clone(),
+                    }
+                    .into()
+                };
+                let (wire_id, payload) =
+                    iroha::data_model::isi::framed_instruction_payload(&instruction).unwrap();
+                let draft = norito::json::json!({"tx_instructions": [{"wire_id": wire_id, "payload_hex": hex::encode(payload)}]});
+                let expected = child_wire == matches!(root, RootScopeV1::DataSpace(_));
+                assert_eq!(drafted_attestation(&draft).is_ok(), expected);
+            }
+        }
     }
 
     #[test]

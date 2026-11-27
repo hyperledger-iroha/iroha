@@ -138,7 +138,7 @@ pub fn committed(block: &SignedBlock, input_index: u32) -> crate::query::Committ
         .network_entrypoint_at(input_index as usize)
         .unwrap()
         .clone();
-    let (output_index, _) = block.network_output_at(input_index).unwrap();
+    let (output_index, _) = block.network_execution_output_at(input_index).unwrap();
     let output = block.execution_outputs()[output_index as usize].clone();
     crate::query::CommittedTransaction {
         block_hash: block.hash(),

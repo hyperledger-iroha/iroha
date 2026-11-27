@@ -1,6 +1,7 @@
 //! Exact original-pool capture, rejection, borrowed verification and real disposal controls.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::memory::private_disposal::tests as observer;
 use iroha_crypto::{Hash, HashOf};
 use std::{
@@ -89,7 +90,7 @@ fn complete_nested_demand_refuses_one_byte_short_before_copy_and_retries_exactly
     let budget = AllocationBudget::new(expected - 1);
     assert!(matches!(
         source.try_snapshot(&budget),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(
@@ -119,7 +120,7 @@ fn reserved_parent_survives_shrink_and_shared_snapshot_final_owner() {
     let mut insufficient = ExecutionMemoryLease::reserve(&budget, short).unwrap();
     assert!(matches!(
         source.try_snapshot_from_parent(&mut insufficient),
-        Err(VMError::ExecutionDeferred(_))
+        Err(VMError::Deferred(VmDeferral::ExecutionDeferred(_)))
     ));
     assert_eq!(insufficient.remaining_bytes(), short.requested_bytes());
     drop(insufficient);
@@ -325,7 +326,7 @@ fn checker_rejects_extra_missing_and_out_of_range_register_paths() {
         };
         assert!(matches!(
             super::super::register_authentication::check(altered),
-            Err(VMError::AssertionFailed)
+            Err(VMError::Trap(VmTrap::AssertionFailed))
         ));
     }
 }
@@ -354,13 +355,13 @@ fn funded_vm_capture_requires_original_pool_and_refusal_preserves_execution() {
     let foreign = AllocationBudget::new(0);
     assert!(matches!(
         vm.try_diagnostic_snapshot(&foreign),
-        Err(VMError::HostUnavailable)
+        Err(VMError::Deferred(VmDeferral::HostUnavailable))
     ));
     assert_eq!(foreign.reserved_bytes(), 0);
     budget.set_limit_bytes(resident);
     assert!(matches!(
         vm.try_diagnostic_snapshot(&budget),
-        Err(VMError::AllocationDeferred(_))
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(_)))
     ));
     assert_eq!(budget.reserved_bytes(), resident);
     assert_eq!(vm.execution_summary().unwrap(), before);

@@ -48,6 +48,10 @@ fn encoded_original_roundtrip_and_immutable_publication() {
         .unwrap();
     let before = file.identity().unwrap();
     assert_eq!(row, encode_original(&raw, &destination, identity).unwrap());
+    assert_eq!(
+        destination.entries(1).unwrap(),
+        [std::ffi::OsString::from(hex::encode(identity.sha256))]
+    );
     file.revalidate().unwrap();
     assert_eq!(file.identity().unwrap(), before);
     let transport = EncodedTransportV1::new(vec![row]).unwrap();

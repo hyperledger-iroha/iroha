@@ -19,6 +19,7 @@
 //! ([`crate::IvmProfileId::BASELINE_ABI_V1`]). The Kotodama compiler emits these encodings for
 //! its default `abi-v1` target and reproduces the anchor compiler's phase-1 corpus.
 
+use crate::error::VmTrap;
 pub mod encoding;
 pub mod instruction;
 
@@ -112,64 +113,56 @@ pub fn initial_vector_length(header_vector_length: u8) -> usize {
 #[must_use]
 pub fn fault_kind(error: &VMError) -> Option<IvmFaultKindV1> {
     use IvmFaultKindV1 as F;
-    Some(match error.as_unmetered() {
-        VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => F::OutOfGas,
-        VMError::OutOfMemory => F::MemoryLimitExceeded,
-        VMError::MemoryAccessViolation { .. } => F::MemoryAccessViolation,
-        VMError::MisalignedAccess { .. } => F::MisalignedAccess,
-        VMError::MemoryOutOfBounds => F::MemoryOutOfBounds,
-        VMError::DecodeError => F::DecodeError,
-        VMError::InvalidOpcode(_) => F::InvalidOpcode,
-        VMError::UnknownSyscall(_) => F::UnknownSyscall,
-        VMError::NotImplemented { .. } => F::UnsupportedSyscall,
-        VMError::GasCostOverflow => F::GasCostOverflow,
-        VMError::NumericFault(code) => F::Numeric(*code),
-        VMError::PointerAbiFault(code) => F::PointerAbi(*code),
-        VMError::AssertionFailed => F::AssertionFailed,
-        VMError::ExceededMaxCycles => F::ExceededMaxCycles,
-        VMError::InvalidMetadata => F::InvalidMetadata,
-        VMError::InvalidVectorLength { .. } => F::InvalidVectorLength,
-        VMError::MissingHalt => F::MissingHalt,
-        VMError::VectorExtensionDisabled => F::VectorExtensionDisabled,
-        VMError::ZkExtensionDisabled => F::ZkExtensionDisabled,
-        VMError::NullifierAlreadyUsed => F::NullifierAlreadyUsed,
-        VMError::PermissionDenied => F::PermissionDenied,
-        VMError::ReentrantCall => F::ReentrantCall,
-        VMError::CallDepthExceeded => F::CallDepthExceeded,
-        VMError::PrivacyViolation => F::PrivacyViolation,
-        VMError::RegisterOutOfBounds => F::RegisterOutOfBounds,
-        VMError::NoritoInvalid => F::NoritoInvalid,
-        VMError::AbiTypeNotAllowed { .. } => F::AbiTypeNotAllowed,
-        VMError::HostOutputBudgetExceeded {
+    Some(match error.unmetered_trap()? {
+        VmTrap::OutOfGas | VmTrap::SyscallOutOfGas { .. } => F::OutOfGas,
+        VmTrap::OutOfMemory => F::MemoryLimitExceeded,
+        VmTrap::MemoryAccessViolation { .. } => F::MemoryAccessViolation,
+        VmTrap::MisalignedAccess { .. } => F::MisalignedAccess,
+        VmTrap::MemoryOutOfBounds => F::MemoryOutOfBounds,
+        VmTrap::DecodeError => F::DecodeError,
+        VmTrap::InvalidOpcode(_) => F::InvalidOpcode,
+        VmTrap::UnknownSyscall(_) => F::UnknownSyscall,
+        VmTrap::NotImplemented { .. } => F::UnsupportedSyscall,
+        VmTrap::GasCostOverflow => F::GasCostOverflow,
+        VmTrap::NumericFault(code) => F::Numeric(*code),
+        VmTrap::PointerAbiFault(code) => F::PointerAbi(*code),
+        VmTrap::AssertionFailed => F::AssertionFailed,
+        VmTrap::ExceededMaxCycles => F::ExceededMaxCycles,
+        VmTrap::InvalidMetadata => F::InvalidMetadata,
+        VmTrap::InvalidVectorLength { .. } => F::InvalidVectorLength,
+        VmTrap::MissingHalt => F::MissingHalt,
+        VmTrap::VectorExtensionDisabled => F::VectorExtensionDisabled,
+        VmTrap::ZkExtensionDisabled => F::ZkExtensionDisabled,
+        VmTrap::NullifierAlreadyUsed => F::NullifierAlreadyUsed,
+        VmTrap::PermissionDenied => F::PermissionDenied,
+        VmTrap::ReentrantCall => F::ReentrantCall,
+        VmTrap::CallDepthExceeded => F::CallDepthExceeded,
+        VmTrap::PrivacyViolation => F::PrivacyViolation,
+        VmTrap::RegisterOutOfBounds => F::RegisterOutOfBounds,
+        VmTrap::NoritoInvalid => F::NoritoInvalid,
+        VmTrap::AbiTypeNotAllowed { .. } => F::AbiTypeNotAllowed,
+        VmTrap::HostOutputBudgetExceeded {
             resource: HostOutputResource::Items,
             ..
         } => F::HostOutputItemsExceeded,
-        VMError::HostOutputBudgetExceeded {
+        VmTrap::HostOutputBudgetExceeded {
             resource: HostOutputResource::Bytes,
             ..
         } => F::HostOutputBytesExceeded,
-        VMError::AmxBudgetExceeded { .. } => F::AmxBudgetExceeded,
-        VMError::ExecutionDeferred(_)
-        | VMError::AllocationDeferred(_)
-        | VMError::AllocatorDeferred(_)
-        | VMError::DecodeDeferred(_)
-        | VMError::VerificationDeferred(_)
-        | VMError::HostUnavailable
-        | VMError::SyscallGasQuoteExceeded { .. }
-        | VMError::SyscallMeteringModeMismatch { .. }
-        | VMError::ContractAbort { .. }
-        | VMError::UnsupportedProgramVersion { .. }
-        | VMError::UnsupportedProgramFeatureBits { .. }
-        | VMError::UnsupportedProgramAbiVersion { .. }
-        | VMError::ProgramVectorLengthTooLarge { .. }
-        | VMError::ArtifactAbiHashMismatch { .. }
-        | VMError::GenericSyscallNotAllowed { .. } => return None,
+        VmTrap::AmxBudgetExceeded { .. } => F::AmxBudgetExceeded,
+        VmTrap::ContractAbort { .. }
+        | VmTrap::UnsupportedProgramVersion { .. }
+        | VmTrap::UnsupportedProgramFeatureBits { .. }
+        | VmTrap::UnsupportedProgramAbiVersion { .. }
+        | VmTrap::ProgramVectorLengthTooLarge { .. }
+        | VmTrap::ArtifactAbiHashMismatch { .. }
+        | VmTrap::GenericSyscallNotAllowed { .. } => return None,
         // The C10 engine alone raises these; a baseline invocation never produces them.
-        VMError::MissingMaxCycles
-        | VMError::MaxCyclesWithoutZk { .. }
-        | VMError::ControlFlowViolation
-        | VMError::RegisterIntegerOverflow => return None,
-        VMError::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
+        VmTrap::MissingMaxCycles
+        | VmTrap::MaxCyclesWithoutZk { .. }
+        | VmTrap::ControlFlowViolation
+        | VmTrap::RegisterIntegerOverflow => return None,
+        VmTrap::Metered { .. } => unreachable!("as_unmetered removes metering wrappers"),
     })
 }
 
@@ -178,29 +171,29 @@ pub fn fault_kind(error: &VMError) -> Option<IvmFaultKindV1> {
 #[must_use]
 pub fn admission_reason(error: VMError) -> IvmAdmissionError {
     match error {
-        VMError::UnsupportedProgramVersion { major, minor } => {
+        VMError::Trap(VmTrap::UnsupportedProgramVersion { major, minor }) => {
             IvmAdmissionError::UnsupportedVersion(UnsupportedVersionInfo { major, minor })
         }
-        VMError::UnsupportedProgramFeatureBits { bits } => {
+        VMError::Trap(VmTrap::UnsupportedProgramFeatureBits { bits }) => {
             IvmAdmissionError::UnsupportedFeatureBits(bits)
         }
-        VMError::UnsupportedProgramAbiVersion { version } => {
+        VMError::Trap(VmTrap::UnsupportedProgramAbiVersion { version }) => {
             IvmAdmissionError::UnsupportedAbiVersion(version)
         }
-        VMError::ProgramVectorLengthTooLarge {
+        VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
             vector_length,
             max_allowed,
-        } => IvmAdmissionError::VectorLengthTooLarge(VectorLengthTooLargeInfo {
+        }) => IvmAdmissionError::VectorLengthTooLarge(VectorLengthTooLargeInfo {
             vector_length,
             max_allowed,
         }),
-        VMError::ArtifactAbiHashMismatch { expected, actual } => {
+        VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }) => {
             IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
                 expected: Hash::prehashed(expected),
                 actual: Hash::prehashed(actual),
             })
         }
-        VMError::GenericSyscallNotAllowed { syscall } => {
+        VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall }) => {
             IvmAdmissionError::GenericSyscallNotAllowed(syscall)
         }
         other => IvmAdmissionError::BytecodeDecodingFailed(other.to_string()),
@@ -298,6 +291,7 @@ pub fn validate_cycle_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::numeric::{NumericFaultV1, PointerAbiFaultV1};
 
     fn bare<T: norito::codec::Encode>(value: &T) -> String {
@@ -343,57 +337,60 @@ mod tests {
     fn fault_projection_is_the_anchor_table() {
         let cases = [
             (
-                VMError::AssertionFailed,
+                VMError::Trap(VmTrap::AssertionFailed),
                 Some(IvmFaultKindV1::AssertionFailed),
             ),
             (
-                VMError::InvalidVectorLength { vector_length: 65 },
+                VMError::Trap(VmTrap::InvalidVectorLength { vector_length: 65 }),
                 Some(IvmFaultKindV1::InvalidVectorLength),
             ),
             (
-                VMError::VectorExtensionDisabled,
+                VMError::Trap(VmTrap::VectorExtensionDisabled),
                 Some(IvmFaultKindV1::VectorExtensionDisabled),
             ),
             (
-                VMError::ZkExtensionDisabled,
+                VMError::Trap(VmTrap::ZkExtensionDisabled),
                 Some(IvmFaultKindV1::ZkExtensionDisabled),
             ),
             (
-                VMError::InvalidOpcode(0x1234),
+                VMError::Trap(VmTrap::InvalidOpcode(0x1234)),
                 Some(IvmFaultKindV1::InvalidOpcode),
             ),
             (
-                VMError::ProgramVectorLengthTooLarge {
+                VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
                     vector_length: 65,
                     max_allowed: 64,
-                },
+                }),
                 None,
             ),
-            (VMError::HostUnavailable, None),
+            (VMError::Deferred(VmDeferral::HostUnavailable), None),
             (
-                VMError::Metered {
-                    gas: 3,
-                    source: Box::new(VMError::OutOfGas),
-                },
+                VMError::metered(3, VMError::Trap(VmTrap::OutOfGas)),
                 Some(IvmFaultKindV1::OutOfGas),
             ),
         ];
         for (error, expected) in cases {
             assert_eq!(fault_kind(&error), expected, "{error:?}");
         }
-        assert_eq!(fault_kind(&VMError::RegisterIntegerOverflow), None);
-        assert_eq!(fault_kind(&VMError::ControlFlowViolation), None);
+        assert_eq!(
+            fault_kind(&VMError::Trap(VmTrap::RegisterIntegerOverflow)),
+            None
+        );
+        assert_eq!(
+            fault_kind(&VMError::Trap(VmTrap::ControlFlowViolation)),
+            None
+        );
     }
 
     #[test]
     fn admission_mirror_reproduces_the_oracle_encodings_and_texts() {
-        let vector = admission_reason(VMError::ProgramVectorLengthTooLarge {
+        let vector = admission_reason(VMError::Trap(VmTrap::ProgramVectorLengthTooLarge {
             vector_length: 65,
             max_allowed: 64,
-        });
+        }));
         assert_eq!(bare(&vector), "050000000401410140");
         assert_eq!(vector.to_string(), "Vector length too large");
-        let decode = admission_reason(VMError::InvalidMetadata);
+        let decode = admission_reason(VMError::Trap(VmTrap::InvalidMetadata));
         assert_eq!(
             bare(&decode),
             "0a0000001918696e76616c69642070726f6772616d206d65746164617461"
@@ -402,7 +399,9 @@ mod tests {
             decode.to_string(),
             "Kotodama bytecode decode failed: invalid program metadata"
         );
-        let generic = admission_reason(VMError::GenericSyscallNotAllowed { syscall: 54 });
+        let generic = admission_reason(VMError::Trap(VmTrap::GenericSyscallNotAllowed {
+            syscall: 54,
+        }));
         assert_eq!(bare(&generic), "110000000436000000");
         let meta = ProgramMetadata {
             max_cycles: 55_000_001,

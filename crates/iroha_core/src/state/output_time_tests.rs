@@ -1319,3 +1319,100 @@ fn empty_time_phase_publishes_no_reward_fragment_or_callback_output() {
         0
     );
 }
+
+#[test]
+fn c10_scheduled_retry_preserves_the_registered_incarnation_and_reverts_effects() {
+    use iroha_data_model::{
+        block::execution_output::{ExecutionSourceC10V1, TriggerLifecycleRetryStateV1},
+        events::time::Schedule,
+        ivm_c10::{ActionC10V1, EventFilterBoxC10V1, RegisterTriggerC10V1, TriggerC10V1},
+        trigger::action::TimeTriggerRetryPolicy,
+    };
+    let (state, source) = fixture(65_536, 2, vec![], plain_network());
+    crate::runtime::activate_additions_for_testing(
+        &state.world,
+        crate::runtime::catalog::additions::IVM_C10.module,
+    )
+    .unwrap();
+    let id: TriggerId = "c10_retry".parse().unwrap();
+    let now = u64::try_from(source.header().creation_time().as_millis()).unwrap();
+    {
+        let (mut setup, _recorder) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
+        let action = ActionC10V1::new(
+            vec![
+                InstructionBox::from(SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    "retry_rollback".parse().unwrap(),
+                    Json::new(5),
+                )),
+                Unregister::trigger("absent".parse().unwrap()).into(),
+            ],
+            Repeats::Exactly(2),
+            ALICE_ID.clone(),
+            EventFilterBoxC10V1::Time(TimeEventFilter::new(ExecutionTime::Schedule(
+                Schedule::starting_at(std::time::Duration::from_millis(now + 300))
+                    .with_period(std::time::Duration::from_millis(60_000)),
+            ))),
+        )
+        .unwrap()
+        .with_retry_policy(TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(2).unwrap(),
+            retry_after_ms: NonZeroU64::new(7).unwrap(),
+        })
+        .unwrap();
+        RegisterTriggerC10V1 {
+            object: TriggerC10V1 {
+                id: id.clone(),
+                action,
+            },
+        }
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        tx.update_c10_trigger(&id, |row| {
+            row.set_retry_state(Some(TriggerLifecycleRetryStateV1 {
+                attempt: 1,
+                next_time_ms: now,
+            }))
+        })
+        .unwrap()
+        .unwrap();
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
+    }
+    let (mut block, _recording) = recorded_component_block(&state, source.header());
+    block.reserve_ordinary_execution_outputs(&source).unwrap();
+    block
+        .produce_ordinary_execution_outputs(&source, |producer| {
+            execute_network(producer)?;
+            producer.execute_scheduled_time_outputs()
+        })
+        .unwrap();
+    let ExecutionOutputV1::C10(row) = &retained(&block).rows[1] else {
+        panic!("C10 scheduled failure")
+    };
+    assert!(
+        matches!(&row.source, ExecutionSourceC10V1::Time { invocation, failure_root: Some(_) }
+        if invocation.schedule_index == 0 && invocation.trigger.trigger_id == id)
+    );
+    assert!(row.result.0.is_err());
+    assert_eq!(row.completions.len(), 1);
+    let stored = block.world.c10_triggers.get(&id).unwrap();
+    assert_eq!(
+        stored.retry_state(),
+        Some(&TriggerLifecycleRetryStateV1 {
+            attempt: 2,
+            next_time_ms: now + 7
+        })
+    );
+    assert_eq!(stored.trigger().action.repeats(), Repeats::Exactly(2));
+    assert!(
+        block
+            .world
+            .account(&ALICE_ID)
+            .unwrap()
+            .metadata()
+            .get("retry_rollback")
+            .is_none()
+    );
+}

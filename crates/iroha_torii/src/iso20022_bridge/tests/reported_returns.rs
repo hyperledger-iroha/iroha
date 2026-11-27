@@ -296,7 +296,7 @@ fn reported_return_pending_survives_restart_and_terminal_original_projection() {
                 )
             );
         } else {
-            assert!(runtime.mark_transaction_rejected(&hash, None));
+            assert!(runtime.mark_profiled_transaction_rejected(&hash, None));
         }
         let original_before = persisted_record_value(
             "pending-original",
@@ -719,7 +719,7 @@ async fn reported_return_repeated_original_rejection_does_not_republish() {
             .rejection_reason_code(),
         Some("ED07")
     );
-    assert!(runtime.mark_transaction_rejected(&hash, None));
+    assert!(runtime.mark_profiled_transaction_rejected(&hash, None));
     assert_eq!(
         runtime
             .message_status("rejected-original")
@@ -734,7 +734,7 @@ async fn reported_return_repeated_original_rejection_does_not_republish() {
     );
     // Leave report finalization pending, as after a refused report-journal publication.
     for _ in 0..4 {
-        assert!(runtime.mark_transaction_rejected(&hash, None));
+        assert!(runtime.mark_profiled_transaction_rejected(&hash, None));
         assert_eq!(
             persisted_record_value(
                 "rejected-original",

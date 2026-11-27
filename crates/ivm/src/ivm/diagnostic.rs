@@ -8,14 +8,18 @@ use crate::error::{
     VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic, VmSourceLocation,
     VmTrapKind,
 };
+use crate::error::{VmDeferral, VmErrorRef, VmTrap};
 use iroha_data_model::executor::fault::{
     IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1, IvmInvocationSelectorV1,
 };
+
+use iroha_data_model::ivm_c10::IvmFaultC10V1;
 
 /// Inline trap-time values. The source index resolves only against this VM's debug owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TrapSnapshot {
     pub(super) fault: Option<IvmFaultV1>,
+    pub(super) c10_fault: Option<IvmFaultC10V1>,
     pub(super) propagated: bool,
     pub(super) trap_kind: VmTrapKind,
     pub(super) pc: u64,
@@ -46,6 +50,7 @@ impl IVM {
         });
         Some(VmExecutionDiagnostic {
             fault: trap.fault,
+            c10_fault: trap.c10_fault,
             trap_kind: trap.trap_kind,
             pc: trap.pc,
             source,
@@ -71,25 +76,26 @@ impl IVM {
     }
 
     pub(super) fn capture_trap_at(&mut self, error: &VMError, position: IvmFaultPositionV1) {
-        let inherited = self
-            .last_diagnostic
-            .filter(|snapshot| snapshot.propagated)
-            .and_then(|snapshot| snapshot.fault);
+        let inherited = self.last_diagnostic.filter(|snapshot| snapshot.propagated);
         self.last_diagnostic = None;
         if error.execution_deferral().is_some() {
             return;
         }
         // Read diagnostics outside the guest register transcript.
         let _mask = crate::zk::RegLoggerGuard::mask();
-        let fault = inherited.or_else(|| self.execution_fault(error, position));
-        let relative_pc = match fault {
-            Some(fault) if fault.site.code_hash.as_ref() != &self.code_hash => None,
-            Some(IvmFaultV1 {
-                site:
-                    IvmFaultSiteV1 {
-                        position: IvmFaultPositionV1::Execute { pc_offset },
-                        ..
-                    },
+        let fault = inherited
+            .and_then(|snapshot| snapshot.fault)
+            .or_else(|| self.execution_fault(error, position));
+        let c10_fault = inherited
+            .and_then(|snapshot| snapshot.c10_fault)
+            .or_else(|| self.c10_execution_fault(error, position));
+        let site = c10_fault
+            .map(|fault| fault.site)
+            .or_else(|| fault.map(|fault| fault.site));
+        let relative_pc = match site {
+            Some(site) if site.code_hash.as_ref() != &self.code_hash => None,
+            Some(IvmFaultSiteV1 {
+                position: IvmFaultPositionV1::Execute { pc_offset },
                 ..
             }) => Some(pc_offset),
             Some(_) => None,
@@ -107,6 +113,7 @@ impl IVM {
         let predecoded_loaded = self.prepared.is_some();
         self.last_diagnostic = Some(TrapSnapshot {
             fault,
+            c10_fault,
             propagated: false,
             trap_kind: Self::classify_trap(error),
             pc: self.pc,
@@ -124,13 +131,12 @@ impl IVM {
             // TODO: the diagnostic context carries the C10 opcode byte; a baseline rejection
             // reports its low 16 bits, which have no slot here.
             opcode: match error.as_unmetered() {
-                VMError::InvalidOpcode(op) => u8::try_from(*op).ok(),
+                VmErrorRef::Trap(VmTrap::InvalidOpcode(op)) => u8::try_from(*op).ok(),
                 _ => None,
             },
             syscall: match error.as_unmetered() {
-                VMError::UnknownSyscall(syscall) | VMError::NotImplemented { syscall } => {
-                    Some(*syscall)
-                }
+                VmErrorRef::Trap(VmTrap::UnknownSyscall(syscall))
+                | VmErrorRef::Trap(VmTrap::NotImplemented { syscall }) => Some(*syscall),
                 _ => None,
             },
             predecoded_loaded,
@@ -167,7 +173,26 @@ impl IVM {
         })
     }
 
-    /// Artifact, invocation selector and `position` of a fault raised by this VM.
+    /// Return the selected C10 fault with the original nested invocation site.
+    /// Local resource deferrals and declared contract rejections have no fault.
+    pub fn c10_execution_fault(
+        &self,
+        error: &VMError,
+        position: IvmFaultPositionV1,
+    ) -> Option<IvmFaultC10V1> {
+        if self.profile_id() != ivm_abi::IvmProfileId::C10_ABI_V1 {
+            return None;
+        }
+        let kind = ivm_abi::profile::c10_wire_fault_kind(error)?;
+        if let Some(fault) = self.last_diagnostic.and_then(|snapshot| snapshot.c10_fault) {
+            return Some(fault);
+        }
+        Some(IvmFaultC10V1 {
+            kind,
+            site: self.fault_site(position)?,
+        })
+    }
+
     fn fault_site(&self, position: IvmFaultPositionV1) -> Option<IvmFaultSiteV1> {
         let selector = match self.contract_interface() {
             None => IvmInvocationSelectorV1::Generic,
@@ -198,12 +223,14 @@ impl IVM {
         position: IvmFaultPositionV1,
     ) {
         let fault = child.execution_fault(error, position);
-        if fault.is_none() {
+        let c10_fault = child.c10_execution_fault(error, position);
+        if fault.is_none() && c10_fault.is_none() {
             return;
         }
         self.capture_trap(error);
         if let Some(snapshot) = self.last_diagnostic.as_mut() {
             snapshot.fault = fault;
+            snapshot.c10_fault = c10_fault;
             snapshot.propagated = true;
             snapshot.source_index = None;
         }
@@ -211,59 +238,76 @@ impl IVM {
 
     pub(crate) fn classify_trap(err: &VMError) -> VmTrapKind {
         match err.as_unmetered() {
-            VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => VmTrapKind::OutOfGas,
-            VMError::OutOfMemory => VmTrapKind::OutOfMemory,
-            VMError::MemoryAccessViolation { .. }
-            | VMError::MisalignedAccess { .. }
-            | VMError::MemoryOutOfBounds => VmTrapKind::MemoryFault,
-            VMError::DecodeError => VmTrapKind::DecodeError,
-            VMError::InvalidOpcode(_) => VmTrapKind::InvalidOpcode,
-            VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
-            VMError::HostUnavailable | VMError::NotImplemented { .. } => VmTrapKind::NotImplemented,
-            VMError::SyscallGasQuoteExceeded { .. } => VmTrapKind::SyscallGasQuoteExceeded,
-            VMError::SyscallMeteringModeMismatch { .. } => VmTrapKind::SyscallMeteringModeMismatch,
-            VMError::GasCostOverflow => VmTrapKind::GasCostOverflow,
-            VMError::NumericFault(_) | VMError::RegisterIntegerOverflow => VmTrapKind::NumericFault,
-            VMError::PointerAbiFault(_) => VmTrapKind::PointerAbiFault,
-            VMError::AssertionFailed => VmTrapKind::AssertionFailed,
-            VMError::ContractAbort { .. } => VmTrapKind::ContractAbort,
-            VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
-            VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
-            VMError::UnsupportedProgramVersion { .. } => VmTrapKind::UnsupportedProgramVersion,
-            VMError::UnsupportedProgramFeatureBits { .. } => {
+            VmErrorRef::Trap(VmTrap::OutOfGas)
+            | VmErrorRef::Trap(VmTrap::SyscallOutOfGas { .. }) => VmTrapKind::OutOfGas,
+            VmErrorRef::Trap(VmTrap::OutOfMemory) => VmTrapKind::OutOfMemory,
+            VmErrorRef::Trap(VmTrap::MemoryAccessViolation { .. })
+            | VmErrorRef::Trap(VmTrap::MisalignedAccess { .. })
+            | VmErrorRef::Trap(VmTrap::MemoryOutOfBounds) => VmTrapKind::MemoryFault,
+            VmErrorRef::Trap(VmTrap::DecodeError) => VmTrapKind::DecodeError,
+            VmErrorRef::Trap(VmTrap::InvalidOpcode(_)) => VmTrapKind::InvalidOpcode,
+            VmErrorRef::Trap(VmTrap::UnknownSyscall(_)) => VmTrapKind::UnknownSyscall,
+            VmErrorRef::Deferred(VmDeferral::HostUnavailable)
+            | VmErrorRef::Trap(VmTrap::NotImplemented { .. }) => VmTrapKind::NotImplemented,
+            VmErrorRef::Deferred(VmDeferral::SyscallGasQuoteExceeded { .. }) => {
+                VmTrapKind::SyscallGasQuoteExceeded
+            }
+            VmErrorRef::Deferred(VmDeferral::SyscallMeteringModeMismatch { .. }) => {
+                VmTrapKind::SyscallMeteringModeMismatch
+            }
+            VmErrorRef::Trap(VmTrap::GasCostOverflow) => VmTrapKind::GasCostOverflow,
+            VmErrorRef::Trap(VmTrap::NumericFault(_))
+            | VmErrorRef::Trap(VmTrap::RegisterIntegerOverflow) => VmTrapKind::NumericFault,
+            VmErrorRef::Trap(VmTrap::PointerAbiFault(_)) => VmTrapKind::PointerAbiFault,
+            VmErrorRef::Trap(VmTrap::AssertionFailed) => VmTrapKind::AssertionFailed,
+            VmErrorRef::Trap(VmTrap::ContractAbort { .. }) => VmTrapKind::ContractAbort,
+            VmErrorRef::Trap(VmTrap::ExceededMaxCycles) => VmTrapKind::ExceededMaxCycles,
+            VmErrorRef::Trap(VmTrap::InvalidMetadata) => VmTrapKind::InvalidMetadata,
+            VmErrorRef::Trap(VmTrap::UnsupportedProgramVersion { .. }) => {
+                VmTrapKind::UnsupportedProgramVersion
+            }
+            VmErrorRef::Trap(VmTrap::UnsupportedProgramFeatureBits { .. }) => {
                 VmTrapKind::UnsupportedProgramFeatureBits
             }
-            VMError::UnsupportedProgramAbiVersion { .. } => {
+            VmErrorRef::Trap(VmTrap::UnsupportedProgramAbiVersion { .. }) => {
                 VmTrapKind::UnsupportedProgramAbiVersion
             }
-            VMError::MissingMaxCycles => VmTrapKind::MissingMaxCycles,
-            VMError::MaxCyclesWithoutZk { .. } => VmTrapKind::MaxCyclesWithoutZk,
-            VMError::ProgramVectorLengthTooLarge { .. } => VmTrapKind::ProgramVectorLengthTooLarge,
-            VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
-            VMError::VectorExtensionDisabled | VMError::ZkExtensionDisabled => {
-                VmTrapKind::PermissionDenied
+            VmErrorRef::Trap(VmTrap::MissingMaxCycles) => VmTrapKind::MissingMaxCycles,
+            VmErrorRef::Trap(VmTrap::MaxCyclesWithoutZk { .. }) => VmTrapKind::MaxCyclesWithoutZk,
+            VmErrorRef::Trap(VmTrap::ProgramVectorLengthTooLarge { .. }) => {
+                VmTrapKind::ProgramVectorLengthTooLarge
             }
-            VMError::ArtifactAbiHashMismatch { .. } => VmTrapKind::ArtifactAbiHashMismatch,
-            VMError::GenericSyscallNotAllowed { .. } => VmTrapKind::GenericSyscallNotAllowed,
-            VMError::MissingHalt => VmTrapKind::MissingHalt,
-            VMError::NullifierAlreadyUsed | VMError::PermissionDenied => {
-                VmTrapKind::PermissionDenied
+            VmErrorRef::Trap(VmTrap::InvalidVectorLength { .. }) => VmTrapKind::InvalidVectorLength,
+            VmErrorRef::Trap(VmTrap::VectorExtensionDisabled)
+            | VmErrorRef::Trap(VmTrap::ZkExtensionDisabled) => VmTrapKind::PermissionDenied,
+            VmErrorRef::Trap(VmTrap::ArtifactAbiHashMismatch { .. }) => {
+                VmTrapKind::ArtifactAbiHashMismatch
             }
-            VMError::ReentrantCall => VmTrapKind::ReentrantCall,
-            VMError::CallDepthExceeded => VmTrapKind::CallDepthExceeded,
-            VMError::ControlFlowViolation => VmTrapKind::ControlFlowViolation,
-            VMError::PrivacyViolation => VmTrapKind::PrivacyViolation,
-            VMError::RegisterOutOfBounds => VmTrapKind::RegisterOutOfBounds,
-            VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
-            VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
-            VMError::HostOutputBudgetExceeded { .. } => VmTrapKind::HostOutputBudgetExceeded,
-            VMError::AmxBudgetExceeded { .. } => VmTrapKind::AmxBudgetExceeded,
-            VMError::ExecutionDeferred(_)
-            | VMError::AllocationDeferred(_)
-            | VMError::AllocatorDeferred(_)
-            | VMError::DecodeDeferred(_)
-            | VMError::VerificationDeferred(_) => VmTrapKind::Other,
-            VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
+            VmErrorRef::Trap(VmTrap::GenericSyscallNotAllowed { .. }) => {
+                VmTrapKind::GenericSyscallNotAllowed
+            }
+            VmErrorRef::Trap(VmTrap::MissingHalt) => VmTrapKind::MissingHalt,
+            VmErrorRef::Trap(VmTrap::NullifierAlreadyUsed)
+            | VmErrorRef::Trap(VmTrap::PermissionDenied) => VmTrapKind::PermissionDenied,
+            VmErrorRef::Trap(VmTrap::ReentrantCall) => VmTrapKind::ReentrantCall,
+            VmErrorRef::Trap(VmTrap::CallDepthExceeded) => VmTrapKind::CallDepthExceeded,
+            VmErrorRef::Trap(VmTrap::ControlFlowViolation) => VmTrapKind::ControlFlowViolation,
+            VmErrorRef::Trap(VmTrap::PrivacyViolation) => VmTrapKind::PrivacyViolation,
+            VmErrorRef::Trap(VmTrap::RegisterOutOfBounds) => VmTrapKind::RegisterOutOfBounds,
+            VmErrorRef::Trap(VmTrap::NoritoInvalid) => VmTrapKind::NoritoInvalid,
+            VmErrorRef::Trap(VmTrap::AbiTypeNotAllowed { .. }) => VmTrapKind::AbiTypeNotAllowed,
+            VmErrorRef::Trap(VmTrap::HostOutputBudgetExceeded { .. }) => {
+                VmTrapKind::HostOutputBudgetExceeded
+            }
+            VmErrorRef::Trap(VmTrap::AmxBudgetExceeded { .. }) => VmTrapKind::AmxBudgetExceeded,
+            VmErrorRef::Deferred(VmDeferral::ExecutionDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::AllocationDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::AllocatorDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::DecodeDeferred(_))
+            | VmErrorRef::Deferred(VmDeferral::VerificationDeferred(_)) => VmTrapKind::Other,
+            VmErrorRef::Trap(VmTrap::Metered { .. }) => {
+                unreachable!("as_unmetered peels metered wrappers")
+            }
         }
     }
 }

@@ -95,6 +95,9 @@ pub struct RelationShape {
     pub relation: SigmaRelation,
     /// The Poseidon prefix mode.
     pub prefix: PrefixMode,
+    /// Select both arity-31 head commitments in isolated Core30 tests.
+    #[cfg(test)]
+    pub(crate) core30_candidate: bool,
 }
 
 impl Default for RelationShape {
@@ -143,7 +146,12 @@ impl RelationShape {
     /// A relation shape.
     #[must_use]
     pub const fn new(relation: SigmaRelation, prefix: PrefixMode) -> Self {
-        Self { relation, prefix }
+        Self {
+            relation,
+            prefix,
+            #[cfg(test)]
+            core30_candidate: false,
+        }
     }
 
     /// The step.
@@ -204,7 +212,10 @@ impl RelationShape {
         };
         match (site, self.relation.step()) {
             (HashSite::Predecessor | HashSite::Successor, _) => {
-                vec![(CORE_DOMAIN, COMMITMENT_ARITY)]
+                let arity = COMMITMENT_ARITY;
+                #[cfg(test)]
+                let arity = arity + usize::from(self.core30_candidate);
+                vec![(CORE_DOMAIN, arity)]
             }
             (HashSite::Chain, StepRelation::Send) => vec![(SEND_CHAIN_DOMAIN, SEND_CHAIN_FIELDS)],
             (HashSite::Chain, StepRelation::Receive) => {
@@ -668,7 +679,15 @@ impl<F: PoseidonField> SigmaCircuit<F> {
         let witness = self.witness.as_ref().zip(self.native.as_ref());
         let output = layouter.assign_region(
             || "sigma step",
-            |mut region| relation::assign(&mut chips, &mut region, relation, &plan, witness),
+            |mut region| {
+                relation::assign(
+                    &mut chips,
+                    &mut region,
+                    relation,
+                    &plan,
+                    witness,
+                )
+            },
         )?;
         for (row, word) in output.public.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.instance, row)?;
@@ -753,8 +772,70 @@ impl<F: PoseidonField> Circuit<F> for SigmaCircuit<F> {
 }
 
 #[cfg(test)]
+#[path = "core30_proof_tests.rs"]
+mod core30_proof_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core30_geometry_at_the_five_wallet_step_shapes() {
+        use crate::{CONTROLS_DEFINED, PROOF_BYTES_GATE, SigmaShape, wallet_monetary_shape};
+        use iroha_pasta::{Eq, Fp};
+        use iroha_plonk::frontend::configure;
+
+        for relation in (0..=CONTROLS_DEFINED)
+            .map(SigmaRelation::send)
+            .chain([SigmaRelation::RECEIVE])
+        {
+            let base = wallet_monetary_shape(relation).unwrap();
+            let mut layout = base.params.relation();
+            layout.core30_candidate = true;
+            let candidate = SigmaShape::new(
+                SigmaParams::new(layout, base.params.lanes(), base.params.limb_bits()).unwrap(),
+                base.k,
+            );
+            let baseline = base.inventory::<Fp>().unwrap();
+            let measured = candidate.inventory::<Fp>().unwrap();
+            let base_bytes = base.proof_length::<Eq>().unwrap();
+            let candidate_bytes = candidate.proof_length::<Eq>().unwrap();
+            let (cs, _) = configure(&SigmaCircuit::<Fp>::keygen(candidate.params)).unwrap();
+            let usable = cs.usable_rows(candidate.k).unwrap();
+            println!(
+                "CORE30_GEOMETRY selector={:?} relation={} k={} lanes={} usable_rows={} \
+                 permutations={}/{} lane_rows={}/{} glue_rows={}/{} range_rows={}/{} \
+                 cells={}/{} descriptor_proof_bytes={}/{} role_cap={} (Core29/Core30)",
+                relation.selector(),
+                relation.label(),
+                candidate.k,
+                candidate.params.lanes(),
+                usable,
+                baseline.permutations(),
+                measured.permutations(),
+                baseline.lane_rows[0],
+                measured.lane_rows[0],
+                baseline.glue_rows,
+                measured.glue_rows,
+                baseline.range_rows,
+                measured.range_rows,
+                baseline.cells,
+                measured.cells,
+                base_bytes,
+                candidate_bytes,
+                PROOF_BYTES_GATE,
+            );
+            assert_eq!(candidate.params.lanes(), 1);
+            assert_eq!(
+                layout.site_hashes(HashSite::Predecessor),
+                [(CORE_DOMAIN, 31)]
+            );
+            assert_eq!(layout.site_hashes(HashSite::Successor), [(CORE_DOMAIN, 31)]);
+            assert_eq!(measured.permutations(), baseline.permutations());
+            assert!(measured.rows() <= usable);
+            assert!(candidate_bytes <= PROOF_BYTES_GATE);
+        }
+    }
 
     fn shape(relation: SigmaRelation, prefix: PrefixMode) -> RelationShape {
         RelationShape::new(relation, prefix)

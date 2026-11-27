@@ -1467,6 +1467,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.23.1",
  "blake3",
+ "cc",
  "hex",
  "iroha_accel",
  "iroha_core",
@@ -4191,6 +4192,7 @@ dependencies = [
  "hex",
  "http",
  "hyper",
+ "iroha_allocation",
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
@@ -4198,6 +4200,7 @@ dependencies = [
  "iroha_fs",
  "iroha_measurement",
  "iroha_model_base",
+ "iroha_parliament_ballot",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_service_model",
@@ -4551,6 +4554,7 @@ dependencies = [
  "arrayvec",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_schema",
  "norito",
  "rand 0.10.3",
  "sha2 0.11.1",
@@ -5249,6 +5253,7 @@ dependencies = [
  "ff 0.14.0",
  "group 0.14.0",
  "halo2curves",
+ "num-bigint 0.4.8",
  "pasta_curves",
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
@@ -12669,8 +12674,10 @@ dependencies = [
  "num-integer",
  "num-traits",
  "rayon",
+ "sha2 0.11.1",
  "w3f-bls",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]

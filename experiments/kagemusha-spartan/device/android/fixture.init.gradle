@@ -1,0 +1,31 @@
+// Add only the isolated Native proof fixture to the Android instrumentation APK.
+// The diagnostic runtime links its own bridge, so it must not package a retail
+// bridge or the provenance assets for that separately produced library.
+def resourcesAt = { project ->
+    def appId = project.providers.gradleProperty('kagemushaEnrollmentProbeApplicationId').get()
+    if (!appId.startsWith('org.hyperledger.iroha.kagemusha.enrollmentprobe.')) {
+        throw new GradleException('Select a disposable enrollment-probe application ID')
+    }
+    new File(project.providers.gradleProperty('spartanFixtureResourceDirectory').get())
+}
+
+gradle.beforeProject { project ->
+    if (project.path == ':kagemusha-wallet-android') {
+        project.plugins.withId('com.android.library') {
+            def directory = resourcesAt(project)
+            def android = project.extensions.getByName('android')
+            def sources = android.sourceSets.getByName('androidTest')
+            sources.assets.srcDir(new File(directory, 'assets'))
+            sources.jniLibs.srcDir(new File(directory, 'jniLibs'))
+            android.packaging.jniLibs.excludes.add('**/libconnect_norito_bridge.so')
+            android.androidResources.ignoreAssetsPattern =
+                '!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:<dir>iroha'
+        }
+    }
+    if (project.path == ':client-android') {
+        resourcesAt(project)
+        project.tasks.matching {
+            it.name in ['requireAndroidArtifactDirectory', 'compileNativeLibs', 'stripNativeLibs']
+        }.configureEach { it.enabled = false }
+    }
+}

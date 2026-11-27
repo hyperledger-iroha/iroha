@@ -61,9 +61,9 @@ fn limbs(v: &BigUint) -> [BigInt; 3] {
     std::array::from_fn(|i| BigInt::from((v >> (88 * i)) % pow2(if i == 2 { 80 } else { 88 })))
 }
 impl Arithmetic {
-    fn new(family: usize) -> Self {
+    fn new(family: usize, name: &'static str) -> Self {
         let mut c = Cells::new(family);
-        c.a.name = "total Request ECDSA canonical functional arithmetic";
+        c.a.name = name;
         let zero = Self::constant_value(&mut c, BigUint::zero());
         let one = Self::constant_value(&mut c, BigUint::one());
         Self {
@@ -418,9 +418,7 @@ pub fn append_request_signature_total(
         .expect("own receipt installs authenticated wallet table first");
     assert_eq!(io, crate::full::TABLE_IO);
     assert!(w.tables.contains(&(wallet, nonnative::WALLET_TABLE)));
-    assert!(w.tables.iter().any(|(_, id)| *id == nonnative::POINT_TABLE));
     let q = credential.payment_point(w);
-    let mut a = Arithmetic::new(family);
     // Bind the same certified table commitment as the hard own receipt.
     let table = w
         .io_arrays
@@ -428,15 +426,71 @@ pub fn append_request_signature_total(
         .find(|(_, offset)| *offset == io)
         .expect("own table public input")
         .0;
-    for (i, s) in credential.table_commitment().into_iter().enumerate() {
-        a.c.eq(s.linear(), link(table, 0, vec![Some(i)], Fp::ONE));
-    }
+    let prelude: Vec<_> = credential
+        .table_commitment()
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (s.linear(), link(table, 0, vec![Some(i)], Fp::ONE)))
+        .collect();
     let req = request.request();
     let message = Source {
         array: req.local,
         cell: req.message,
         instance: 0,
     };
+    let signature = std::array::from_fn(|k| request.byte(request::BODY_BYTES + k));
+    append_signature_total(
+        w,
+        family,
+        "total Request ECDSA canonical functional arithmetic",
+        message,
+        &signature,
+        TotalKey {
+            table: nonnative::WALLET_TABLE,
+            q: &q,
+        },
+        prelude,
+    )
+}
+
+/// The P-256 key a total verdict checks against: the lookup id of a comb
+/// table holding `q`'s two tables (`nonnative::wallet_table_values` layout)
+/// and `q` itself. The table supplies no authority by itself: the caller
+/// authenticates it as the wallet's omitted row, as a fixed table in the
+/// verification key (a scheme root), or as an in-circuit derivation bound to
+/// an authenticated certificate key, before trusting the verdict.
+pub struct TotalKey<'a> {
+    pub table: u32,
+    pub q: &'a Point,
+}
+
+/// Total P-256 ECDSA-SHA256 verdict over a canonical 32-byte protocol message
+/// `m` (one constrained field cell) and the exact raw 64-byte `r ‖ s`
+/// signature cells (big-endian halves, one byte cell each). The verdict is one
+/// exactly when `1 ≤ r < n`, `1 ≤ s ≤ n/2` and `[SHA-256(m)·s⁻¹]G +
+/// [r·s⁻¹]Q` is finite with x ≡ r (mod n); every arithmetic step and lookup
+/// stays hard in both outcomes, so a false verdict never disables a helper
+/// constraint. `prelude` equalities open the arithmetic array (a caller's
+/// table authority rows). The generator table must already be installed.
+pub fn append_signature_total(
+    w: &mut Wiring<Fp>,
+    family: usize,
+    name: &'static str,
+    message: Source,
+    signature: &[Source; 64],
+    key: TotalKey,
+    prelude: Vec<(Lin<Fp>, Lin<Fp>)>,
+) -> SignatureValidity {
+    assert!(w.tables.iter().any(|(_, id)| *id == nonnative::POINT_TABLE));
+    assert!(
+        w.tables.iter().any(|(_, id)| *id == key.table),
+        "authenticated key table installed"
+    );
+    let q = key.q.clone();
+    let mut a = Arithmetic::new(family, name);
+    for (left, right) in prelude {
+        a.c.eq(left, right);
+    }
     let m = message.value(w);
     let message_bytes: Vec<_> = m.to_repr().iter().map(|b| a.c.byte(*b)).collect();
     a.c.at_most(
@@ -447,12 +501,10 @@ pub fn append_request_signature_total(
     a.c.eq(a.c.bytes(&message_bytes), message.linear());
     let z = BigUint::from_bytes_be(&p256::sha256_one_block(m.to_repr().as_ref()));
     let (zn, zbytes) = a.allocate(z.clone(), None);
-    let mut signature = vec![];
+    let mut scalars = vec![];
     let mut valid = vec![];
     for (half, bound) in [(0, p256::n() - 1u32), (1, p256::n() >> 1)] {
-        let original: Vec<_> = (0..32)
-            .map(|i| request.byte(request::BODY_BYTES + 32 * half + 31 - i))
-            .collect();
+        let original: Vec<_> = (0..32).map(|i| signature[32 * half + 31 - i]).collect();
         let raw: Vec<u8> = original.iter().map(|s| s.value(w).to_repr()[0]).collect();
         let value = BigUint::from_bytes_le(&raw);
         let (n, bytes) = a.allocate(value.clone(), None);
@@ -465,11 +517,11 @@ pub fn append_request_signature_total(
         let accepted = pred::all(&mut a.c, &[canonical, nonzero]);
         valid.push(accepted);
         let one = a.one.clone();
-        signature.push(a.select(accepted, &n, &one));
+        scalars.push(a.select(accepted, &n, &one));
     }
-    let (inverse, _) = a.inverse(&signature[1], 1);
+    let (inverse, _) = a.inverse(&scalars[1], 1);
     let u1 = a.mul(&zn, &inverse, 1);
-    let u2 = a.mul(&signature[0], &inverse, 1);
+    let u2 = a.mul(&scalars[0], &inverse, 1);
     let b1 = a.digits(&u1);
     let b2 = a.digits(&u2);
     let gt = crate::operation::comb_tables(&p256::generator(), 16);
@@ -477,10 +529,8 @@ pub fn append_request_signature_total(
     let mut acc = a.identity();
     for step in (0..16).rev() {
         acc = a.add(&acc, &acc);
-        for (table, entries, digits) in [
-            (nonnative::WALLET_TABLE, &qt, &b2),
-            (nonnative::POINT_TABLE, &gt, &b1),
-        ] {
+        for (table, entries, digits) in [(key.table, &qt, &b2), (nonnative::POINT_TABLE, &gt, &b1)]
+        {
             for half in 0..2 {
                 let selected = a.selected(table, entries, digits, half, step);
                 acc = a.add(&acc, &selected);
@@ -488,7 +538,7 @@ pub fn append_request_signature_total(
         }
     }
     let xr = a.linear(&[(1, &acc.x)], 0, 1);
-    let equal = a.equal(&xr, &signature[0]);
+    let equal = a.equal(&xr, &scalars[0]);
     let finite = a.not(acc.infinity);
     valid.extend([finite, equal]);
     let verdict = pred::all(&mut a.c, &valid);

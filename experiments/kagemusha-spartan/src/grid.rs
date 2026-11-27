@@ -142,7 +142,7 @@ pub fn grid_weights<F: PrimeField>(r: &[F]) -> Vec<F> {
 pub fn eq_table<F: Field>(r: &[F]) -> Vec<F> {
     use rayon::prelude::*;
     const LOW: usize = 10;
-    if r.len() < LOW + 4 || std::env::var("ZKS_KERN").as_deref() == Ok("old") {
+    if r.len() < LOW + 4 {
         return eq_table_serial(r);
     }
     let (high, low) = r.split_at(r.len() - LOW);

@@ -6,6 +6,7 @@ use super::super::{
 use super::*;
 use crate::test_allocations::{allocations_during, refuse_one_layout_during};
 use iroha_allocation::{AllocationRefusal, release::ReleaseFuture};
+use ivm_abi::error::{VmDeferral, VmTrap};
 use parking_lot::Mutex;
 use std::{
     alloc::Layout,
@@ -113,9 +114,9 @@ fn runtime_slot_exact_layout_refuses_before_any_allocator_or_publication() {
         });
         assert!(!physical_request);
         assert!(
-            matches!(result.unwrap(), Err(ivm::VMError::AllocationDeferred(
+            matches!(result.unwrap(), Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes }
-        )) if requested_bytes == bytes && limit_bytes == limit)
+        ))) if requested_bytes == bytes && limit_bytes == limit)
         );
         assert_eq!(budget.reserved_bytes(), 0);
         assert_eq!(budget.peak_reserved_bytes(), 0);
@@ -131,9 +132,9 @@ fn runtime_slot_exact_layout_refuses_before_any_allocator_or_publication() {
         0
     );
     assert!(
-        matches!(result.unwrap(), Err(ivm::VMError::AllocationDeferred(
+        matches!(result.unwrap(), Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(
         AllocationRefusal::Capacity { requested_bytes, reserved_bytes: 1, limit_bytes, .. }
-    )) if requested_bytes == bytes && limit_bytes == bytes)
+    ))) if requested_bytes == bytes && limit_bytes == bytes)
     );
     drop(occupied);
     let backing = IdleRuntimeBacking::try_new(&budget).unwrap();
@@ -171,9 +172,9 @@ fn runtime_slot_physical_refusal_refunds_only_original_split_and_retries() {
     assert!(requested);
     assert!(matches!(
         result,
-        Err(ivm::VMError::ExecutionDeferred(
+        Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
             ivm::error::ExecutionDeferral::AllocationUnavailable
-        ))
+        )))
     ));
     assert_eq!(budget.reserved_bytes(), 7);
     assert_eq!(budget.peak_reserved_bytes(), bytes + 7);
@@ -267,10 +268,10 @@ fn shared_nested_runtime_slot_keeps_original_pool_through_cold_idle_and_warm_use
     let before_invocation = warm.execution_summary().unwrap();
     assert!(matches!(
         warm.run_with_host(&mut ivm::host::DefaultHost::new()),
-        Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes,
             limit_bytes: 0,
-        })) if requested_bytes > 0
+        }))) if requested_bytes > 0
     ));
     assert_eq!(warm.execution_summary().unwrap(), before_invocation);
     assert_eq!(budget.reserved_bytes(), charged);
@@ -370,10 +371,10 @@ fn local_generic_runtime_slot_keeps_original_program_and_warm_reset() {
     let before_invocation = warm.execution_summary().unwrap();
     assert!(matches!(
         warm.run_with_host(&mut ivm::host::DefaultHost::new()),
-        Err(ivm::VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
+        Err(ivm::VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes,
             limit_bytes: 0,
-        })) if requested_bytes > 0
+        }))) if requested_bytes > 0
     ));
     assert_eq!(warm.execution_summary().unwrap(), before_invocation);
     assert_eq!(budget.reserved_bytes(), charged);
@@ -487,10 +488,14 @@ fn overlapping_nested_slot_returns_keep_one_real_runtime_baseline_pair() {
         .unwrap();
     let prepared_bytes = budget.reserved_bytes();
     let mut first = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
-    let first_charge = budget.reserved_bytes();
+    let unrooted_charge = budget.reserved_bytes();
     let first_row = row_pointer(first.backing.as_ref().unwrap());
     let first_image = first.memory.load_region(0, 1).unwrap().as_ptr();
+    assert!(!first.memory.merkle_storage_allocated());
     let first_root = first.memory.root().unwrap();
+    let first_charge = budget.reserved_bytes();
+    assert!(first_charge > unrooted_charge);
+    assert!(first.memory.merkle_storage_allocated());
     let mut second = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
     let second_row = row_pointer(second.backing.as_ref().unwrap());
     let second_image = second.memory.load_region(0, 1).unwrap().as_ptr();
@@ -514,7 +519,9 @@ fn overlapping_nested_slot_returns_keep_one_real_runtime_baseline_pair() {
     let mut warm = cache.checkout_runtime(&prepared, GAS, HEAP).unwrap();
     assert_eq!(row_pointer(warm.backing.as_ref().unwrap()), first_row);
     assert_eq!(warm.memory.load_region(0, 1).unwrap().as_ptr(), first_image);
+    assert!(warm.memory.merkle_storage_allocated());
     assert_eq!(warm.memory.root().unwrap(), first_root);
+    assert_eq!(budget.reserved_bytes(), first_charge);
     assert_eq!(warm.register(7), 0);
     assert_eq!(warm.memory.heap_max_limit(), HEAP);
     assert_eq!(warm.remaining_gas(), GAS);
@@ -584,8 +591,11 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
         let declined_memory_root = declined.memory.root().unwrap();
         if fault {
             assert!(matches!(
-                (&(declined_result), &(ivm::VMError::OutOfGas)),
-                (Err(ivm::VMError::OutOfGas), ivm::VMError::OutOfGas)
+                (&(declined_result), &(ivm::VMError::Trap(VmTrap::OutOfGas))),
+                (
+                    Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+                    ivm::VMError::Trap(VmTrap::OutOfGas)
+                )
             ));
             assert_eq!(declined_register, 0);
         } else {
@@ -617,7 +627,11 @@ fn runtime_slot_shortage_declines_optional_retention_without_changing_completed_
         assert!(
             matches!(
                 (&admitted_result, &declined_result),
-                (Ok(()), Ok(())) | (Err(ivm::VMError::OutOfGas), Err(ivm::VMError::OutOfGas))
+                (Ok(()), Ok(()))
+                    | (
+                        Err(ivm::VMError::Trap(VmTrap::OutOfGas)),
+                        Err(ivm::VMError::Trap(VmTrap::OutOfGas))
+                    )
             ),
             "optional cache admission changed execution: {admitted_result:?} != {declined_result:?}"
         );
@@ -818,9 +832,9 @@ fn runtime_slot_refunds_wait_for_shared_local_outer_guards_and_unwind() {
                 assert!(requested);
                 assert!(matches!(
                     refused,
-                    Err(ivm::VMError::ExecutionDeferred(
+                    Err(ivm::VMError::Deferred(VmDeferral::ExecutionDeferred(
                         ivm::error::ExecutionDeferral::AllocationUnavailable
-                    ))
+                    )))
                 ));
                 assert_eq!(budget.reserved_bytes(), row_bytes + registration_bytes);
                 assert_eq!(observer.calls.load(Ordering::SeqCst), 0);

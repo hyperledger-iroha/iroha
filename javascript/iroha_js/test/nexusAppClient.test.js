@@ -696,6 +696,7 @@ test("NexusAppClient accepts the complete default browser Connect approval proof
     waitForApproval() {
       return {
         accountId: fixture.transfer_input.authority,
+        networkId: fixtureNetworkId,
         signingPublicKey: Uint8Array.from(fixturePublicKey),
         walletPublicKey,
         signature: approvalSignature,
@@ -720,6 +721,7 @@ test("NexusAppClient accepts the complete default browser Connect approval proof
 test("NexusAppClient keeps browser approval proofs strict and transport-local", async () => {
   const validProof = {
     accountId: fixture.transfer_input.authority,
+    networkId: fixtureNetworkId,
     signingPublicKey: Uint8Array.from(fixturePublicKey),
     walletPublicKey: new Uint8Array(32).fill(0xa5),
     signature: new Uint8Array(64).fill(0x5a),
@@ -730,7 +732,13 @@ test("NexusAppClient keeps browser approval proofs strict and transport-local", 
   delete missingSigningKey.signingPublicKey;
   const missingSignature = { ...validProof };
   delete missingSignature.signature;
+  const missingNetwork = { ...validProof };
+  delete missingNetwork.networkId;
   const malformedProofs = [
+    missingNetwork,
+    { ...validProof, networkId: fixtureNetworkId.literal },
+    { ...validProof, networkId: NetworkId.fromBytes(new Uint8Array(32).fill(3)) },
+    { ...validProof, nativeIdentity: {} },
     missingSigningKey,
     { ...validProof, signingPublicKey: new Uint8Array(31) },
     { ...validProof, signingPublicKey: Buffer.alloc(32) },
@@ -759,7 +767,7 @@ test("NexusAppClient keeps browser approval proofs strict and transport-local", 
   const revoked = Proxy.revocable(validProof, {});
   revoked.revoke();
   for (const [index, proof] of malformedProofs.entries()) {
-    const client = new NexusAppClient({ chainDiscriminant: fixtureChainDiscriminant });
+    const client = new NexusAppClient({ chainDiscriminant: fixtureChainDiscriminant, networkId: fixtureNetworkId });
     await assert.rejects(
       () =>
         client.awaitApproval({

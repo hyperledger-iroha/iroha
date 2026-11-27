@@ -26,6 +26,9 @@ mod query_active_abi;
 mod queue_regressions;
 #[path = "../queue_stress.rs"]
 mod queue_stress;
+#[path = "../kagemusha_spartan_release.rs"]
+mod kagemusha_spartan_release;
+
 #[path = "../runtime_change_sets.rs"]
 mod runtime_change_sets;
 #[path = "../settlement_overlay.rs"]

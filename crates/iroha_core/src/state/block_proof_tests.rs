@@ -1422,6 +1422,27 @@ fn block_proofs_kagemusha_owner_names_only_explicit_activate_and_unload_frames()
         &wallet
     ));
     assert!(!owner.is_attempt_of(&authority, &foreign_scheme, &wallet));
+    use iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1 as Activate;
+    let public = Activate {
+        scheme,
+        asset: activation.credential.body.asset_digest,
+        manifest_digest: [0x85; 32],
+        wallet,
+        activation: vec![1],
+    };
+    let mut oversized = public.clone();
+    oversized.activation = vec![0; Activate::MAX_ACTIVATION_BYTES + 1];
+    let signed_activation = TransactionBuilder::new(
+        network,
+        authority.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([public, oversized])
+    .sign(key.private_key());
+    let activation_owner = KagemushaLedgerEntryOwnerV1::from_signed(&signed_activation).unwrap();
+    assert_eq!(activation_owner.attempts.len(), 1);
+    assert!(activation_owner.is_attempt_of(&authority, &scheme, &wallet));
+    assert!(!activation_owner.is_attempt_of(&AccountId::new(other.public_key().clone()), &scheme, &wallet));
     let mut other_wallet = wallet;
     other_wallet[0] ^= 1;
     assert!(!owner.is_attempt_of(&authority, &scheme, &other_wallet));

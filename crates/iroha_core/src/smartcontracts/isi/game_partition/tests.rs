@@ -39,7 +39,7 @@ fn config(label: &str) -> TestChainConfig {
         .into(),
         InstallGamePartitionV1 {
             world_id: world_id(),
-            kernel_hash: ivm::game_unit_step::kernel_hash(),
+            kernel_hash: unit_step::kernel_hash(),
         }
         .into(),
     ];
@@ -106,7 +106,7 @@ fn game_partition_instructions_resolve_only_once_the_addition_activates() {
     };
     let install = InstructionBox::from(InstallGamePartitionV1 {
         world_id: world_id(),
-        kernel_hash: ivm::game_unit_step::kernel_hash(),
+        kernel_hash: unit_step::kernel_hash(),
     });
     // A root founded on the baseline: no change set has activated the addition.
     let baseline = World::new();

@@ -575,15 +575,21 @@ mod addition_tests {
                 expected.extend(prerequisite.definitions());
             }
         }
-        for composition in catalog.retirement_compositions.values() {
-            expected.insert(composition.services);
-            expected.extend(composition.replacements.values().copied());
-            expected.extend(composition.addition.definitions());
+        for composition in catalog
+            .retirement_compositions
+            .values()
+            .chain(catalog.c10_compositions.values())
+            .chain(catalog.child_admin_compositions.values())
+        {
+            expected.extend(composition.definitions());
         }
         for composition in catalog.contract_lifecycle_compositions.values() {
             expected.extend([composition.host, composition.registry]);
             expected.extend(composition.addition.definitions());
         }
+        // Spartan publishes a distinct native ledger implementation for each supported
+        // predecessor owner, retaining that owner's services and storage dependencies.
+        expected.extend(catalog.spartan_predecessors.values().copied());
         // The typed committed parameters are published, never part of a founded selection.
         expected.extend(catalog.parameter_definitions());
         // The keyed State profile publishes storage for the State-level owners it adopts, its
@@ -623,10 +629,23 @@ mod addition_tests {
                 expected.insert(*id);
             }
         }
-        assert_eq!(
-            catalog.definitions.keys().copied().collect::<BTreeSet<_>>(),
-            expected,
-            "every definition belongs to the baseline or an explicitly compiled addition"
+        let actual = catalog.definitions.keys().copied().collect::<BTreeSet<_>>();
+        assert!(
+            actual == expected,
+            "every definition belongs to the baseline or an explicitly compiled addition; \
+             {} unowned and {} missing definitions (first eight each): {:?}; {:?}",
+            actual.difference(&expected).count(),
+            expected.difference(&actual).count(),
+            actual
+                .difference(&expected)
+                .take(8)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            expected
+                .difference(&actual)
+                .take(8)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
         );
     }
 

@@ -4,6 +4,7 @@ use ivm::{
     IVM,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
+use ivm_abi::error::VmTrap;
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn load(vm: &mut IVM, program: &[u8], context: &str) {
     vm.load_program(program)
@@ -68,7 +69,7 @@ fn kotodama_revoke_role_denies_mint() {
     );
     load(&mut vm, &prog_revoke_then_mint, "revoke role program");
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
 }
 #[test]
 fn kotodama_delete_role_prevents_grant() {
@@ -105,7 +106,7 @@ fn kotodama_delete_role_prevents_grant() {
         "delete then grant role program",
     );
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
 }
 #[test]
 fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
@@ -137,7 +138,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     );
     load(&mut vm, &del, "delete assigned role program");
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
     // Revoke then delete -> should succeed
     let revoke_delete = compile(
         r#"
@@ -188,7 +189,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     );
     load(&mut vm, &grant_again, "grant deleted role program");
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::PermissionDenied));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::PermissionDenied)));
     // Mint is denied without the role
     let mint = compile(
         r#"
@@ -197,5 +198,5 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     );
     load(&mut vm, &mint, "mint after role deletion program");
     let err2 = vm.run().unwrap_err();
-    assert!(matches!(err2, ivm::VMError::PermissionDenied));
+    assert!(matches!(err2, ivm::VMError::Trap(VmTrap::PermissionDenied)));
 }

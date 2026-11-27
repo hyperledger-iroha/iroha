@@ -1,5 +1,8 @@
 //! Registry and codec bindings used by portable keyed State witnesses.
 
+mod carrier;
+pub use carrier::CarrierStateSchemaError;
+
 use super::{FinalityError, keyed_state::StateKeyV1};
 use crate::runtime::{
     definition::{

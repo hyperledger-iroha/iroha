@@ -14,8 +14,9 @@ extern "C" {
 typedef int32_t (*SpartanFixtureCollectAppleV1)(void *context,
     const uint8_t *slot32, const uint8_t *payment_key65,
     const uint8_t *challenge32, void *journal);
-/* A Send approval must use the SDK's hardware-backed device authentication over
- * this exact native review. Zero is confirmed; nonzero is refusal/unavailable. */
+/* Present the 32-byte asset digest plus 291-byte Send review. Zero
+ * returns control to Rust, which obtains and verifies the actual Secure Enclave
+ * user-presence signature via the production C confirmation entry. */
 typedef int32_t (*SpartanFixtureConfirmV1)(void *context,
     const uint8_t *review, size_t review_len);
 /* 0 originals: output is three u32-BE lengths followed by each exact original;

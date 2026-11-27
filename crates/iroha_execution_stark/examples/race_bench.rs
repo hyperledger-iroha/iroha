@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use iroha_execution_stark::games::race_v1::{self, Track};
 use iroha_execution_stark::params::SecurityShape;
-use iroha_execution_stark::{Params, circuit_id, prove, verify};
+use iroha_execution_stark::{Params, circuit_id, prove, prove_with_phase_timings, verify};
 
 const USAGE: &str = "usage: race_bench <NeonTokyo|Harbor|Sakura> <players 1-8> <throttle-percent 0-100> <seed> [lookups-per-helper 1-4]";
 
@@ -129,8 +129,13 @@ fn main() -> ExitCode {
         params.hash_limited_security_bits(&shape),
         iroha_execution_stark::max_proof_bytes(&circuit, &params).expect("standard parameters")
     );
+    let prove_race = if std::env::var_os("IROHA_EXECUTION_STARK_TIMINGS").is_some() {
+        prove_with_phase_timings
+    } else {
+        prove
+    };
     let started = Instant::now();
-    let proof = match prove(&circuit, &params, &statement, &public, &states) {
+    let proof = match prove_race(&circuit, &params, &statement, &public, &states) {
         Ok(proof) => proof,
         Err(error) => {
             eprintln!("prove failed: {error}");

@@ -2,11 +2,15 @@
 //! checkpoint store, by committed height (`specs/live_runtime_upgrades.md` §7.3).
 //!
 //! A checkpoint at height `h` is the published State after block `h`; block `h + 1` certifies
-//! it. A validator vouches for a startup floor only while it holds a restorable checkpoint at
-//! exactly the floor's height (`runtime::checkpoint::attest_floor`), so it can still start from
-//! it. A generation counts when its signed manifest verifies under the node's snapshot key and
+//! it. This inventory authenticates retained bytes; it does not establish that this build can
+//! restore or replay them, and cannot authorize `runtime::checkpoint::attest_floor`. A
+//! generation counts when its signed manifest verifies under the node's snapshot key and
 //! names this chain and network, and its five canonical artifacts are present with a payload
 //! that matches the signed digest: the checks a restore makes before it reads the State.
+//!
+//! [`SnapshotCheckpoints::restore_exact_for_floor`] instead retains the exact files and stopped
+//! source lock through ordinary complete-State restore, certified suffix replay and signing.
+//! Its opaque consuming owners cannot be reconstructed from this inventory or a replay report.
 
 use std::{num::NonZeroUsize, path::PathBuf};
 
@@ -21,6 +25,9 @@ use super::{
     parse_snapshot_current_pointer, signed_generation_manifest,
     snapshot_generation_is_canonical_for_gc, verify_bound_snapshot_file,
 };
+
+mod floor;
+pub use floor::{FloorRehearsalError, ReplayedFloorCheckpoint, RestoredFloorCheckpoint};
 
 /// One checkpoint a node holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

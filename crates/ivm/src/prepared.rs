@@ -1,4 +1,5 @@
 //! Immutable, validated contract programs prepared for repeated IVM execution.
+use crate::error::VmTrap;
 use crate::{
     ProgramMetadata, VMError,
     cache_memory::{MemoryReservation, SharedValue},
@@ -102,7 +103,7 @@ impl PreparedContract {
             .code_offset
             .checked_sub(parts.header_len)
             .and_then(|offset| u64::try_from(offset).ok())
-            .ok_or(VMError::DecodeError)?;
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         let (shell, reservation) = PreparedShell::reserve(budget)?;
         let entrypoints = Entrypoints::prepare(
             &parts.contract_interface.entrypoints,
@@ -110,7 +111,7 @@ impl PreparedContract {
                 parts
                     .artifact
                     .get(parts.code_offset..)
-                    .ok_or(VMError::DecodeError)?,
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?,
             ),
             &parts.control_flow,
             instruction_entry_pc,

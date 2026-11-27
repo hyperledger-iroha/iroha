@@ -217,6 +217,13 @@ pub trait KagemushaWalletTransitionOwnerV1<C, R> {
     fn before_selection(&self, _capsule: &C) -> Result<(), KagemushaWalletProviderErrorV1> {
         Ok(())
     }
+    /// Verify any protected debit evidence at the durable, anchored Selected marker, including
+    /// recovery with a completion already staged. A failure keeps the debit pending.
+    ///
+    /// # Errors
+    /// Refuses an owner whose protected evidence cannot authenticate this selected capsule.
+    fn require_selected(&self, _capsule: &C, _marker: &KagemushaWalletMarkerRecordV1) -> Result<(), KagemushaWalletProviderErrorV1> { Ok(()) }
+
     /// Exact `receipt-body` transcript for `capsule` whose frame digest is `capsule_digest`.
     ///
     /// # Errors
@@ -431,9 +438,22 @@ where
         owner: &dyn KagemushaWalletTransitionOwnerV1<C, R>,
         request: &KagemushaWalletAdvanceRequestV1<C>,
     ) -> Result<KagemushaWalletAdvanceOutcomeV1<R>, KagemushaWalletProviderErrorV1> {
+        self.advance_with_local_policy(slot, owner, owner, request, |_| Ok(()))
+    }
+
+    /// Evaluate newly installed local policy only for a fresh selection, after retained
+    /// outcomes and stale requests have been resolved, inside the exclusive provider.
+    pub(crate) fn advance_with_local_policy(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        incumbent: &dyn KagemushaWalletTransitionOwnerV1<C, R>,
+        owner: &dyn KagemushaWalletTransitionOwnerV1<C, R>,
+        request: &KagemushaWalletAdvanceRequestV1<C>,
+        check: impl FnOnce(&mut Self) -> Result<(), KagemushaWalletProviderErrorV1>,
+    ) -> Result<KagemushaWalletAdvanceOutcomeV1<R>, KagemushaWalletProviderErrorV1> {
         let operation_id = request.operation_id;
         // A0.
-        let current = match self.reconcile_slot(slot, Some(owner))? {
+        let current = match self.reconcile_slot(slot, Some(incumbent))? {
             KagemushaWalletSlotStatusV1::Enrollment(record)
             | KagemushaWalletSlotStatusV1::Released(record) => record,
             KagemushaWalletSlotStatusV1::Pending(record) => {
@@ -503,6 +523,7 @@ where
                 KagemushaWalletNotPerformedV1::CapacityWait,
             ));
         }
+        check(self)?;
         owner.before_selection(&request.capsule)?;
         // A4-A12: the slot is unverified until a release re-caches it.
         self.poison(slot);
@@ -530,7 +551,50 @@ where
         slot: &KagemushaWalletSlotIdV1,
         operation_id: &[u8; 32],
     ) -> Result<KagemushaWalletLookupV1<R>, KagemushaWalletProviderErrorV1> {
-        let answer = self.lookup_answer(slot, operation_id)?;
+        self.lookup_reconciling(slot, operation_id, None)
+    }
+
+    /// Read retained outputs under the exact Released marker signed into a restricted account
+    /// challenge. A changed or restored source requires a new authenticated session. No transition
+    /// owner is available here, so a recovered read can never dispatch a receipt signature.
+    pub(crate) fn lookup_after_completion_loss(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        expected_marker: &[u8; 32],
+        operation_id: &[u8; 32],
+    ) -> Result<KagemushaWalletLookupV1<R>, KagemushaWalletProviderErrorV1> {
+        let super::OutputSourceV1::ReleasedWithoutCompletion(record) = self.output_source(slot)?
+        else {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "output recovery source changed",
+            });
+        };
+        if record.marker_file_digest() != expected_marker {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "output recovery marker changed",
+            });
+        }
+        let answer = if record
+            .head()
+            .is_some_and(|(_, current, _)| current == *operation_id)
+        {
+            KagemushaWalletLookupV1::DeliveryDataLoss
+        } else {
+            self.lookup_older(slot, &record, operation_id)?
+        };
+        self.require_storage()?;
+        Ok(answer)
+    }
+
+    /// Resolve an output while optionally finishing a selected operation with its Native owner.
+    /// Reconciliation and exact-byte lookup share the same delivery-loss classification.
+    pub(crate) fn lookup_reconciling(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        operation_id: &[u8; 32],
+        owner: Option<&dyn KagemushaWalletTransitionOwnerV1<C, R>>,
+    ) -> Result<KagemushaWalletLookupV1<R>, KagemushaWalletProviderErrorV1> {
+        let answer = self.lookup_answer(slot, operation_id, owner)?;
         self.require_storage()?;
         Ok(answer)
     }
@@ -540,8 +604,9 @@ where
         &mut self,
         slot: &KagemushaWalletSlotIdV1,
         operation_id: &[u8; 32],
+        owner: Option<&dyn KagemushaWalletTransitionOwnerV1<C, R>>,
     ) -> Result<KagemushaWalletLookupV1<R>, KagemushaWalletProviderErrorV1> {
-        let status = match self.reconcile_slot(slot, None) {
+        let status = match self.reconcile_slot(slot, owner) {
             Ok(status) => status,
             Err(KagemushaWalletProviderErrorV1::LostCustody(
                 KagemushaWalletLostCustodyV1::CompletionLost,
@@ -1025,6 +1090,9 @@ where
             });
         }
         let record = selected.record();
+        if let Err(error) = owner.require_selected(capsule, record) {
+            return Ok(FinishedV1::Stalled(error));
+        }
         let binding = R::marker_binding(record.marker());
         let expectation = KagemushaWalletCompletionExpectationV1::Selected {
             selected_generation: capability.generation(),

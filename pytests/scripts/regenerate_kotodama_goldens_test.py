@@ -72,6 +72,15 @@ def test_read_map_accepts_aliases_but_rejects_conflicts(tmp_path: Path) -> None:
         goldens.read_map(mapping)
 
 
+def test_golden_build_uses_the_baseline_cycle_ceiling(tmp_path: Path) -> None:
+    source = Path("sample.ko")
+    for mode, flags in (("standard", []), ("zk", ["--zk"])):
+        assert goldens.build_command(Path("koto"), tmp_path, mode, [source]) == [
+            "koto", "build", "--profile", "release", "--target-dir", str(tmp_path),
+            *flags, "sample.ko",
+        ]
+
+
 def test_unique_builds_rejects_stem_collisions() -> None:
     rows = [
         goldens.Golden("standard", Path("a/demo.ko"), Path("a/demo.to")),

@@ -117,11 +117,19 @@ class KagemushaWalletFeeClaimV1 internal constructor(payment: ByteArray, request
     override fun toString(): String = "KagemushaWalletFeeClaimV1(originals=[REDACTED])"
 }
 /** Protected native Load epoch authority; no receipt or monetary permission is implied. */
-class KagemushaWalletEpochProgressV1 internal constructor(result: KagemushaWalletCallV1) {
+class KagemushaWalletEpochProgressV1 {
     val epoch: java.math.BigInteger
     val firstHeight: java.math.BigInteger
     val boundaryHeight: java.math.BigInteger
-    init {
+    internal constructor(epoch: java.math.BigInteger, firstHeight: java.math.BigInteger, boundaryHeight: java.math.BigInteger) {
+        this.epoch = epoch
+        this.firstHeight = firstHeight
+        this.boundaryHeight = boundaryHeight
+        if (firstHeight.signum() <= 0 || boundaryHeight < firstHeight) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+    }
+    internal constructor(result: KagemushaWalletCallV1) {
         if (result.status != KagemushaWalletCallV1.EPOCH_PROGRESS) {
             throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         }

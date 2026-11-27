@@ -51,6 +51,12 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
     Admission for Runtime<P, S>
 {
     fn spartan(&mut self, action: super::spartan::Action<'_>) -> Result<Response> {
+        // Raw program buffers authenticated through this retained proof engine's scheme are
+        // an isolated-fixture transfer only. Shipped builds install Spartan programs solely
+        // through the signed carrier intake (`installed::spartan`), which never builds this
+        // owner, so a retained wallet generation answers every Spartan call as unavailable
+        // and keeps its exclusive custody and account admission unchanged.
+        #[cfg(any(test, feature = "spartan-device-fixture"))]
         if let super::spartan::Action::Install {
             bundle,
             manifest,
@@ -623,6 +629,16 @@ where
 {
     Arc::new(runtime_owner(Box::new(runtime), Some(binding)))
 }
+/// Retain one already authenticated admission in the same owner shape as a loaded runtime.
+/// The admission keeps every custody and binding it was built with. This creates no registry
+/// entry, ID, reservation, enrollment or monetary permission.
+pub(super) fn admission_owner(admission: Box<dyn Admission>) -> Arc<RuntimeOwner> {
+    Arc::new(RuntimeOwner {
+        closing: Arc::new(closing::CloseState::default()),
+        admission: Mutex::new(Some(admission)),
+        finished: Mutex::new(None),
+    })
+}
 fn runtime_owner<P, S>(
     runtime: Box<state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>>,
     binding: Option<super::installed::BoundOriginals>,
@@ -956,6 +972,53 @@ mod tests {
         assert!(drops.lock().unwrap().is_empty());
         closing::close_with(&selected, id).unwrap();
         assert_eq!(*drops.lock().unwrap(), vec![1, 2]);
+        assert!(selected.lock().unwrap().runtimes.is_empty());
+    }
+    #[test]
+    fn admission_owner_retains_one_admission_until_registered_close_and_grants_nothing() {
+        let selected = Mutex::new(Registry::default());
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let owner = admission_owner(Box::new(RegistrationDataAdmission {
+            _originals: RegistrationOriginals {
+                runtime: RegistrationDataToken {
+                    tag: 1,
+                    drops: Arc::clone(&drops),
+                },
+                binding: RegistrationDataToken {
+                    tag: 2,
+                    drops: Arc::clone(&drops),
+                },
+            },
+        }));
+        assert!(owner.admission.lock().unwrap().is_some());
+        assert!(owner.finished.lock().unwrap().is_none());
+        assert!(selected.lock().unwrap().runtimes.is_empty());
+        // An owner without Spartan programs answers every Spartan call as unavailable.
+        assert_eq!(
+            owner
+                .admission
+                .lock()
+                .unwrap()
+                .as_deref_mut()
+                .unwrap()
+                .spartan(super::super::spartan::Action::Execute(1))
+                .unwrap_err()
+                .status,
+            ARTIFACTS_UNAVAILABLE
+        );
+        let id = register_owned_runtime(&selected, &owner).unwrap();
+        assert!(
+            selected
+                .lock()
+                .unwrap()
+                .runtimes
+                .get(&id)
+                .is_some_and(|active| Arc::ptr_eq(active, &owner))
+        );
+        assert!(drops.lock().unwrap().is_empty());
+        closing::close_with(&selected, id).unwrap();
+        assert_eq!(*drops.lock().unwrap(), vec![1, 2]);
+        assert!(owner.admission.lock().unwrap().is_none());
         assert!(selected.lock().unwrap().runtimes.is_empty());
     }
     #[test]

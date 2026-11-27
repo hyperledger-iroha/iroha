@@ -1,6 +1,7 @@
 //! Native conditional reads/writes, public condition policy and coherent forgeries.
 
 use super::*;
+use ivm_abi::error::VmTrap;
 
 fn checked(instruction: u32, inputs: &[(usize, u64, bool)]) -> (Program, ScalarFixture) {
     let (program, fixture) = native(instruction, inputs);
@@ -186,7 +187,7 @@ fn conditional_moves_native_private_condition_refuses_even_false_and_rd0() {
                 let mut recorder = DiagnosticStepRecorder::try_new(8, &budget).unwrap();
                 assert!(matches!(
                     vm.run_with_host_diagnostic_steps(&mut DefaultHost::default(), &mut recorder),
-                    Err(ivm::VMError::PrivacyViolation)
+                    Err(ivm::VMError::Trap(VmTrap::PrivacyViolation))
                 ));
                 let record = &recorder.records()[0];
                 assert!(matches!(record.outcome, DiagnosticStepOutcome::Trapped(_)));

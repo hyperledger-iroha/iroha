@@ -94,6 +94,29 @@ impl<
         self.require_storage().and(result)
     }
 
+    /// Preflight only. Check the exact source, key and storage before recording a one-use signing intent.
+    pub(crate) fn preflight_setup_signing(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+    ) -> Result<(), KagemushaWalletProviderErrorV1> {
+        let KagemushaWalletSlotStatusV1::Released(marker) = self.status(slot)? else {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "setup.requires_released",
+            });
+        };
+        if marker.head().map(|(_, _, capsule)| capsule) != Some(source)
+            || marker.payment_key() != key
+        {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "setup.source",
+            });
+        }
+        self.drain_archive(slot)?;
+        self.require_storage()
+    }
+
     /// Native setup owner has authenticated and derived this exact body from its selected head.
     /// This private path grants neither receipt signing nor foreign signing access.
     pub(crate) fn sign_setup(
@@ -109,25 +132,47 @@ impl<
                 field: "setup.domain",
             });
         }
-        let KagemushaWalletSlotStatusV1::Released(marker) = self.status(slot)? else {
-            return Err(KagemushaWalletProviderErrorV1::Invalid {
-                field: "setup.requires_released",
-            });
-        };
-        if marker.head().map(|(_, _, capsule)| capsule) != Some(source)
-            || marker.payment_key() != key
-        {
-            return Err(KagemushaWalletProviderErrorV1::Invalid {
-                field: "setup.source",
-            });
-        }
-        // Archive records staged by the open call (the signed plan's) are durable before the
-        // payment key signs.
-        self.drain_archive(slot)?;
-        self.require_storage()?;
+        self.preflight_setup_signing(slot, source, key)?;
         let result = kagemusha_wallet_sign_domain_v1(&self.platform, slot, key, domain, body)
             .map_err(Into::into);
         self.require_storage().and(result)
+    }
+
+    /// Publish the hardware result at the protected Request journal's precommitted address
+    /// before performing any other operation. No unpersisted signature is returned.
+    pub(crate) fn sign_setup_to_archive(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &[u8],
+        address: &[u8; 32],
+    ) -> Result<Vec<u8>, KagemushaWalletProviderErrorV1> {
+        self.preflight_setup_signing(slot, source, key)?;
+        let signature = kagemusha_wallet_sign_domain_v1(
+            &self.platform,
+            slot,
+            key,
+            KagemushaWalletSigningDomainV1::Request,
+            body,
+        )?;
+        self.with_archive(slot, |archive| {
+            archive.write_record(address, signature.as_raw_bytes())
+        })?;
+        self.drain_archive(slot)?;
+        self.with_archive(slot, |archive| {
+            let bytes = archive.read_record(address, 64)?.ok_or(
+                KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                    object: "future Request signature readback",
+                },
+            )?;
+            if bytes.as_slice() != signature.as_raw_bytes() {
+                return Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                    object: "future Request signature readback",
+                });
+            }
+            Ok(bytes.as_slice().to_vec())
+        })
     }
 }
 

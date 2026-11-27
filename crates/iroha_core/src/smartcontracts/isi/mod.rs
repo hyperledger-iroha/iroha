@@ -31,6 +31,7 @@ pub(crate) mod helpers;
 pub mod identifier;
 /// KAGEMUSHA wallet ledger execution.
 pub mod kagemusha_wallet;
+use kagemusha_wallet::dispatch_spartan;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
@@ -132,6 +133,36 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
         .as_any()
         .downcast_ref::<T>()
         .map(|isi| isi.clone().execute(authority, state_transaction))
+}
+
+/// The carrier staging boundary borrows its original bounded artifact instead of cloning it.
+trait ExecuteOriginalCarrierArtifact {
+    fn execute_original(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error>;
+}
+impl ExecuteOriginalCarrierArtifact
+    for iroha_data_model::isi::runtime_carrier::StageRuntimeCarrierArtifactV1
+{
+    fn execute_original(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::runtime::generic_carriers::artifact_staging::execute_original(self, authority, state)
+    }
+}
+fn dispatch_original_carrier_artifact<T: ExecuteOriginalCarrierArtifact + 'static>(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    instruction
+        .as_any()
+        .downcast_ref::<T>()
+        .map(|instruction| instruction.execute_original(authority, state))
 }
 /// The three retained AMX instructions share their exact registered fields with execution.
 /// Their owned Execute implementations delegate to the same body for ordinary owned callers.
@@ -336,6 +367,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_spartan::<iroha_data_model::isi::kagemusha_wallet::spartan::InstallKagemushaSpartanProgramsV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_spartan::<iroha_data_model::isi::kagemusha_wallet::spartan::ActivateKagemushaSpartanV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_spartan::<iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<iroha_data_model::isi::nft_market::OfferNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::BuyNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::CancelNftOfferV1>,
@@ -394,6 +428,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::taira_activation::ScheduleTairaTimeIronwoodV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::taira_read_scope::ScheduleTairaReadScopeV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::child_runtime::AuthorizeChildRuntimeActionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::child_runtime::AttestChildRuntimeSupportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_original_carrier_artifact::<iroha_data_model::isi::runtime_carrier::StageRuntimeCarrierArtifactV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -425,6 +462,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::RequestGameUnitExportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::ivm_c10::RegisterSmartContractCodeC10V1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::ivm_c10::RegisterTriggerC10V1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::runtime_retirement::RetireRuntimeDefinitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ReserveGameUnitImportV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportReservedGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -435,6 +474,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     // The anonymous Parliament family records facts, intents and credentials; it moves no
     // asset. Core derives every authority its reducer needs (design §8.1).
+    dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::CreateAnonymousRuntimeUpgradeAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::CreateAnonymousParliamentAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::SubmitAnonymousParliamentTransitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -957,6 +997,7 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
     >;
     let restricted_read: InstructionHandler = dispatch_restricted_dataspace_read_successor;
+    let spartan_ledger: InstructionHandler = kagemusha_wallet::dispatch_spartan_ledger;
     let native_amx_begin: InstructionHandler =
         dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1>;
     let native_amx_prepare: InstructionHandler =
@@ -970,6 +1011,13 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
     let native_game_import: InstructionHandler =
         dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1>;
     std::collections::BTreeMap::from([
+        (
+            crate::runtime::catalog::additions::KAGEMUSHA_SPARTAN.module,
+            std::collections::BTreeMap::from([(
+                iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1::WIRE_ID,
+                spartan_ledger,
+            )]),
+        ),
         (
             crate::runtime::catalog::additions::NATIVE_AMX_CAPTURE.module,
             std::collections::BTreeMap::from([
@@ -1284,10 +1332,15 @@ mod registry_dispatch_tests {
         assert_reviewed_initial_family(family, &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             family,
-            1,
-            &(BTreeSet::from([core::any::type_name::<
-                iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
-            >()])),
+            4,
+            &(BTreeSet::from([
+                core::any::type_name::<
+                    iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+                >(),
+                core::any::type_name::<
+                    iroha_data_model::isi::kagemusha_wallet::spartan::UnloadKagemushaSpartanV1,
+                >(),
+            ])),
         );
     }
     #[test]

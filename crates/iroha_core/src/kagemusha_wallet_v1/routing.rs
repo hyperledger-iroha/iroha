@@ -7,6 +7,52 @@ use iroha_data_model::isi::kagemusha_wallet::{
 use iroha_model_base::topology::DataSpaceId;
 use mv::storage::StorageReadOnly as _;
 
+/// Read the same registered reserve scope in queue admission and execution.
+pub(crate) enum Operation<'a> {
+    Ledger(&'a KagemushaWalletLedgerV1),
+    Registered {
+        scheme: &'a Digest,
+        asset: &'a Digest,
+    },
+}
+impl<'a> Operation<'a> {
+    pub(crate) fn from_instruction(
+        instruction: &'a dyn iroha_data_model::isi::Instruction,
+    ) -> Option<Self> {
+        use iroha_data_model::isi::kagemusha_wallet::spartan::{
+            ActivateKagemushaSpartanV1, InstallKagemushaSpartanProgramsV1, UnloadKagemushaSpartanV1,
+        };
+        let value = instruction.as_any();
+        if let Some(op) = value.downcast_ref::<KagemushaWalletLedgerV1>() {
+            return Some(Self::Ledger(op));
+        }
+        if let Some(op) = value.downcast_ref::<InstallKagemushaSpartanProgramsV1>() {
+            return Some(Self::Registered {
+                scheme: &op.scheme,
+                asset: &op.asset,
+            });
+        }
+        if let Some(op) = value.downcast_ref::<ActivateKagemushaSpartanV1>() {
+            return Some(Self::Registered {
+                scheme: &op.scheme,
+                asset: &op.asset,
+            });
+        }
+        value
+            .downcast_ref::<UnloadKagemushaSpartanV1>()
+            .map(|op| Self::Registered {
+                scheme: &op.scheme,
+                asset: &op.asset,
+            })
+    }
+    pub(crate) fn dataspace(self, world: &impl WorldReadOnly) -> Result<DataSpaceId> {
+        match self {
+            Self::Ledger(op) => dataspace(world, op),
+            Self::Registered { scheme, asset } => registered_dataspace(world, *scheme, *asset),
+        }
+    }
+}
+
 pub fn dataspace(
     world: &impl WorldReadOnly,
     instruction: &KagemushaWalletLedgerV1,
@@ -76,6 +122,13 @@ pub fn dataspace(
             value.body.asset_digest
         }
     };
+    registered_dataspace(world, scheme, asset)
+}
+fn registered_dataspace(
+    world: &impl WorldReadOnly,
+    scheme: Digest,
+    asset: Digest,
+) -> Result<DataSpaceId> {
     let key = storage::key(storage::REGISTRATION, scheme, asset);
     let bytes = world
         .kagemusha_wallet_ledger()

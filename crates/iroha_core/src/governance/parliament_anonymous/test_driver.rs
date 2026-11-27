@@ -107,11 +107,29 @@ pub(super) fn proposal_digest() -> Digest512 {
     proposal_digest_v1(&proposal()).expect("a canonical proposal")
 }
 
-/// The network of every test attempt.
+thread_local! {
+    static SIGNED_FIXTURE_NETWORK: std::cell::Cell<Option<NetworkId>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run the same reducer driver against the original signed genesis of a service fixture.
+pub(super) fn on_signed_fixture_network<T>(id: NetworkId, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<NetworkId>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SIGNED_FIXTURE_NETWORK.set(self.0);
+        }
+    }
+    let _guard = Restore(SIGNED_FIXTURE_NETWORK.replace(Some(id)));
+    run()
+}
+
+/// The fixed component network, or the signed service network bound to this driver invocation.
 pub(super) fn network() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::prehashed([0x5a; Hash::LENGTH]),
-    ))
+    SIGNED_FIXTURE_NETWORK.get().unwrap_or_else(|| {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x5a; Hash::LENGTH]),
+        ))
+    })
 }
 
 /// The candidate-testing purpose of the genesis policy.
@@ -323,6 +341,33 @@ impl Driver {
             height: CREATED_HEIGHT,
             now_ms: CREATED_MS,
             citizens: citizens(citizens_count),
+        }
+    }
+
+    /// The same lifecycle driver with an exact alternate proposal, used by runtime G3 tests.
+    pub(super) fn for_proposal(proposal: ProposalKind, risk: RiskTierV1) -> Self {
+        let snapshot =
+            AnonymousGovernanceAttemptV1::new_v1(ProposalContentId::derive_v1(&proposal), 0, risk);
+        let expected = GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: proposal.governed_subject_id_v1().expect("proposal subject"),
+        });
+        let state = AnonymousParliamentAttemptStateV1::try_new(
+            candidate(),
+            snapshot,
+            policy(),
+            proposal,
+            expected,
+            AnonymousAttemptOriginV1 {
+                created_at_ms: CREATED_MS,
+                randomness_redraws_before_attempt: 0,
+            },
+        )
+        .expect("new attempt");
+        Self {
+            state,
+            height: CREATED_HEIGHT,
+            now_ms: CREATED_MS,
+            citizens: citizens(40),
         }
     }
 
@@ -570,7 +615,12 @@ impl Driver {
     /// Run a fresh attempt to its Policy Jury in Reflection: qualification, one initial
     /// generation where every primary accepts, and every public finding.
     pub(super) fn at_policy_reflection(risk_tier: RiskTierV1) -> Self {
-        let mut driver = Self::new(risk_tier, 40);
+        Self::new(risk_tier, 40).drive_to_policy_reflection()
+    }
+
+    /// Run this newly created exact proposal to Policy Jury Reflection.
+    pub(super) fn drive_to_policy_reflection(self) -> Self {
+        let mut driver = self;
         driver.qualify();
         driver.register_initial();
         driver.advance_to_slot();
@@ -626,8 +676,8 @@ impl Driver {
         self.block(closing_ms - self.now_ms);
         BallotClosureRecordV1 {
             network_id: network(),
-            proposal_content_id: content(),
-            proposal_digest: proposal_digest(),
+            proposal_content_id: self.state.attempt().proposal_content_id,
+            proposal_digest: *self.state.proposal_digest(),
             governance_attempt_id: self.id(),
             election_attempt_id: sealed.election_attempt_id,
             body_instance_id: sealed.body_instance_id,

@@ -10,7 +10,11 @@ use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     Identifiable,
     block::{
-        SignedBlock, consensus::SumeragiDiagnosticsStatus, execution_output::ExecutionOutputV1,
+        SignedBlock,
+        consensus::SumeragiDiagnosticsStatus,
+        execution_output::{
+            ExecutionOutputC10V1, ExecutionOutputV1, ExecutionSourceC10V1, TransactionRejectionRef,
+        },
     },
     events::{
         EventBox, EventFilterBox,
@@ -926,12 +930,13 @@ fn smoke_transaction_result_in_block(
             if !is_match {
                 return None;
             }
-            let (_, output) = block.network_output_at(u32::try_from(input_index).ok()?)?;
-            Some(match output.result.as_ref() {
+            let (_, output) =
+                block.network_execution_output_at(u32::try_from(input_index).ok()?)?;
+            Some(match output.result().as_ref() {
                 Ok(_) => Ok(block.header().height().get()),
                 Err(reason) => Err(ToriiError::SmokeRejected {
                     hash: encode_lower_hex(tx_hash.as_ref()),
-                    reason: rejection_message(reason),
+                    reason: profiled_rejection_message(reason),
                 }),
             })
         })
@@ -943,15 +948,36 @@ const UNRECORDED_REJECTION: &str = "Torii did not report a rejection reason";
 /// One line naming a rejection and its causes, worded like Torii's explorer record, such as
 /// `Validation failed: Operation is not permitted: Can't mint an asset …`.
 fn rejection_message(reason: &TransactionRejectionReason) -> String {
-    use iroha_data_model::ValidationFail;
+    profiled_rejection_message(TransactionRejectionRef::Baseline(reason))
+}
+
+fn profiled_rejection_message(reason: TransactionRejectionRef<'_>) -> String {
+    use iroha_data_model::{
+        ValidationFail,
+        ivm_c10::{TransactionRejectionReasonC10V1, ValidationFailC10V1},
+    };
     let message = match reason {
-        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error)) => {
+        TransactionRejectionRef::Baseline(TransactionRejectionReason::Validation(
+            ValidationFail::InstructionFailed(error),
+        ))
+        | TransactionRejectionRef::C10(TransactionRejectionReasonC10V1::Validation(
+            ValidationFailC10V1::InstructionFailed(error),
+        )) => {
             format!("Validation failed: Instruction execution failed: {error}")
         }
-        TransactionRejectionReason::Validation(fail) => format!("Validation failed: {fail}"),
+        TransactionRejectionRef::Baseline(TransactionRejectionReason::Validation(fail)) => {
+            format!("Validation failed: {fail}")
+        }
+        TransactionRejectionRef::C10(TransactionRejectionReasonC10V1::Validation(fail)) => {
+            format!("Validation failed: {fail}")
+        }
         reason => {
-            let mut message = reason.to_string();
-            let mut source = std::error::Error::source(reason);
+            let error: &dyn std::error::Error = match reason {
+                TransactionRejectionRef::Baseline(reason) => reason,
+                TransactionRejectionRef::C10(reason) => reason,
+            };
+            let mut message = error.to_string();
+            let mut source = error.source();
             while let Some(error) = source {
                 message.push_str(": ");
                 message.push_str(&error.to_string());
@@ -962,19 +988,10 @@ fn rejection_message(reason: &TransactionRejectionReason) -> String {
     };
     message.chars().take(MAX_REJECTION_MESSAGE_CHARS).collect()
 }
-/// The rejection an explorer transaction record carries, worded like [`rejection_message`].
-///
-/// The canonical encoded reason is authoritative; the explorer's own wording is used only
-/// when that encoding cannot be read. `None` when the record carries no rejection.
+/// Display the bounded message in an explorer transaction record. The explorer
+/// does not identify the result family needed to decode a structured rejection.
 fn explorer_rejection_message(record: &json::Value) -> Option<String> {
     let rejection = record.get("rejection_reason")?;
-    if let Some(reason) = rejection
-        .get("reason")
-        .cloned()
-        .and_then(|reason| json::from_value::<TransactionRejectionReason>(reason).ok())
-    {
-        return Some(rejection_message(&reason));
-    }
     let message = rejection.get("message")?.as_str()?.trim();
     (!message.is_empty()).then(|| message.chars().take(MAX_REJECTION_MESSAGE_CHARS).collect())
 }
@@ -2587,18 +2604,19 @@ impl BlockSummary {
             .filter(|output| {
                 matches!(
                     output,
-                    ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+                    ExecutionOutputV1::Time(_)
+                        | ExecutionOutputV1::TimeWithLifecycle(_)
+                        | ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+                            source: ExecutionSourceC10V1::Time { .. },
+                            ..
+                        })
                 )
             })
             .count();
         let rejected_transaction_count = block
             .execution_outputs()
             .iter()
-            .filter(|output| {
-                output
-                    .network()
-                    .is_some_and(|row| row.result.as_ref().is_err())
-            })
+            .filter(|output| output.network_index().is_some() && output.result().is_err())
             .count();
         let signature_count = block.signatures().len();
         Self {

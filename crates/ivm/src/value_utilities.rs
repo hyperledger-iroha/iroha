@@ -1,5 +1,6 @@
 //! Deterministic, bounded public value encoding and UTF-8/byte operations.
 
+use crate::error::{VmDeferral, VmTrap};
 use std::io::Cursor;
 
 use crate::{IVM, PointerType, VMError, syscalls, value_record};
@@ -14,12 +15,14 @@ const BASE_GAS: u64 = 32;
 const ENVELOPE: usize = 39;
 
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(crate::ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        crate::ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn codec_error(error: norito::Error) -> VMError {
     match error {
         norito::Error::AllocationFailed { .. } => unavailable(),
-        _ => VMError::NoritoInvalid,
+        _ => VMError::Trap(VmTrap::NoritoInvalid),
     }
 }
 
@@ -34,7 +37,7 @@ impl Scratch {
         let reservation = pool
             .map(|pool| pool.try_reserve_bytes(length))
             .transpose()
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(length).map_err(|_| unavailable())?;
         bytes.resize(length, 0);
@@ -48,14 +51,14 @@ impl Scratch {
 fn preflight(vm: &IVM, gas: u64) -> Result<(), VMError> {
     crate::host::preflight_reserved_syscall_gas(vm, gas)?;
     if vm.syscall_reserved_gas() == 0 && vm.remaining_gas() < gas {
-        return Err(VMError::OutOfGas);
+        return Err(VMError::Trap(VmTrap::OutOfGas));
     }
     Ok(())
 }
 fn payload(vm: &IVM, pointer: u64, kind: PointerType) -> Result<&[u8], VMError> {
     let tlv = vm.validate_tlv(pointer)?;
     if tlv.type_id != kind {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(tlv.payload)
 }
@@ -68,7 +71,7 @@ fn quote_payload(
     vm.ensure_public_register(register)?;
     let size = crate::host::quote_tlv_payload_len_at(vm, vm.register(register), kind)?;
     if size > maximum {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(size)
 }
@@ -93,7 +96,7 @@ where
             )
         })
         .transpose()
-        .map_err(VMError::AllocationDeferred)?;
+        .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
     let context = match reservation.as_mut() {
         Some(reservation) => {
             norito::core::DecodeBudgetContext::from_reservation(limits, reservation)
@@ -111,14 +114,14 @@ fn blob_envelope(bytes: &[u8], pool: Option<&AllocationBudget>) -> Result<Scratc
         bytes
             .len()
             .checked_add(ENVELOPE)
-            .ok_or(VMError::NoritoInvalid)?,
+            .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?,
         pool,
     )?;
     output.bytes[..2].copy_from_slice(&(PointerType::Blob as u16).to_be_bytes());
     output.bytes[2] = 1;
     output.bytes[3..7].copy_from_slice(
         &u32::try_from(bytes.len())
-            .map_err(|_| VMError::NoritoInvalid)?
+            .map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?
             .to_be_bytes(),
     );
     output.bytes[7..7 + bytes.len()].copy_from_slice(bytes);
@@ -138,7 +141,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         syscalls::SYSCALL_UTF8_VALIDATE => utf8(vm, &mut gas),
         syscalls::SYSCALL_VALUE_ENCODE => encode(vm, false, &mut gas),
         syscalls::SYSCALL_VALUE_TO_STRING => encode(vm, true, &mut gas),
-        _ => return Err(VMError::UnknownSyscall(number)),
+        _ => return Err(VMError::Trap(VmTrap::UnknownSyscall(number))),
     };
     result.map(|()| gas).map_err(|error| {
         if error.metered_gas().is_some() {
@@ -165,7 +168,7 @@ fn concat(vm: &mut IVM, gas: &mut u64) -> Result<(), VMError> {
     let length = left_len
         .checked_add(right_len)
         .filter(|length| *length <= MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
-        .ok_or(VMError::NoritoInvalid)?;
+        .ok_or(VMError::Trap(VmTrap::NoritoInvalid))?;
     *gas = BASE_GAS + 2 * length as u64;
     preflight(vm, *gas)?;
     let left = payload(vm, vm.register(10), PointerType::Blob)?;
@@ -225,13 +228,14 @@ fn encode(vm: &mut IVM, text: bool, gas: &mut u64) -> Result<(), VMError> {
                     .iter()
                     .any(|node| matches!(node, Node::StateCursor(_)))
             {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
             if text && !matches!(schema.nodes.as_slice(), [Node::Leaf(kind)] if scalar_kind(*kind))
             {
-                return Err(VMError::DecodeError);
+                return Err(VMError::Trap(VmTrap::DecodeError));
             }
-            let words = usize::try_from(vm.register(12)).map_err(|_| VMError::DecodeError)?;
+            let words =
+                usize::try_from(vm.register(12)).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
             let available = if vm.syscall_reserved_gas() == 0 {
                 vm.remaining_gas()
             } else {
@@ -245,7 +249,9 @@ fn encode(vm: &mut IVM, text: bool, gas: &mut u64) -> Result<(), VMError> {
                 available.saturating_sub(*gas),
             )
             .map_err(|error| VMError::metered(*gas, error))?;
-            *gas = gas.checked_add(quote.gas).ok_or(VMError::OutOfGas)?;
+            *gas = gas
+                .checked_add(quote.gas)
+                .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
             preflight(vm, *gas)?;
             let captured = match pool.as_ref() {
                 Some(pool) => Captured::Funded(value_record::capture_value_record_funded(
@@ -267,16 +273,18 @@ fn encode(vm: &mut IVM, text: bool, gas: &mut u64) -> Result<(), VMError> {
             } else {
                 let length = norito::canonical_frame_len(captured.get()).map_err(codec_error)?;
                 if length > MAX_ENTRYPOINT_RETURN_RECORD_BYTES {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
-                *gas = gas.checked_add(length as u64).ok_or(VMError::OutOfGas)?;
+                *gas = gas
+                    .checked_add(length as u64)
+                    .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
                 preflight(vm, *gas)?;
                 let mut bytes = Scratch::new(length, pool.as_ref())?;
                 let mut writer = Cursor::new(bytes.bytes.as_mut_slice());
                 norito::core::write_canonical_to_writer(captured.get(), &mut writer)
                     .map_err(codec_error)?;
                 if writer.position() != length as u64 {
-                    return Err(VMError::NoritoInvalid);
+                    return Err(VMError::Trap(VmTrap::NoritoInvalid));
                 }
                 blob_envelope(&bytes.bytes, pool.as_ref())
             }
@@ -300,13 +308,13 @@ fn scalar_text(
     gas: &mut u64,
 ) -> Result<Scratch, VMError> {
     let [Node::Leaf(kind)] = schema.nodes.as_slice() else {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     };
     if let (Kind::Bool, [Atom::Bool(value)]) = (kind, record.atoms.as_slice()) {
         return format_value(value, pool, vm, gas);
     }
     let [Atom::Pointer(envelope)] = record.atoms.as_slice() else {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     };
     let tlv = crate::pointer_abi::validate_tlv_bytes(envelope)?;
     macro_rules! display {
@@ -318,7 +326,7 @@ fn scalar_text(
     }
     match kind {
         Kind::String => format_value(
-            &std::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?,
+            &std::str::from_utf8(tlv.payload).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?,
             pool,
             vm,
             gas,
@@ -339,7 +347,7 @@ fn scalar_text(
             tlv.payload,
             |value| format_value(value.as_quantity(), pool, vm, gas),
         ),
-        _ => Err(VMError::DecodeError),
+        _ => Err(VMError::Trap(VmTrap::DecodeError)),
     }
 }
 // Public Int is signed 512-bit. Decimal digits and division scratch are fixed
@@ -400,8 +408,10 @@ fn format_value(
         }
     }
     let mut count = Count(0);
-    write!(&mut count, "{value}").map_err(|_| VMError::NoritoInvalid)?;
-    *gas = gas.checked_add(count.0 as u64).ok_or(VMError::OutOfGas)?;
+    write!(&mut count, "{value}").map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
+    *gas = gas
+        .checked_add(count.0 as u64)
+        .ok_or(VMError::Trap(VmTrap::OutOfGas))?;
     preflight(vm, *gas)?;
     let mut bytes = Scratch::new(count.0, pool)?;
     struct Writer<'a> {
@@ -426,9 +436,9 @@ fn format_value(
         bytes: &mut bytes.bytes,
         position: 0,
     };
-    write!(&mut writer, "{value}").map_err(|_| VMError::NoritoInvalid)?;
+    write!(&mut writer, "{value}").map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     if writer.position != count.0 {
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     blob_envelope(&bytes.bytes, pool)
 }

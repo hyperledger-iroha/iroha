@@ -1,6 +1,7 @@
 //! Register logger admission, invocation identity and host-callback custody.
 
 use super::{HostRegisterLogIsolation, IVM, VMError, zk};
+use crate::error::VmDeferral;
 mod event_counts;
 pub(crate) use event_counts::RootArguments;
 
@@ -8,6 +9,15 @@ pub(crate) use event_counts::RootArguments;
 /// Reserved quote and body callbacks borrow this same owner in sequence.
 pub(crate) struct PreparedHostRegisterLog {
     isolation: Option<HostRegisterLogIsolation>,
+}
+
+/// A trace restoration failure makes publication impossible. Retain a local
+/// cause already returned by the host, including its original pool observation.
+pub(super) fn first_local_host_refusal(host: Result<u64, VMError>, restore: VMError) -> VMError {
+    match host {
+        Err(error) if error.execution_deferral().is_some() => error.into_unmetered(),
+        Ok(_) | Err(_) => restore,
+    }
 }
 
 impl IVM {
@@ -44,9 +54,9 @@ impl IVM {
             self.reg_log = None;
             self.clear_zk_trace_logs();
             self.memory.clear_tracking();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let replacement = zk::SharedRegLog::try_new(self.memory.allocation_budget())?;
         if let Some(previous) = &self.reg_log {
@@ -65,7 +75,6 @@ impl IVM {
         self.reg_log.clone()
     }
     pub(super) fn clear_zk_trace_logs(&mut self) {
-        self.proof_state_epoch = self.proof_state_epoch.wrapping_add(1);
         self.mem_log.scrub();
         if let Some(log) = &self.reg_log {
             log.lock().scrub();
@@ -100,18 +109,15 @@ impl IVM {
                 stale_log.lock().scrub();
             }
             self.clear_zk_trace_logs();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         let detached_log = zk::SharedRegLog::try_new(self.memory.allocation_budget())?;
         Ok(PreparedHostRegisterLog {
             isolation: Some(HostRegisterLogIsolation {
                 invocation_log,
                 detached_log,
-                proof_state_epoch: self.proof_state_epoch,
-                code_hash: self.code_hash,
-                zk_mode: self.zk_mode,
             }),
         })
     }
@@ -125,9 +131,9 @@ impl IVM {
             return if active.is_none() {
                 Ok(None)
             } else {
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     crate::error::ExecutionDeferral::LocalInvariantViolation,
-                ))
+                )))
             };
         };
         if !active
@@ -139,16 +145,13 @@ impl IVM {
                 .is_none_or(|log| !zk::SharedRegLog::ptr_eq(log, &isolation.invocation_log))
             || self.host_trace_log_detached
             || self.host_trace_invocation_log.is_some()
-            || self.proof_state_epoch != isolation.proof_state_epoch
-            || self.code_hash != isolation.code_hash
-            || self.zk_mode != isolation.zk_mode
         {
             isolation.invocation_log.lock().scrub();
             isolation.detached_log.lock().scrub();
             self.clear_zk_trace_logs();
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         self.reg_log = Some(isolation.detached_log.clone());
         self.host_trace_log_detached = true;
@@ -156,9 +159,6 @@ impl IVM {
         Ok(Some(HostRegisterLogIsolation {
             invocation_log: isolation.invocation_log.clone(),
             detached_log: isolation.detached_log.clone(),
-            proof_state_epoch: isolation.proof_state_epoch,
-            code_hash: isolation.code_hash,
-            zk_mode: isolation.zk_mode,
         }))
     }
     pub(super) fn restore_host_register_log(
@@ -177,18 +177,15 @@ impl IVM {
                 .host_trace_invocation_log
                 .as_ref()
                 .is_some_and(|active| zk::SharedRegLog::ptr_eq(active, &isolation.invocation_log))
-            || self.proof_state_epoch != isolation.proof_state_epoch
-            || self.code_hash != isolation.code_hash
-            || self.zk_mode != isolation.zk_mode
         {
             isolation.invocation_log.lock().scrub();
             isolation.detached_log.lock().scrub();
             self.host_trace_log_detached = false;
             self.clear_zk_trace_logs();
             self.host_trace_invocation_log = None;
-            return Err(VMError::ExecutionDeferred(
+            return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 crate::error::ExecutionDeferral::LocalInvariantViolation,
-            ));
+            )));
         }
         isolation.detached_log.lock().scrub();
         self.host_trace_log_detached = false;

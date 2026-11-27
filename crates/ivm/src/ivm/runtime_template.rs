@@ -2,6 +2,7 @@
 
 use super::{Memory, PrivateMemoryRanges, Registers, TraceMode};
 use crate::cache_memory::strong_owner::StrongOwner;
+use crate::error::VmDeferral;
 use std::sync::Arc;
 
 /// Immutable shared baseline used to reset a warmed VM to its post-load state.
@@ -45,7 +46,9 @@ pub(super) struct RuntimeTemplateBacking {
 impl RuntimeTemplate {
     pub(super) fn owner_allocation_bytes() -> Result<usize, crate::VMError> {
         let overflow = || {
-            crate::VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
+            crate::VMError::Deferred(VmDeferral::AllocationDeferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow,
+            ))
         };
         let data = norito::core::owned_arc_allocation_bytes::<RuntimeTemplateData>()
             .map_err(|_| overflow())?;

@@ -139,13 +139,8 @@ impl ExplorerTransactionProof {
                 ));
             }
         };
-        let Some(output) = selected.output.network() else {
-            return Err(eyre!(
-                "Explorer transaction proof requires a Network output"
-            ));
-        };
         if transaction.network_id() != Some(network_id)
-            || output.input_index != selected.entrypoint_proof.leaf_index()
+            || !crate::query::plausible_network_proofs(selected)
         {
             return Err(eyre!(
                 "Explorer transaction proof source/output binding differs"

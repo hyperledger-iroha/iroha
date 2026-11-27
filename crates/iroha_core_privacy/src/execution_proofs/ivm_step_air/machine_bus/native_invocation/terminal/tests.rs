@@ -7,6 +7,7 @@ use ivm::{
     PreparedContract, VMError, encoding::wide as enc, execution_memory::ExecutionMemoryLease,
     execution_packets::CaptureError, instruction::wide,
 };
+use ivm_abi::error::VmTrap;
 use packet::{AFTER, BEFORE, ENABLED};
 
 fn artifact(cycles: u64, additions: usize) -> PreparedContract {
@@ -121,7 +122,7 @@ fn one_short_padding_gas_refuses_without_publishing_original_output() {
         let occupied = budget.try_reserve_bytes(19).unwrap();
         assert!(matches!(
             capture(artifact(limit, additions), gas, &budget),
-            Err(CaptureError::Execution(VMError::OutOfGas))
+            Err(CaptureError::Execution(VMError::Trap(VmTrap::OutOfGas)))
         ));
         assert_eq!(budget.reserved_bytes(), 19);
         drop(occupied);

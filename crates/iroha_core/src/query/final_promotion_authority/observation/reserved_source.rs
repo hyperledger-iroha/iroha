@@ -176,9 +176,9 @@ fn authenticate_reserved_entry(
         )
         .ok_or(Error::Execution)?;
     let (_, output) = block
-        .network_output_at(row.reserved_origin.entry_index)
+        .network_execution_output_at(row.reserved_origin.entry_index)
         .ok_or(Error::Execution)?;
-    if !output.result.is_ok()
+    if !output.result().is_ok()
         || target.block_time_ms() != row.reserved.recorded_at_unix_ms
         || native_signed_entry_frame_v1(actual)
             .map_err(|error| error.map_rejection(|_| Error::Execution))?

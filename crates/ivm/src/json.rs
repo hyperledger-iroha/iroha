@@ -4,9 +4,8 @@
 //! through floating-point conversion or a host JSON integer-width limit.
 //! Options use the public argument/return representation: `{"some": value}` or `{"none": true}`.
 //! In particular, `Some(())` is `{"some": null}` and remains distinct from `None`.
-use crate::{
-    IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls,
-};
+use crate::error::VmTrap;
+use crate::{PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls};
 use core::{fmt::Write as _, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -41,7 +40,7 @@ pub const JSON_BUILD_GAS_BASE: u64 = 32;
 /// Base gas for one typed JSON getter.
 pub const JSON_TYPED_GETTER_GAS_BASE: u64 = 16;
 /// Address translation used for compiler literal TLVs.
-pub type AddressResolver = fn(&IVM, u64) -> u64;
+pub type AddressResolver = fn(&dyn crate::host::SyscallContext, u64) -> u64;
 /// Result metadata for one typed getter execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JsonGetterCost {
@@ -108,10 +107,10 @@ impl StackSafeJsonValues {
     }
     fn into_only(mut self) -> Result<StackSafeJsonValue, VMError> {
         if self.0.len() != 1 {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
         Ok(StackSafeJsonValue::new(
-            self.0.pop().ok_or(VMError::DecodeError)?,
+            self.0.pop().ok_or(VMError::Trap(VmTrap::DecodeError))?,
         ))
     }
 }
@@ -157,7 +156,7 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
             Task::Byte(value) => output.push(value),
             Task::Value { value, depth } => {
                 if depth > njson::MAX_JSON_VALUE_NESTING_DEPTH {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 match value {
                     njson::Value::Null => output.push_str("null"),
@@ -170,7 +169,7 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
                         JsonNumber::U128(value) => output.push_str(&value.to_string()),
                         JsonNumber::F64(value) => {
                             if !value.is_finite() {
-                                return Err(VMError::DecodeError);
+                                return Err(VMError::Trap(VmTrap::DecodeError));
                             }
                             const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0;
                             if value.fract() == 0.0 && value.abs() <= F64_SAFE_INT {
@@ -182,7 +181,9 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
                     },
                     njson::Value::String(value) => escape_json_string(value, &mut output),
                     njson::Value::Array(values) => {
-                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let child_depth = depth
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         output.push('[');
                         pending.push(Task::Byte(']'));
                         for (index, value) in values.iter().enumerate().rev() {
@@ -196,7 +197,9 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
                         }
                     }
                     njson::Value::Object(object) => {
-                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let child_depth = depth
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         output.push('{');
                         pending.push(Task::Byte('}'));
                         for (index, (key, value)) in object.iter().enumerate().rev() {
@@ -219,18 +222,18 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
     // `Value`; the only otherwise-invalid payloads (non-finite numbers and
     // excessive depth) were rejected explicitly. Avoid reparsing into another
     // deeply nested owned `Value` merely to validate and recursively drop it.
-    Json::from_raw_json(output).map_err(|_| VMError::DecodeError)
+    Json::from_raw_json(output).map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
 fn load_tlv<'a>(
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     address: u64,
     expected: PointerType,
     resolver: AddressResolver,
 ) -> Result<pointer_abi::Tlv<'a>, VMError> {
     let resolved = resolver(vm, address);
-    let tlv = vm.validate_tlv(resolved)?;
+    let tlv = vm.public_tlv(resolved)?;
     if tlv.type_id != expected
-        || !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), tlv.type_id)
+        || !pointer_abi::is_type_allowed_for_policy(vm.quote().syscall_policy(), tlv.type_id)
     {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
@@ -238,7 +241,7 @@ fn load_tlv<'a>(
                 tlv.type_id
             );
         }
-        return Err(VMError::NoritoInvalid);
+        return Err(VMError::Trap(VmTrap::NoritoInvalid));
     }
     Ok(tlv)
 }
@@ -246,48 +249,59 @@ fn decode_canonical<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
-    ivm_abi::codec::decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
+    ivm_abi::codec::decode_canonical_norito(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))
 }
-fn allocate_tlv(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> Result<u64, VMError> {
-    let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+fn allocate_tlv(
+    vm: &mut dyn crate::host::SyscallContext,
+    pointer_type: PointerType,
+    payload: &[u8],
+) -> Result<u64, VMError> {
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| VMError::Trap(VmTrap::NoritoInvalid))?;
     let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
     envelope.push(1);
     envelope.extend_from_slice(&payload_len.to_be_bytes());
     envelope.extend_from_slice(payload);
     envelope.extend_from_slice(Hash::new(payload).as_ref());
-    vm.alloc_host_tlv(&envelope)
+    vm.alloc_encoded_host_tlv(&envelope)
 }
 fn decode_construction_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     address: u64,
     resolver: AddressResolver,
 ) -> Result<(JsonConstructionSchemaV1, usize), VMError> {
     let tlv = load_tlv(vm, address, PointerType::NoritoBytes, resolver)?;
     if tlv.payload.len() > MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let schema: JsonConstructionSchemaV1 = decode_canonical(tlv.payload)?;
     if !schema.validate() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     Ok((schema, tlv.payload.len()))
 }
-fn read_word_table(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
+fn read_word_table(
+    vm: &dyn crate::host::SyscallContext,
+    address: u64,
+    count: usize,
+) -> Result<Vec<u64>, VMError> {
     if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
-    let byte_len = count.checked_mul(8).ok_or(VMError::DecodeError)?;
+    let byte_len = count
+        .checked_mul(8)
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
     if byte_len == 0 {
         return Ok(Vec::new());
     }
     vm.ensure_public_memory(
         address,
-        u64::try_from(byte_len).map_err(|_| VMError::DecodeError)?,
+        u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
     )?;
-    let bytes = vm.memory.load_region(
+    let bytes = vm.tracked_public_bytes(
         address,
-        u64::try_from(byte_len).map_err(|_| VMError::DecodeError)?,
+        u64::try_from(byte_len).map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
     )?;
     Ok(bytes
         .as_chunks::<8>()
@@ -302,12 +316,18 @@ fn state_node_word_count(
 ) -> Result<usize, VMError> {
     let mut visited = 0usize;
     loop {
-        visited = visited.checked_add(1).ok_or(VMError::DecodeError)?;
+        visited = visited
+            .checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         if visited > MAX_STATE_VALUE_NODES {
-            return Err(VMError::DecodeError);
+            return Err(VMError::Trap(VmTrap::DecodeError));
         }
-        let node = nodes.get(*node_index).ok_or(VMError::DecodeError)?;
-        *node_index = node_index.checked_add(1).ok_or(VMError::DecodeError)?;
+        let node = nodes
+            .get(*node_index)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+        *node_index = node_index
+            .checked_add(1)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
         match node {
             StateValueNodeV1::Option => {}
             StateValueNodeV1::List { .. }
@@ -318,12 +338,12 @@ fn state_node_word_count(
             | StateValueNodeV1::StateCursor(_) => return Ok(1),
             StateValueNodeV1::Struct { .. }
             | StateValueNodeV1::Tuple { .. }
-            | StateValueNodeV1::Result => return Err(VMError::DecodeError),
+            | StateValueNodeV1::Result => return Err(VMError::Trap(VmTrap::DecodeError)),
         }
     }
 }
 fn pointer_leaf<'a>(
-    vm: &'a IVM,
+    vm: &'a dyn crate::host::SyscallContext,
     word: u64,
     pointer_type: PointerType,
     resolver: AddressResolver,
@@ -334,7 +354,7 @@ fn pointer_leaf<'a>(
     Ok(tlv.payload)
 }
 fn convert_leaf(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     kind: StateValueKindV1,
     word: u64,
     resolver: AddressResolver,
@@ -347,26 +367,26 @@ fn convert_leaf(
         StateValueKindV1::Int => {
             let payload = pointer_leaf(vm, word, PointerType::Int, resolver, stats)?;
             let value = IntValueV1::decode_frame(payload)
-                .map_err(|_| VMError::DecodeError)?
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                 .into_int();
             njson::Value::from(value.to_string())
         }
         StateValueKindV1::Bool => match word {
             0 => njson::Value::Bool(false),
             1 => njson::Value::Bool(true),
-            _ => return Err(VMError::DecodeError),
+            _ => return Err(VMError::Trap(VmTrap::DecodeError)),
         },
         StateValueKindV1::Decimal => {
             let payload = pointer_leaf(vm, word, PointerType::Decimal, resolver, stats)?;
             let value = DecimalValueV1::decode_frame(payload)
-                .map_err(|_| VMError::DecodeError)?
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                 .into_numeric();
             njson::Value::from(value.to_string())
         }
         StateValueKindV1::Quantity => {
             let payload = pointer_leaf(vm, word, PointerType::Quantity, resolver, stats)?;
             let quantity = QuantityValueV1::decode_frame(payload)
-                .map_err(|_| VMError::DecodeError)?
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                 .into_quantity();
             njson::Value::from(quantity.to_string())
         }
@@ -374,7 +394,7 @@ fn convert_leaf(
             let payload = pointer_leaf(vm, word, PointerType::Blob, resolver, stats)?;
             njson::Value::from(
                 core::str::from_utf8(payload)
-                    .map_err(|_| VMError::DecodeError)?
+                    .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
                     .to_owned(),
             )
         }
@@ -382,7 +402,7 @@ fn convert_leaf(
             let payload = pointer_leaf(vm, word, PointerType::Json, resolver, stats)?;
             let json: Json = decode_canonical(payload)?;
             json.try_into_any_norito()
-                .map_err(|_| VMError::DecodeError)?
+                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?
         }
         StateValueKindV1::Bytes => {
             let payload = pointer_leaf(vm, word, PointerType::Blob, resolver, stats)?;
@@ -419,11 +439,11 @@ fn convert_leaf(
         StateValueKindV1::AxtDescriptor
         | StateValueKindV1::ProofBlob
         | StateValueKindV1::SoracloudRequest
-        | StateValueKindV1::SoracloudResponse => return Err(VMError::DecodeError),
+        | StateValueKindV1::SoracloudResponse => return Err(VMError::Trap(VmTrap::DecodeError)),
     })
 }
 fn convert_state_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     schema: &StateValueSchemaV1,
     words: &[u64],
     resolver: AddressResolver,
@@ -448,7 +468,7 @@ fn convert_state_schema(
     let mut root_end = 0usize;
     state_node_word_count(&schema.nodes, &mut root_end)?;
     if root_end != schema.nodes.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut pending = vec![Pending::Convert {
         nodes: &schema.nodes,
@@ -468,10 +488,14 @@ fn convert_state_schema(
                 mut depth,
             } => loop {
                 if depth > MAX_STATE_VALUE_NODES || words.len() != 1 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
-                let node = nodes.get(node_start).ok_or(VMError::DecodeError)?;
-                let next_node = node_start.checked_add(1).ok_or(VMError::DecodeError)?;
+                let node = nodes
+                    .get(node_start)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                let next_node = node_start
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 match node {
                     StateValueNodeV1::Option => {
                         let handle = words[0];
@@ -482,12 +506,13 @@ fn convert_state_schema(
                         let mut child_end = child_start;
                         let child_words = state_node_word_count(nodes, &mut child_end)?;
                         if child_end != node_end {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let layout = crate::sum::SumLayoutV1::option(
-                            u64::try_from(child_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(child_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let (some, payload) = crate::sum::read_words(vm, handle, layout)?;
                         // Each Option creates exactly one object member, including None.
                         // Its tag spelling and punctuation are charged in the encoded output.
@@ -503,11 +528,13 @@ fn convert_state_schema(
                         });
                         node_start = child_start;
                         words = payload;
-                        depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        depth = depth
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                     }
                     StateValueNodeV1::List { element, capacity } => {
                         if next_node != node_end {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         if crate::dev_env::decode_trace_enabled() {
                             eprintln!(
@@ -520,19 +547,22 @@ fn convert_state_schema(
                         let element_words =
                             state_node_word_count(&element.nodes, &mut element_end)?;
                         if element_end != element.nodes.len() {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let layout = crate::list::ListLayoutV1::try_new(
                             u64::from(*capacity),
-                            u64::try_from(element_words).map_err(|_| VMError::DecodeError)?,
+                            u64::try_from(element_words)
+                                .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
                         )
-                        .map_err(|_| VMError::DecodeError)?;
+                        .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         let items = crate::list::read_words(vm, words[0], layout)?;
                         stats.collection_elements =
                             stats.collection_elements.saturating_add(items.len());
                         let value_start = completed.len();
                         let item_count = items.len();
-                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let child_depth = depth
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         pending.push(Pending::FinishList {
                             value_start,
                             item_count,
@@ -548,52 +578,58 @@ fn convert_state_schema(
                     }
                     StateValueNodeV1::StateCursor(key) => {
                         if next_node != node_end {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         let payload =
                             pointer_leaf(vm, words[0], PointerType::NoritoBytes, resolver, stats)?;
-                        let cursor = iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
+                        let cursor = iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(payload).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
                         if Some(cursor.key_schema_hash) != iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(key) {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         completed.push(njson::Value::from(format!("0x{}", hex::encode(payload))));
                         break;
                     }
                     StateValueNodeV1::Unit => {
                         if next_node != node_end || words[0] != 0 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         completed.push(njson::Value::Null);
                         break;
                     }
                     StateValueNodeV1::Error(error) => {
                         if next_node != node_end {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        let code = u32::try_from(words[0]).map_err(|_| VMError::DecodeError)?;
-                        let variant = error.variant(code).ok_or(VMError::DecodeError)?;
+                        let code = u32::try_from(words[0])
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                        let variant = error
+                            .variant(code)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         completed.push(njson::Value::String(variant.name.clone()));
                         break;
                     }
                     StateValueNodeV1::Enum(descriptor) => {
                         if next_node != node_end {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
-                        let code = u32::try_from(words[0]).map_err(|_| VMError::DecodeError)?;
-                        let variant = descriptor.variant(code).ok_or(VMError::DecodeError)?;
+                        let code = u32::try_from(words[0])
+                            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
+                        let variant = descriptor
+                            .variant(code)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         completed.push(njson::Value::String(variant.name.clone()));
                         break;
                     }
                     StateValueNodeV1::Leaf(kind) => {
                         if next_node != node_end {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         completed.push(convert_leaf(vm, *kind, words[0], resolver, stats)?);
                         break;
                     }
                     StateValueNodeV1::Struct { .. }
                     | StateValueNodeV1::Tuple { .. }
-                    | StateValueNodeV1::Result => return Err(VMError::DecodeError),
+                    | StateValueNodeV1::Result => return Err(VMError::Trap(VmTrap::DecodeError)),
                 }
             },
             Pending::FinishList {
@@ -601,16 +637,19 @@ fn convert_state_schema(
                 item_count,
             } => {
                 if completed.len().checked_sub(value_start) != Some(item_count) {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let values = completed.split_off(value_start);
                 completed.push(njson::Value::Array(values));
             }
             Pending::FinishSome { value_start } => {
                 if completed.len().checked_sub(value_start) != Some(1) {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
-                let value = completed.0.pop().ok_or(VMError::DecodeError)?;
+                let value = completed
+                    .0
+                    .pop()
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 let mut object = njson::Map::new();
                 object.insert("some".to_owned(), value);
                 completed.push(njson::Value::Object(object));
@@ -620,7 +659,7 @@ fn convert_state_schema(
     completed.into_only()
 }
 fn convert_construction_schema(
-    vm: &IVM,
+    vm: &dyn crate::host::SyscallContext,
     nodes: &[JsonConstructionNodeV1],
     node_index: &mut usize,
     words: &[u64],
@@ -642,7 +681,7 @@ fn convert_construction_schema(
         },
     }
     if nodes.is_empty() || nodes.len() > MAX_JSON_CONSTRUCTION_NODES_V1 {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let mut next_node = *node_index;
     let mut next_word = *word_index;
@@ -652,14 +691,20 @@ fn convert_construction_schema(
     while let Some(task) = pending.pop() {
         match task {
             Pending::Convert { depth } => {
-                visited = visited.checked_add(1).ok_or(VMError::DecodeError)?;
+                visited = visited
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 if visited > MAX_JSON_CONSTRUCTION_NODES_V1
                     || depth > MAX_JSON_CONSTRUCTION_NODES_V1
                 {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
-                let node = nodes.get(next_node).ok_or(VMError::DecodeError)?;
-                next_node = next_node.checked_add(1).ok_or(VMError::DecodeError)?;
+                let node = nodes
+                    .get(next_node)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                next_node = next_node
+                    .checked_add(1)
+                    .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                 match node {
                     JsonConstructionNodeV1::Object { keys } => {
                         if keys.len() > MAX_JSON_LITERAL_ITEMS_V1
@@ -668,19 +713,21 @@ fn convert_construction_schema(
                                 .enumerate()
                                 .any(|(index, key)| keys[..index].contains(key))
                         {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         stats.collection_elements =
                             stats.collection_elements.saturating_add(keys.len());
                         let value_start = completed.len();
-                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let child_depth = depth
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let required_tasks = pending
                             .len()
                             .checked_add(1)
                             .and_then(|count| count.checked_add(keys.len()))
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if required_tasks > MAX_JSON_CONSTRUCTION_NODES_V1 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         pending.push(Pending::FinishObject { keys, value_start });
                         pending.extend(
@@ -690,19 +737,21 @@ fn convert_construction_schema(
                     JsonConstructionNodeV1::Array { arity } => {
                         let item_count = usize::from(*arity);
                         if item_count > MAX_JSON_LITERAL_ITEMS_V1 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         stats.collection_elements =
                             stats.collection_elements.saturating_add(item_count);
                         let value_start = completed.len();
-                        let child_depth = depth.checked_add(1).ok_or(VMError::DecodeError)?;
+                        let child_depth = depth
+                            .checked_add(1)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         let required_tasks = pending
                             .len()
                             .checked_add(1)
                             .and_then(|count| count.checked_add(item_count))
-                            .ok_or(VMError::DecodeError)?;
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         if required_tasks > MAX_JSON_CONSTRUCTION_NODES_V1 {
-                            return Err(VMError::DecodeError);
+                            return Err(VMError::Trap(VmTrap::DecodeError));
                         }
                         pending.push(Pending::FinishArray {
                             value_start,
@@ -713,9 +762,15 @@ fn convert_construction_schema(
                         );
                     }
                     JsonConstructionNodeV1::Value { schema } => {
-                        let count = schema.word_count().ok_or(VMError::DecodeError)?;
-                        let end = next_word.checked_add(count).ok_or(VMError::DecodeError)?;
-                        let value_words = words.get(next_word..end).ok_or(VMError::DecodeError)?;
+                        let count = schema
+                            .word_count()
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                        let end = next_word
+                            .checked_add(count)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+                        let value_words = words
+                            .get(next_word..end)
+                            .ok_or(VMError::Trap(VmTrap::DecodeError))?;
                         next_word = end;
                         completed.push_guarded(convert_state_schema(
                             vm,
@@ -729,7 +784,7 @@ fn convert_construction_schema(
             }
             Pending::FinishObject { keys, value_start } => {
                 if completed.len().checked_sub(value_start) != Some(keys.len()) {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let values = completed.split_off(value_start);
                 let mut object = njson::Map::new();
@@ -744,7 +799,7 @@ fn convert_construction_schema(
                 item_count,
             } => {
                 if completed.len().checked_sub(value_start) != Some(item_count) {
-                    return Err(VMError::DecodeError);
+                    return Err(VMError::Trap(VmTrap::DecodeError));
                 }
                 let values = completed.split_off(value_start);
                 completed.push(njson::Value::Array(values));
@@ -790,20 +845,26 @@ pub fn typed_getter_gas(input_bytes: usize, output_bytes: usize) -> u64 {
 ///
 /// Returns a deterministic VM error for a malformed schema, word table, handle,
 /// pointer payload, or unsupported source type.
-pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
-    let (schema, schema_bytes) = decode_construction_schema(vm, vm.register(10), resolver)?;
+pub fn build_json(
+    vm: &mut dyn crate::host::SyscallContext,
+    resolver: AddressResolver,
+) -> Result<u64, VMError> {
+    let (schema, schema_bytes) = decode_construction_schema(vm, vm.public_register(10)?, resolver)?;
     if crate::dev_env::decode_trace_enabled() {
         eprintln!(
             "[json] decoded construction schema: nodes={} bytes={schema_bytes}",
             schema.nodes.len()
         );
     }
-    let expected_words = schema.word_count().ok_or(VMError::DecodeError)?;
-    let supplied_words = usize::try_from(vm.register(12)).map_err(|_| VMError::DecodeError)?;
+    let expected_words = schema
+        .word_count()
+        .ok_or(VMError::Trap(VmTrap::DecodeError))?;
+    let supplied_words =
+        usize::try_from(vm.public_register(12)?).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     if supplied_words != expected_words {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
-    let words = read_word_table(vm, vm.register(11), supplied_words)?;
+    let words = read_word_table(vm, vm.public_register(11)?, supplied_words)?;
     if crate::dev_env::decode_trace_enabled() {
         eprintln!(
             "[json] read construction word table: expected={expected_words} supplied={supplied_words} words={words:x?}"
@@ -829,7 +890,7 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
         );
     }
     if node_index != schema.nodes.len() || word_index != words.len() {
-        return Err(VMError::DecodeError);
+        return Err(VMError::Trap(VmTrap::DecodeError));
     }
     let json = json_from_value_ref(value.value());
     drop(value);
@@ -850,7 +911,7 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
     if crate::dev_env::decode_trace_enabled() {
         eprintln!("[json] allocated JSON result: pointer=0x{pointer:x}");
     }
-    vm.set_register(10, pointer);
+    vm.write_register(10, pointer)?;
     Ok(gas)
 }
 fn canonical_account(raw: &str) -> Option<AccountId> {
@@ -960,38 +1021,39 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterPayload> {
 ///
 /// A key absent from the JSON object produces `Option::none`. A non-object
 /// root, or a present field whose JSON value is not the getter's exact
-/// canonical type, traps with [`VMError::DecodeError`]: malformed input never
+/// canonical type, traps with [`crate::error::VmTrap::DecodeError`]: malformed input never
 /// reads as absent. Malformed pointer envelopes or noncanonical root/key
 /// payloads remain deterministic VM errors.
 pub fn typed_getter(
-    vm: &mut IVM,
+    vm: &mut dyn crate::host::SyscallContext,
     number: u32,
     resolver: AddressResolver,
 ) -> Result<JsonGetterCost, VMError> {
     if !syscalls::is_json_getter_syscall(number) {
-        return Err(VMError::UnknownSyscall(number));
+        return Err(VMError::Trap(VmTrap::UnknownSyscall(number)));
     }
-    let json_tlv = load_tlv(vm, vm.register(10), PointerType::Json, resolver)?;
-    let key_tlv = load_tlv(vm, vm.register(11), PointerType::Name, resolver)?;
+    let json_tlv = load_tlv(vm, vm.public_register(10)?, PointerType::Json, resolver)?;
+    let key_tlv = load_tlv(vm, vm.public_register(11)?, PointerType::Name, resolver)?;
     let json: Json = decode_canonical(json_tlv.payload)?;
     let key: Name = decode_canonical(key_tlv.payload)?;
     let value = StackSafeJsonValue::new(
         json.try_into_any_norito()
-            .map_err(|_| VMError::DecodeError)?,
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?,
     );
     let converted = match value.value().as_object() {
-        None => Err(VMError::DecodeError),
+        None => Err(VMError::Trap(VmTrap::DecodeError)),
         Some(object) => match object.get(key.as_ref()) {
             None => Ok(None),
             Some(field) => getter_value(number, field)
                 .map(Some)
-                .ok_or(VMError::DecodeError),
+                .ok_or(VMError::Trap(VmTrap::DecodeError)),
         },
     };
     drop(value);
     let converted = converted?;
     let input_bytes = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
-    let layout = crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+    let layout =
+        crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
     let (handle, payload_bytes) = match converted {
         Some(GetterPayload::Pointer(pointer_type, payload)) => {
             let pointer = allocate_tlv(vm, pointer_type, &payload)?;
@@ -1006,7 +1068,7 @@ pub fn typed_getter(
         ),
         None => (crate::sum::allocate_words(vm, layout, 0, &[])?, 0),
     };
-    vm.set_register(10, handle);
+    vm.write_register(10, handle)?;
     Ok(JsonGetterCost {
         input_bytes,
         output_bytes: payload_bytes.saturating_add(16),
@@ -1015,6 +1077,8 @@ pub fn typed_getter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IVM;
+    use crate::error::VmTrap;
     use crate::{core_host::CoreHost, memory::Memory};
     use iroha_crypto::{Algorithm, KeyPair};
     use ivm_abi::{
@@ -1161,7 +1225,7 @@ mod tests {
         assert_ne!(alternate, canonical);
         assert!(matches!(
             decode_canonical::<JsonConstructionSchemaV1>(&alternate),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = to_bytes(&schema).expect("ambient JSON schema");
@@ -1324,7 +1388,7 @@ mod tests {
                         CoreHost::resolve_code_tlv_addr,
                         &mut BuildStats::default(),
                     ),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ));
                 let malformed_schema =
                     nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
@@ -1344,7 +1408,7 @@ mod tests {
                         CoreHost::resolve_code_tlv_addr,
                         &mut BuildStats::default(),
                     ),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ));
                 let mut node_index = 0usize;
                 assert!(matches!(
@@ -1357,7 +1421,7 @@ mod tests {
                 let mut too_many_index = 0usize;
                 assert!(matches!(
                     state_node_word_count(&too_many_options.nodes, &mut too_many_index),
-                    Err(VMError::DecodeError)
+                    Err(VMError::Trap(VmTrap::DecodeError))
                 ));
             })
             .expect("spawn small-stack JSON state test")
@@ -1451,7 +1515,7 @@ mod tests {
                         let handle = nested_some_options(&mut vm, wrappers, 1);
                         install_build_inputs(&mut vm, &schema, &[handle]);
                         let before = vm.register(10);
-                        assert!(matches!(build_json(&mut vm, CoreHost::resolve_code_tlv_addr), Err(VMError::DecodeError)));
+                        assert!(matches!(build_json(&mut vm, CoreHost::resolve_code_tlv_addr), Err(VMError::Trap(VmTrap::DecodeError))));
                         assert_eq!(vm.register(10), before, "over-limit tagged JSON is never published");
                     }
                 }
@@ -1471,7 +1535,7 @@ mod tests {
                         ],
                     };
                     install_build_inputs(&mut vm, &schema, &[deep_handle, 2]);
-                    assert!(matches!(build_json(&mut vm, CoreHost::resolve_code_tlv_addr), Err(VMError::DecodeError)), "the valid deep first sibling must be cleaned up after the later invalid Bool");
+                    assert!(matches!(build_json(&mut vm, CoreHost::resolve_code_tlv_addr), Err(VMError::Trap(VmTrap::DecodeError))), "the valid deep first sibling must be cleaned up after the later invalid Bool");
                 }
             })
             .expect("spawn small-stack JSON build test")
@@ -2183,7 +2247,7 @@ mod tests {
             let heap_before = vm.memory.heap_allocated_len();
             let gas_before = vm.remaining_gas();
             assert!(
-                matches!(typed_getter(&mut vm, number, CoreHost::resolve_code_tlv_addr), Err(VMError::UnknownSyscall(__actual_error_field)) if __actual_error_field == (number))
+                matches!(typed_getter(&mut vm, number, CoreHost::resolve_code_tlv_addr), Err(VMError::Trap(VmTrap::UnknownSyscall(__actual_error_field))) if __actual_error_field == (number))
             );
             assert_eq!(
                 [vm.register(10), vm.register(11), vm.register(12)],
@@ -2298,7 +2362,7 @@ mod tests {
                 CoreHost::resolve_code_tlv_addr,
             )
             .err(),
-            Some(VMError::DecodeError)
+            Some(VMError::Trap(VmTrap::DecodeError))
         ));
         let wrong: Name = "wrong".parse().expect("wrong-type key");
         let wrong_ptr = vm
@@ -2314,7 +2378,7 @@ mod tests {
                     CoreHost::resolve_code_tlv_addr,
                 )
                 .err(),
-                Some(VMError::DecodeError)
+                Some(VMError::Trap(VmTrap::DecodeError))
             ),
             "a present field of the wrong JSON type traps"
         );
@@ -2335,7 +2399,7 @@ mod tests {
                     CoreHost::resolve_code_tlv_addr,
                 )
                 .err(),
-                Some(VMError::DecodeError)
+                Some(VMError::Trap(VmTrap::DecodeError))
             ),
             "a non-object root traps"
         );
@@ -2400,7 +2464,10 @@ mod tests {
             (syscalls::SYSCALL_JSON_GET_BOOL, "number"),
         ] {
             assert!(
-                matches!(get(&mut vm, number, key), Err(VMError::DecodeError)),
+                matches!(
+                    get(&mut vm, number, key),
+                    Err(VMError::Trap(VmTrap::DecodeError))
+                ),
                 "{key} has the wrong JSON type"
             );
         }
@@ -2460,7 +2527,10 @@ mod tests {
             );
             if expected.is_none() && key != "missing" {
                 // A present field that is not a canonical decimal string traps.
-                assert!(matches!(result.err(), Some(VMError::DecodeError)), "{key}");
+                assert!(
+                    matches!(result.err(), Some(VMError::Trap(VmTrap::DecodeError))),
+                    "{key}"
+                );
                 continue;
             }
             result.expect("typed decimal getter");
@@ -2536,7 +2606,10 @@ mod tests {
             );
             if expected.is_none() && key.as_ref() != "missing" {
                 // A present field that is not a canonical quantity string traps.
-                assert!(matches!(result.err(), Some(VMError::DecodeError)), "{key}");
+                assert!(
+                    matches!(result.err(), Some(VMError::Trap(VmTrap::DecodeError))),
+                    "{key}"
+                );
                 continue;
             }
             result.expect("typed quantity getter");
@@ -2586,7 +2659,7 @@ mod tests {
         vm.set_register(12, 2);
         assert!(matches!(
             build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2618,7 +2691,7 @@ mod tests {
         assert!(
             matches!(
                 build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "quantity inputs must already use their unique canonical frame"
         );
@@ -2652,7 +2725,7 @@ mod tests {
         assert!(
             matches!(
                 build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             ),
             "Option::none cannot smuggle an inactive placeholder into JSON"
         );
@@ -2676,7 +2749,7 @@ mod tests {
         vm.set_register(12, 0);
         assert!(matches!(
             build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
     #[test]
@@ -2735,7 +2808,7 @@ mod tests {
                 syscalls::SYSCALL_JSON_GET_INT,
                 CoreHost::resolve_code_tlv_addr,
             ),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
         let json = Json::from(norito::json!({"count": 7}));
         let json_ptr = vm
@@ -2755,7 +2828,7 @@ mod tests {
                 syscalls::SYSCALL_JSON_GET_INT,
                 CoreHost::resolve_code_tlv_addr,
             ),
-            Err(VMError::DecodeError)
+            Err(VMError::Trap(VmTrap::DecodeError))
         ));
     }
 }

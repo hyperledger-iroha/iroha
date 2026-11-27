@@ -10,6 +10,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -88,7 +89,10 @@ fn balance_syscall_with_tlv_pointers() {
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE]);
     vm.load_program(&prog).unwrap();
     // Bob lacks permission -> PermissionDenied
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Grant and retry
     let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
@@ -161,7 +165,10 @@ fn transfer_syscall_with_tlv_pointers() {
     vm.set_register(14, 0);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED]);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     let mut wsv2 = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
@@ -173,7 +180,10 @@ fn transfer_syscall_with_tlv_pointers() {
     // Global-policy definition, not even the universal one.
     vm.set_register(14, Memory::INPUT_START + dataspace_offset);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     vm.set_register(14, 0);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer tlv syscall failed");
@@ -211,7 +221,10 @@ fn mint_syscall_with_tlv_pointers() {
     vm.set_register(12, Memory::INPUT_START + amount_offset);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET]);
     vm.load_program(&prog).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
     let host = WsvHost::new_with_subject(wsv2, bob.clone());

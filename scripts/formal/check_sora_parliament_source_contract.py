@@ -1732,6 +1732,21 @@ def require_anonymous_ballot_public_route() -> None:
     paths = tuple(re.findall(r'"(/v1/gov/anonymous-ballots[^"\n]*)"', strip_rust_comments(catalog)))
     if paths != tuple(row[2] for row in every):
         raise RuntimeError(f"{catalog_path}: anonymous-ballot route path set changed")
+    draft_rows = (("ATTEMPT", "attempts"), ("TRANSITION", "transitions"), ("CREDENTIAL", "credentials"))
+    draft_ids = tuple("GOV_ANONYMOUS_PARLIAMENT_" + tag + "_DRAFT" for tag, _ in draft_rows)
+    observed = tuple(re.findall(r"\bGOV_ANONYMOUS_PARLIAMENT_[A-Z_]+\b", mask_rust(catalog)))
+    if observed != draft_ids + draft_ids:
+        raise RuntimeError(f"{catalog_path}: authenticated anonymous Parliament draft set changed")
+    for (tag, segment), descriptor_id in zip(draft_rows, draft_ids):
+        owner = tag.lower()
+        path = f"/v1/gov/anonymous-parliament/{segment}/draft"
+        descriptor = (f'pub const {descriptor_id}: RouteDescriptor = app_signed_post('
+                      f'"governance.anonymous_parliament.{owner}.draft", "{path}", );')
+        mount = (f"{descriptor_id} => canonical_account_post(gov::anonymous_drafts::{owner}, "
+                 "app_state, runtime_governance_body_limit);")
+        if (compact_rust(strip_rust_comments(catalog)).count(compact_rust(descriptor)) != 1
+                or compact_rust(torii).count(compact_rust(mount)) != 1):
+            raise RuntimeError(f"{torii_path}: {descriptor_id} requires its bounded authenticated mount")
     gov_path = "crates/iroha_torii/src/gov.rs"
     gov = read(gov_path)
     for tag, operation, path, handler, owner in ANONYMOUS_BALLOT_PUBLIC_READS:

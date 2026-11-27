@@ -154,6 +154,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 zk_spartan::native::Error::Unavailable("exclusive Native installation custody"),
             ));
         }
+        let scheme = *self.installed.verifier().scheme();
         let Self {
             custody, originals, ..
         } = self;
@@ -162,7 +163,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         };
         Ok(
             crate::kagemusha_spartan_native::FutureRuntime::from_installed(
-                provider, parameters, originals,
+                provider, parameters, scheme, originals,
             ),
         )
     }

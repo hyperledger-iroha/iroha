@@ -37,6 +37,13 @@ class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long, p
         owner = 0
         return runtime
     }
+    /** Transfer the same unadmitted Native owner to the programs it already authenticated from its
+     * installed signed carrier. No program bytes are offered; a refusal retains this owner. */
+    @Synchronized internal fun openInstalledSpartan(): KagemushaSpartanRuntimeV1 {
+        val runtime = KagemushaSpartanRuntimeV1.openInstalled(handle(), platformOwner)
+        owner = 0
+        return runtime
+    }
     /** Transfer the existing owner only after Native authenticates exact live session originals. */
     @Synchronized internal fun startEnrollment(session: KagemushaWalletEnrollmentSessionOriginalsV1): KagemushaWalletEnrollmentV1 {
         val id = handle()

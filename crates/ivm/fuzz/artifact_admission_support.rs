@@ -1,5 +1,6 @@
 //! Shared artifact fuzz assertions with explicit local-refusal custody.
 
+use ivm_abi::error::VmTrap;
 use std::sync::Arc;
 
 use ivm::{
@@ -26,8 +27,8 @@ fn completed_rejection(
     }
     let diagnostic = error.to_string();
     Ok(match error.into_vm_error() {
-        VMError::InvalidMetadata => CompletedRejection::Invalid(diagnostic),
-        VMError::ArtifactAbiHashMismatch { expected, actual } => {
+        VMError::Trap(VmTrap::InvalidMetadata) => CompletedRejection::Invalid(diagnostic),
+        VMError::Trap(VmTrap::ArtifactAbiHashMismatch { expected, actual }) => {
             CompletedRejection::AbiHashMismatch {
                 diagnostic,
                 expected,
@@ -169,6 +170,7 @@ pub fn exercise_admission(artifact: &[u8]) -> Result<(), ContractArtifactError> 
 
 #[cfg(test)]
 mod tests {
+    use ivm_abi::error::VmDeferral;
     use std::task::{Context, Poll, Waker};
 
     use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
@@ -254,18 +256,18 @@ mod tests {
         };
         let error = ContractArtifactError::preparation(
             "fuzz custody fixture",
-            VMError::AllocationDeferred(refusal),
+            VMError::Deferred(VmDeferral::AllocationDeferred(refusal)),
         );
         let returned = completed_outcome::<()>(Err(error)).unwrap_err();
         assert!(returned.is_local_deferral());
         assert_eq!(budget.reserved_bytes(), 8);
         let original = export_local_refusal(returned);
-        let VMError::AllocationDeferred(AllocationRefusal::Capacity {
+        let VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
             requested_bytes,
             reserved_bytes,
             limit_bytes,
             release,
-        }) = original
+        })) = original
         else {
             panic!("local transport must return the exact allocation refusal variant");
         };
@@ -300,7 +302,9 @@ mod tests {
         assert!(matches!(finish_iteration(Ok(())), Corpus::Keep));
         let local = ContractArtifactError::preparation(
             "local fixture",
-            VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::ActiveMemoryCapacity,
+            )),
         );
         assert!(matches!(finish_iteration(Err(local)), Corpus::Reject));
     }

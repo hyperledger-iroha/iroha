@@ -307,7 +307,6 @@ fn four_validators_publish_native_sccp_finality_and_refuse_unqualified_launch() 
         );
         let rejection = committed
             .result()
-            .0
             .as_ref()
             .expect_err("the exact committed proposal must remain rejected");
         ensure!(
@@ -720,7 +719,7 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
             let details = client
                 .client()
                 .get_transaction_details(signed.hash_as_entrypoint())?;
-            ensure!(details.transaction.result().0.is_ok());
+            ensure!(details.transaction.result().is_ok());
             ensure!(
                 matches!(details.transaction.entrypoint(), TransactionEntrypoint::External(original) if original == signed)
             );

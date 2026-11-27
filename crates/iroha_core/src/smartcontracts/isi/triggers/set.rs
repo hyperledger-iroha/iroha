@@ -227,42 +227,59 @@ fn scheduled_progress_at_ms<'a>(
     since_ms: u64,
     next_height: u64,
 ) -> Option<u64> {
+    actions
+        .filter_map(|action| {
+            scheduled_action_deadline(
+                &action.filter,
+                action.metadata(),
+                action.repeats,
+                action.retry_state.map(|retry| retry.next_retry_at_ms),
+                since_ms,
+                next_height,
+            )
+        })
+        .min()
+}
+
+/// Earliest ledger-clock deadline for a single declared, funded scheduled action.
+pub(crate) fn scheduled_action_deadline(
+    filter: &TimeEventFilter,
+    metadata: &Metadata,
+    repeats: Repeats,
+    retry_ms: Option<u64>,
+    since_ms: u64,
+    next_height: u64,
+) -> Option<u64> {
     let registration_height = if next_height == 0 {
         u64::MAX
     } else {
         next_height
     };
-    actions
-        .filter_map(|action| {
-            let ExecutionTime::Schedule(schedule) = action.filter.0 else {
-                // PreCommit must never manufacture an idle block.
-                return None;
-            };
-            if !trigger_is_enabled(action.metadata())
-                || action.repeats.is_depleted()
-                || !trigger_was_registered_before_block(action.metadata(), registration_height)
-                || super::progress::remaining(action.metadata()) == 0
-            {
-                return None;
-            }
-            if let Some(retry) = action.retry_state {
-                return Some(retry.next_retry_at_ms);
-            }
-            let first = match schedule.period_ms {
-                Some(0) => return None,
-                Some(period) if since_ms > schedule.start_ms => {
-                    let periods = (since_ms - schedule.start_ms).div_ceil(period);
-                    schedule
-                        .start_ms
-                        .checked_add(periods.checked_mul(period)?)?
-                }
-                _ if schedule.start_ms >= since_ms => schedule.start_ms,
-                None => return None,
-                Some(_) => return None,
-            };
-            first.checked_add(1)
-        })
-        .min()
+    let ExecutionTime::Schedule(schedule) = filter.0 else {
+        return None;
+    };
+    if !trigger_is_enabled(metadata)
+        || repeats.is_depleted()
+        || !trigger_was_registered_before_block(metadata, registration_height)
+        || super::progress::remaining(metadata) == 0
+    {
+        return None;
+    }
+    if let Some(due) = retry_ms {
+        return Some(due);
+    }
+    let first = match schedule.period_ms {
+        Some(0) => return None,
+        Some(period) if since_ms > schedule.start_ms => {
+            let periods = (since_ms - schedule.start_ms).div_ceil(period);
+            schedule
+                .start_ms
+                .checked_add(periods.checked_mul(period)?)?
+        }
+        _ if schedule.start_ms >= since_ms => schedule.start_ms,
+        _ => return None,
+    };
+    first.checked_add(1)
 }
 /// Revalidate a time-trigger action immediately before invocation.
 pub(crate) fn time_trigger_action_is_due(
@@ -547,9 +564,15 @@ pub(crate) struct DataTriggerMatchSnapshot {
 fn validate_data_trigger_capacities<'a>(
     triggers: impl IntoIterator<Item = (&'a TriggerId, &'a LoadedAction<DataEventFilter>)>,
 ) -> core::result::Result<(), String> {
+    validate_data_trigger_authorities(triggers.into_iter().map(|(_, a)| &a.authority))
+}
+/// Check the single total and per-authority capacity across all data-trigger families.
+pub(crate) fn validate_data_trigger_authorities<'a>(
+    authorities: impl IntoIterator<Item = &'a AccountId>,
+) -> core::result::Result<(), String> {
     let mut total = 0_usize;
     let mut per_authority = BTreeMap::<&AccountId, usize>::new();
-    for (_, action) in triggers {
+    for authority in authorities {
         total = total.saturating_add(1);
         if total > super::isi::MAX_DATA_TRIGGERS_TOTAL {
             return Err(format!(
@@ -557,12 +580,12 @@ fn validate_data_trigger_capacities<'a>(
                 super::isi::MAX_DATA_TRIGGERS_TOTAL
             ));
         }
-        let count = per_authority.entry(&action.authority).or_default();
+        let count = per_authority.entry(authority).or_default();
         *count = count.saturating_add(1);
         if *count > super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY {
             return Err(format!(
                 "data trigger authority `{}` exceeds first-release maximum {}",
-                action.authority,
+                authority,
                 super::isi::MAX_DATA_TRIGGERS_PER_AUTHORITY
             ));
         }
@@ -1819,6 +1842,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
 }
 // Norito DTOs for Set serialization
 #[derive(norito::NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::ExecutableRefDto")]
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
@@ -1884,6 +1908,7 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
     }
 }
 #[derive(norito::NoritoSchema)]
+#[cfg_attr(test, derive(iroha_schema::IntoSchema))]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::LoadedActionDto")]
 #[derive(Encode, Decode, Clone)]
 struct LoadedActionDto<F> {
@@ -1894,6 +1919,31 @@ struct LoadedActionDto<F> {
     retry_policy: Option<TimeTriggerRetryPolicy>,
     retry_state: Option<TimeTriggerRetryState>,
     metadata: Metadata,
+}
+
+/// Owned counterpart of the contract projection, shared by byte conformance and schema evidence.
+#[cfg(test)]
+#[derive(Encode, iroha_schema::IntoSchema)]
+struct WorldContractDto {
+    original_contract: IvmBytecode,
+}
+
+/// Exact owned DTO shapes implemented by the borrowed World projections.
+#[cfg(test)]
+pub(crate) fn world_authority_structure(identity: &str) -> Option<iroha_schema::MetaMap> {
+    use iroha_schema::IntoSchema as _;
+    match identity {
+        "iroha:state:trigger-data-action:v1" => Some(LoadedActionDto::<DataEventFilter>::schema()),
+        "iroha:state:trigger-pipeline-action:v1" => {
+            Some(LoadedActionDto::<PipelineEventFilterBox>::schema())
+        }
+        "iroha:state:trigger-time-action:v1" => Some(LoadedActionDto::<TimeEventFilter>::schema()),
+        "iroha:state:trigger-by-call-action:v1" => {
+            Some(LoadedActionDto::<ExecuteTriggerEventFilter>::schema())
+        }
+        "iroha:state:trigger-contract-bytecode:v1" => Some(WorldContractDto::schema()),
+        _ => None,
+    }
 }
 impl<F: Clone> From<&LoadedAction<F>> for LoadedActionDto<F> {
     fn from(a: &LoadedAction<F>) -> Self {
@@ -2718,6 +2768,16 @@ impl<'block> SetTransaction<'block> {
     pub(crate) fn registration_generation(&self, id: &TriggerId) -> u64 {
         self.registration_generations.get(id).copied().unwrap_or(0)
     }
+    /// A C10 registration shares the transaction-local incarnation counter used by callback traversal.
+    pub(crate) fn register_c10_incarnation(&mut self, id: &TriggerId) {
+        let generation = self.advance_registration_generation();
+        self.registration_generations.insert(id.clone(), generation);
+    }
+    /// Discard an incarnation when its C10 action is removed.
+    pub(crate) fn remove_c10_incarnation(&mut self, id: &TriggerId) {
+        self.registration_generations.remove(id);
+        self.data_trigger_eligibility_generations.remove(id);
+    }
     fn advance_registration_generation(&mut self) -> u64 {
         self.next_registration_generation = self
             .next_registration_generation
@@ -2739,6 +2799,29 @@ impl<'block> SetTransaction<'block> {
     pub(crate) fn data_trigger_candidates(&self, event: &DataEvent) -> Vec<TriggerId> {
         self.data_trigger_index.candidates(event)
     }
+    /// Return the registration generation only for a continuously eligible incarnation.
+    pub(crate) fn eligible_data_generation(
+        &self,
+        snapshot: DataTriggerMatchSnapshot,
+        id: &TriggerId,
+    ) -> Option<u64> {
+        let generation = self.registration_generation(id);
+        let since = self
+            .data_trigger_eligibility_generations
+            .get(id)
+            .copied()
+            .unwrap_or(0);
+        (generation <= snapshot.generation_watermark && since <= snapshot.generation_watermark)
+            .then_some(generation)
+    }
+
+    /// A re-enabled data trigger cannot match an event captured while it was suspended.
+    pub(crate) fn data_trigger_reenabled(&mut self, id: &TriggerId) {
+        let generation = self.advance_registration_generation();
+        self.data_trigger_eligibility_generations
+            .insert(id.clone(), generation);
+    }
+
     /// Match a live candidate only if it was continuously eligible at capture.
     pub(crate) fn data_trigger_matching_generation(
         &self,
@@ -2746,17 +2829,7 @@ impl<'block> SetTransaction<'block> {
         id: &TriggerId,
         event: &DataEvent,
     ) -> Option<u64> {
-        let generation = self.registration_generation(id);
-        let eligible_since = self
-            .data_trigger_eligibility_generations
-            .get(id)
-            .copied()
-            .unwrap_or(0);
-        if generation > snapshot.generation_watermark
-            || eligible_since > snapshot.generation_watermark
-        {
-            return None;
-        }
+        let generation = self.eligible_data_generation(snapshot, id)?;
         let action = self.data_triggers.get(id)?;
         (trigger_is_enabled(action.metadata())
             && !action.repeats.is_depleted()

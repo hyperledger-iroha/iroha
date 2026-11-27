@@ -231,7 +231,7 @@ impl NativeTransactions {
                         matches!(entry, TransactionEntrypoint::External(actual) if actual == signed)
                     })
                     && let Ok(index) = u32::try_from(index)
-                    && block.network_output_at(index).is_some()
+                    && block.network_execution_output_at(index).is_some()
                 {
                     // Only a readiness hint. A failed native action also appears in this index.
                     // The purpose-specific opaque Check authenticates success and original rows;

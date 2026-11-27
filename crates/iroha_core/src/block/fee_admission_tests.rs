@@ -400,7 +400,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     );
     assert!(
         matches!(
-            rejection,
+            rejection.baseline().expect("baseline fee fixture"),
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
                 if message == &expected
         ),
@@ -1058,7 +1058,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     );
     assert!(
         matches!(
-            rejection,
+            rejection.baseline().expect("baseline fee fixture"),
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
                 if message == &expected
         ),
@@ -1368,7 +1368,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     );
     assert!(
         matches!(
-            rejection,
+            rejection.baseline().expect("baseline fee fixture"),
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
                 if message == &expected
         ),
@@ -1537,7 +1537,7 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         .expect("instruction rejection");
     assert!(
         matches!(
-            rejection,
+            rejection.baseline().expect("baseline fee fixture"),
             TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
                 iroha_data_model::isi::error::InstructionExecutionError::Find(
                     iroha_data_model::query::error::FindError::Domain(domain)
@@ -1745,7 +1745,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let expected = format!("Transaction sequence 5 for {payer_id} must exceed previous 5");
     assert!(
         matches!(
-            rejection,
+            rejection.baseline().expect("baseline fee fixture"),
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
                 if message == &expected
         ),
@@ -2290,7 +2290,7 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         .map(|(_, err)| err);
     assert!(
         matches!(
-            first_error,
+            first_error.map(|r| r.baseline().expect("baseline trigger fixture")),
             Some(TransactionRejectionReason::TriggerExecution(
                 iroha_data_model::transaction::error::TriggerExecutionFail::MaxDepthExceeded
             ))

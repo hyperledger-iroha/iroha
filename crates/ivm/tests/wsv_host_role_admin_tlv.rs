@@ -7,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
@@ -179,7 +180,10 @@ fn create_role_grant_and_revoke_affects_permissions() {
     vm.set_register(11, Memory::INPUT_START + tlv_bob.len() as u64 + 8);
     vm.set_register(12, Memory::INPUT_START + amount_offset);
     vm.load_program(&prog_mint).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::PermissionDenied))
+    ));
     // Delete role should succeed now that there are no assignees
     let rname = make_tlv(PointerType::Name as u16, b"minter");
     vm.memory.preload_input(0, &rname).expect("preload input");

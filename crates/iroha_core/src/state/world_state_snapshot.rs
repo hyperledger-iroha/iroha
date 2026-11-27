@@ -792,6 +792,66 @@ fn native_world_schema_selections_v1() -> Result<
 }
 
 impl State {
+    /// Bind retirement-only typed originals to the complete original certified pre-tail cut.
+    /// This method grants no authority to a caller-edited query view: its State-owned caller
+    /// acquires and retains the view privately, and every census element is checked here.
+    pub(in crate::state) fn authenticate_runtime_retirement_world(
+        &self,
+        view: &crate::state::StateQueryView<'_>,
+        tip: &CommittedBlock,
+    ) -> Result<(), WorldStateSnapshotError> {
+        self.with_native_world_state_snapshot_cut_v1(
+            tip,
+            None,
+            &self.ivm_execution_budget(),
+            |snapshot, _world| {
+                use crate::state::runtime_retirement_cut::original_hash;
+                use mv::storage::StorageReadOnly as _;
+                for (field, hash) in [
+                    (
+                        "world.runtime_selection",
+                        original_hash(view.world().runtime_selection())?,
+                    ),
+                    (
+                        "world.private_dataspaces",
+                        original_hash(view.world().private_dataspaces())?,
+                    ),
+                ] {
+                    require_target(snapshot, field, WorldStateElementKindV1::Cell, None, hash)?;
+                }
+                require_complete_table_count(
+                    snapshot,
+                    "world.runtime_definitions",
+                    view.world().runtime_definitions().iter().count(),
+                )?;
+                for (key, value) in view.world().runtime_definitions().iter() {
+                    require_target(
+                        snapshot,
+                        "world.runtime_definitions",
+                        WorldStateElementKindV1::Table,
+                        Some(original_hash(key)?),
+                        original_hash(value)?,
+                    )?;
+                }
+                require_complete_table_count(
+                    snapshot,
+                    "world.runtime_retirements",
+                    view.world().runtime_retirements().iter().count(),
+                )?;
+                for (key, value) in view.world().runtime_retirements().iter() {
+                    require_target(
+                        snapshot,
+                        "world.runtime_retirements",
+                        WorldStateElementKindV1::Table,
+                        Some(original_hash(key)?),
+                        original_hash(value)?,
+                    )?;
+                }
+                Ok(())
+            },
+        )
+    }
+
     /// Capture one current names cut before doing certificate or attestation work.
     /// The complete World and native pre-tail journal are checked while the short
     /// physical overlay is held. Both original height/generation fences run before

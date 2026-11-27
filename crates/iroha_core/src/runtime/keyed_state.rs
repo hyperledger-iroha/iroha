@@ -10,9 +10,38 @@ use iroha_data_model::{
     },
 };
 
+mod carrier_transition;
+pub(crate) mod checked;
+
+/// Validate the separately selected carrier shape using original published plus staged definitions.
+/// The installed native-only transition function below retains its existing schema semantics.
+pub(crate) fn validate_transition_with_definitions(
+    previous: &RootSelectionV1,
+    next: &RootSelectionV1,
+    published: &impl DefinitionLookup,
+) -> Result<(), String> {
+    let catalog = super::release_catalog().map_err(|error| error.to_string())?;
+    let carrier = catalog
+        .generic_carriers
+        .ok_or("carrier profile has no compiled owner")?;
+    if previous.commitment_profile == carrier.commitment
+        || next.commitment_profile == carrier.commitment
+        || next.kernel == carrier.kernel
+        || next
+            .installed_storage
+            .binary_search(&carrier.backing)
+            .is_ok()
+    {
+        carrier_transition::validate(previous, next, published)
+    } else {
+        validate_transition(previous, next)
+    }
+}
+
 /// Whether the committed selection explicitly selects this construction.
 pub fn selected(selection: &RootSelectionV1) -> bool {
     selection.commitment_profile == profile_id()
+        || selection.commitment_profile == iroha_data_model::runtime::carrier::keyed::profile_id()
 }
 
 /// A known keyed successor has exactly the compiled State owners. The predecessor

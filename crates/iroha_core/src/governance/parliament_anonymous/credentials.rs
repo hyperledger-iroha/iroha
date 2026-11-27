@@ -29,7 +29,7 @@ use iroha_data_model::{
             BallotBodyContextV1, BallotScopeV1, Digest512, ParliamentBallotBoardRecordV1,
             ParliamentCredentialRecordV1, ParliamentCredentialSourceV1,
             RegisterParliamentCredentialV1, SealedCredentialListPublishedV1,
-            anonymous_body_instance_id_v1,
+            checked_anonymous_body_instance_id_v1,
         },
         types::{AssignmentId, BodyElectionAttemptId, BodyInstanceId, ParliamentBody},
     },
@@ -325,7 +325,7 @@ impl AnonymousParliamentAttemptStateV1 {
             .roster_root(&seating.seats)
             .map_err(|error| Error::Seal(Box::new(error)))?;
         let body_instance_id =
-            anonymous_body_instance_id_v1(seating.election_attempt_id, &roster_root);
+            checked_anonymous_body_instance_id_v1(seating.election_attempt_id, &roster_root)?;
         let board = self.board_of(
             body,
             &roster,

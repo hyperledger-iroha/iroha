@@ -1521,6 +1521,111 @@ fn block_summary_and_smoke_join_keep_scheduled_outputs_separate_from_network_inp
     assert!(smoke_transaction_result_in_block(&block, &missing).is_none());
 }
 #[test]
+fn c10_block_observations_preserve_network_and_internal_result_owners() {
+    use iroha_data_model::{
+        block::execution_output::{PipelineEventPositionV1, PipelineInvocationV1},
+        governance::anonymous_ballot::{
+            BallotScopeV1, CastingClockEstablishedV1, GovernanceBlockStartEventV1,
+            GovernanceBlockStartOutputV1, GovernanceOutputAnchorV1,
+        },
+        ivm_c10::TransactionResultC10V1,
+    };
+    let mut block = sample_block();
+    let tx_hash = block.external_transactions().next().unwrap().hash();
+    let timestamp_ms = block.header().creation_time_ms;
+    let prelude = ExecutionOutputV1::GovernanceBlockStart(GovernanceBlockStartOutputV1 {
+        anchor: GovernanceOutputAnchorV1::CastingClockPrelude {
+            height: block.header().height().get(),
+            timestamp_ms,
+        },
+        event: GovernanceBlockStartEventV1::CastingClockEstablished(CastingClockEstablishedV1 {
+            scope: BallotScopeV1::new([1; 64]),
+            casting_window_ms: 1_000,
+            closing_ms: timestamp_ms + 1_000,
+        }),
+    });
+    let trigger = TriggerUseV1 {
+        trigger_id: "profiled_observer".parse().unwrap(),
+        registered_at_height: 0,
+        action_hash: Hash::new(b"observer trigger"),
+    };
+    let pipeline = ExecutionOutputV1::pipeline_output_limit_rejection(PipelineInvocationV1 {
+        event: PipelineEventPositionV1::Network(0),
+        candidate_index: 0,
+        trigger: trigger.clone(),
+    })
+    .into_c10_output_limit()
+    .unwrap();
+    let time = ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
+        schedule_index: 0,
+        event: TimeEvent {
+            interval: TimeInterval {
+                since_ms: 41_999,
+                length_ms: 1,
+            },
+        },
+        trigger,
+    })
+    .into_c10_output_limit()
+    .unwrap();
+    let network_rejected = ExecutionOutputV1::network_output_limit_rejection(0)
+        .into_c10_output_limit()
+        .unwrap();
+    let network_applied = ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+        source: ExecutionSourceC10V1::Network(0),
+        result: TransactionResultC10V1(Ok(Vec::new()), Vec::new(), None, Default::default()),
+        completions: Vec::new(),
+        trigger_lifecycle: None,
+    });
+    for (network, rejected) in [(network_rejected, true), (network_applied, false)] {
+        block
+            .set_execution_outputs(
+                vec![prelude.clone(), network, pipeline.clone(), time.clone()],
+                u64::from(!rejected),
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                &SAMPLE_OUTPUT_LIMITS,
+            )
+            .unwrap();
+        block.validate_output_merkle_cache().unwrap();
+        let summary = BlockSummary::from_block(&block);
+        assert_eq!(
+            (
+                summary.transaction_count,
+                summary.rejected_transaction_count,
+                summary.time_trigger_count
+            ),
+            (1, usize::from(rejected), 1)
+        );
+        let detail = crate::block_detail::BlockDetail::from_block(&block, 0);
+        assert_eq!(detail.transactions[0].output_index, Some(1));
+        assert_eq!(detail.rejected(), usize::from(rejected));
+        assert_eq!(detail.invocations.len(), 2);
+        for (index, kind) in ["Pipeline trigger", "Time trigger"].into_iter().enumerate() {
+            let row = &detail.invocations[index];
+            assert_eq!(row.output_index, index + 2);
+            assert_eq!(row.kind, kind);
+            assert_eq!(row.trigger, "profiled_observer");
+            let crate::block_detail::Outcome::Rejected { reason, detail } = &row.outcome else {
+                panic!("expected the original rejection")
+            };
+            assert!(reason.contains("execution output exceeds consensus byte limit"));
+            assert!(detail.starts_with("C10("));
+        }
+        let smoke =
+            smoke_transaction_result_in_block(&block, &tx_hash).expect("exact C10 Network output");
+        if rejected {
+            assert!(
+                matches!(smoke, Err(ToriiError::SmokeRejected { hash, reason }) if hash == tx_hash.to_string() && reason.contains("execution output exceeds consensus byte limit"))
+            );
+        } else {
+            assert_eq!(smoke.unwrap(), block.header().height().get());
+        }
+    }
+}
+#[test]
 fn signed_smoke_lookup_skips_anonymous_ballot_results() {
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder},

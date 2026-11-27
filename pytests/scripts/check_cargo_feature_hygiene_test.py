@@ -1001,12 +1001,15 @@ def test_model_governance_feature_cannot_return_as_an_alias_or_gate() -> None:
 
 
 def test_parliament_ballot_model_dev_features_are_explicit(monkeypatch) -> None:
-    """Dev-only transparent APIs cannot implicitly enable foundational defaults."""
+    """Block construction and certificate fixtures stay exclusive to explicit test dependencies."""
     manifest = _manifest_path("iroha_parliament_ballot")
     document = FEATURE_HYGIENE._load_toml(manifest)
     assert document["dependencies"]["iroha_data_model"]["features"] == ["application-model"]
     assert document["dependencies"]["iroha_data_model"]["default-features"] is False
-    assert document["dev-dependencies"]["iroha_data_model"]["features"] == ["transparent_api"]
+    assert document["dev-dependencies"]["iroha_data_model"]["features"] == [
+        "transparent_api",
+        "test-fixtures",
+    ]
     assert document["dev-dependencies"]["iroha_data_model"]["default-features"] is False
     assert FEATURE_HYGIENE.check_repository(ROOT) == []
     changed = copy.deepcopy(document)

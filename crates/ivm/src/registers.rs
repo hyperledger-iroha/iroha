@@ -9,6 +9,7 @@
 //! authentication path cover the C10 file; a baseline image's commitment is
 //! [`Registers::baseline_merkle_root`] over all 256 registers. A C10 image never writes the
 //! upper registers, so they stay zero and public.
+use crate::error::VmTrap;
 use crate::zk::{RegEvent, record_register_event};
 use crate::{VMError, error::ExecutionDeferral, parallel::REGISTER_COUNT};
 use iroha_allocation::{AllocationBudget, AllocationCharge};
@@ -21,6 +22,30 @@ use std::{
 };
 mod fixed_path;
 pub use fixed_path::REGISTER_MERKLE_PATH_DEPTH;
+/// Register-event policy selected before entering the interpreter loop.
+pub(crate) trait RegisterObserver: Copy {
+    /// Consume a lazy proof-bearing event only when this invocation owns a logger.
+    fn observe(self, build: impl FnOnce() -> RegEvent);
+}
+
+/// A register access outside the interpreter, or inside a traced invocation.
+#[derive(Clone, Copy)]
+pub(crate) struct ScopedRegisters;
+impl RegisterObserver for ScopedRegisters {
+    #[inline]
+    fn observe(self, build: impl FnOnce() -> RegEvent) {
+        record_register_event(build);
+    }
+}
+
+/// Ordinary interpreter accesses take no TLS or global event-policy reads.
+#[derive(Clone, Copy)]
+pub(crate) struct UnobservedRegisters;
+impl RegisterObserver for UnobservedRegisters {
+    #[inline]
+    fn observe(self, _build: impl FnOnce() -> RegEvent) {}
+}
+
 /// Number of general-purpose registers the frozen baseline engine addresses.
 pub const BASELINE_REGISTER_COUNT: usize = 256;
 pub struct Registers {
@@ -89,7 +114,7 @@ impl Registers {
         crate::execution_memory::ExecutionMemoryPlan::array::<u8>(
             self.tree.lock().allocated_bytes(),
         )
-        .map_err(VMError::AllocationDeferred)
+        .map_err(|cause| VMError::Deferred(crate::error::VmDeferral::AllocationDeferred(cause)))
     }
 
     /// Copy the register file for a reusable runtime baseline with a fallible
@@ -97,9 +122,11 @@ impl Registers {
     pub(crate) fn try_clone_for_runtime_template(&self) -> Result<Self, VMError> {
         let tree = self.tree.lock();
         let reservation = crate::cache_memory::MemoryReservation::active(tree.allocated_bytes());
-        let copied_tree = tree
-            .try_clone_allocation()
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        let copied_tree = tree.try_clone_allocation().map_err(|_| {
+            VMError::Deferred(crate::error::VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         Ok(Self {
             gpr: self.gpr,
             tags: self.tags,
@@ -139,9 +166,9 @@ impl Registers {
     /// The charge follows this register owner through resets and idle borrowing.
     pub(crate) fn try_new_with_memory_budget(budget: &AllocationBudget) -> Result<Self, VMError> {
         let layout = Self::initial_tree_layout()?;
-        let mut reservation = budget
-            .try_reserve(layout)
-            .map_err(VMError::AllocationDeferred)?;
+        let mut reservation = budget.try_reserve(layout).map_err(|cause| {
+            VMError::Deferred(crate::error::VmDeferral::AllocationDeferred(cause))
+        })?;
         let charge = reservation
             .try_split(layout)
             .expect("the original exact layout is prepaid");
@@ -153,7 +180,11 @@ impl Registers {
     }
 
     fn initial_tree_layout() -> Result<Layout, VMError> {
-        let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(crate::error::VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let bytes = MerkleTree::<[u8; 32]>::repeated_sha256_node_allocation_bytes(REGISTER_COUNT)
             .map_err(|_| unavailable())?;
         Layout::from_size_align(bytes, std::mem::align_of::<Option<HashOf<[u8; 32]>>>())
@@ -167,7 +198,11 @@ impl Registers {
             let b = [0u8; 9];
             Sha256::digest(b).into()
         };
-        let unavailable = || VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let unavailable = || {
+            VMError::Deferred(crate::error::VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         let requested = Self::initial_tree_allocation_bytes()?;
         let reservation = crate::cache_memory::MemoryReservation::active(requested);
         let tree = crate::cache_memory::FixedAllocationValue::from_pre_reserved(
@@ -207,9 +242,14 @@ impl Registers {
     /// Get the value of register `idx`.
     #[inline]
     pub fn get(&self, idx: usize) -> u64 {
+        self.get_observed(ScopedRegisters, idx)
+    }
+
+    #[inline]
+    pub(crate) fn get_observed(&self, observer: impl RegisterObserver, idx: usize) -> u64 {
         debug_assert!(idx < BASELINE_REGISTER_COUNT);
         let val = self.gpr[idx];
-        record_register_event(|| {
+        observer.observe(|| {
             let (root, path) = self
                 .merkle_root_and_path(idx)
                 .expect("register access already validated the index");
@@ -226,12 +266,17 @@ impl Registers {
     /// Set the value of register `idx`. Writes to x0 are ignored (x0 is always 0).
     #[inline]
     pub fn set(&mut self, idx: usize, value: u64) {
+        self.set_observed(ScopedRegisters, idx, value)
+    }
+
+    #[inline]
+    pub(crate) fn set_observed(&mut self, observer: impl RegisterObserver, idx: usize, value: u64) {
         debug_assert!(idx < BASELINE_REGISTER_COUNT);
         if idx != 0 {
             self.gpr[idx] = value;
             // Exclusive access needs no atomic read-modify-write.
             let was_dirty = std::mem::replace(self.dirty.get_mut(), true);
-            record_register_event(|| {
+            observer.observe(|| {
                 if !was_dirty {
                     self.tree.get_mut().update_hashed_leaf_sha256(
                         idx,
@@ -261,11 +306,21 @@ impl Registers {
     /// Set the privacy tag of register `idx`. Writing to `r0` has no effect.
     #[inline]
     pub fn set_tag(&mut self, idx: usize, value: bool) {
+        self.set_tag_observed(ScopedRegisters, idx, value)
+    }
+
+    #[inline]
+    pub(crate) fn set_tag_observed(
+        &mut self,
+        observer: impl RegisterObserver,
+        idx: usize,
+        value: bool,
+    ) {
         debug_assert!(idx < BASELINE_REGISTER_COUNT);
         if idx != 0 {
             self.tags[idx] = value;
             let was_dirty = std::mem::replace(self.dirty.get_mut(), true);
-            record_register_event(|| {
+            observer.observe(|| {
                 if !was_dirty {
                     self.tree
                         .get_mut()
@@ -378,7 +433,7 @@ impl Registers {
     /// that path fragment and is not a membership commitment.
     ///
     /// # Errors
-    /// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
+    /// Returns [`crate::error::VmTrap::RegisterOutOfBounds`] when `idx` is not a register index.
     #[inline]
     pub fn merkle_compact(
         &self,
@@ -437,9 +492,9 @@ fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
 #[inline]
 fn register_leaf_index(idx: usize) -> Result<u32, VMError> {
     if idx >= REGISTER_COUNT {
-        return Err(VMError::RegisterOutOfBounds);
+        return Err(VMError::Trap(VmTrap::RegisterOutOfBounds));
     }
-    u32::try_from(idx).map_err(|_| VMError::RegisterOutOfBounds)
+    u32::try_from(idx).map_err(|_| VMError::Trap(VmTrap::RegisterOutOfBounds))
 }
 fn register_leaf_digests(
     gpr: &[u64; REGISTER_COUNT],
@@ -468,15 +523,16 @@ fn register_leaf_digest_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     #[test]
     fn funded_tree_charge_survives_rebuild_reset_and_template_restore() {
         let bytes = Registers::initial_tree_allocation_bytes().unwrap();
         let insufficient = AllocationBudget::new(bytes - 1);
         assert!(matches!(
             Registers::try_new_with_memory_budget(&insufficient),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
-            ))
+            )))
         ));
         assert_eq!(insufficient.reserved_bytes(), 0);
 
@@ -485,9 +541,9 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), bytes);
         assert!(matches!(
             Registers::try_new_with_memory_budget(&budget),
-            Err(VMError::AllocationDeferred(
+            Err(VMError::Deferred(VmDeferral::AllocationDeferred(
                 iroha_allocation::AllocationRefusal::Capacity { .. }
-            ))
+            )))
         ));
         worker.set(7, 81);
         worker.set_tag(7, true);
@@ -641,6 +697,22 @@ mod tests {
         assert_eq!(register_leaf_digest_count(), 2 * REGISTER_COUNT);
     }
     #[test]
+    fn unobserved_registers_preserve_values_and_commitments_without_spending_an_outer_quota() {
+        let mut registers = Registers::new();
+        let mut expected = Registers::new();
+        expected.set(7, 42);
+        expected.set_tag(7, true);
+        let log = crate::zk::SharedRegLog::try_new(None).unwrap();
+        let guard = crate::zk::RegLoggerGuard::install(Some(log.clone()));
+        registers.set_observed(UnobservedRegisters, 7, 42);
+        registers.set_tag_observed(UnobservedRegisters, 7, true);
+        assert_eq!(registers.get_observed(UnobservedRegisters, 7), 42);
+        assert!(registers.tag(7));
+        assert_eq!(registers.merkle_root(), expected.merkle_root());
+        drop(guard);
+        assert!(log.lock().as_slice().is_empty());
+    }
+    #[test]
     fn logged_writes_update_only_the_changed_merkle_leaf() {
         let mut regs = Registers::new();
         let log = crate::zk::SharedRegLog::try_new(None).expect("test logger allocation");
@@ -735,19 +807,19 @@ mod tests {
         for idx in invalid {
             assert!(matches!(
                 regs.merkle_path(idx),
-                Err(VMError::RegisterOutOfBounds)
+                Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
             ));
             assert!(matches!(
                 regs.merkle_root_and_path(idx),
-                Err(VMError::RegisterOutOfBounds)
+                Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
             ));
             assert!(matches!(
                 regs.merkle_compact(idx, None),
-                Err(VMError::RegisterOutOfBounds)
+                Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
             ));
             assert!(matches!(
                 crate::merkle_utils::registers_compact_bundle(&regs, idx, None),
-                Err(VMError::RegisterOutOfBounds)
+                Err(VMError::Trap(VmTrap::RegisterOutOfBounds))
             ));
         }
     }

@@ -15,6 +15,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetId},
+    block::execution_output::TransactionResultRef,
     domain::Domain,
     isi::{
         Burn, Mint, Register, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
@@ -661,7 +662,7 @@ fn loads_come_from_the_issuance_that_names_their_transaction() {
     let transaction = BorrowedNetworkTransaction {
         entrypoint: &entrypoint,
         entrypoint_hash: entrypoint.hash(),
-        result: &result,
+        result: TransactionResultRef::Baseline(&result),
     };
     // The issuance names another transaction: a later reuse of the request id moved nothing.
     let earlier = ledger.issuance(&payer, 103_225, None, ([0x77; 32], 7));
@@ -699,7 +700,7 @@ fn loads_come_from_the_issuance_that_names_their_transaction() {
     let rejected = BorrowedNetworkTransaction {
         entrypoint: &entrypoint,
         entrypoint_hash: entrypoint.hash(),
-        result: &failed,
+        result: TransactionResultRef::Baseline(&failed),
     };
     let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
     let view = app.state.view();

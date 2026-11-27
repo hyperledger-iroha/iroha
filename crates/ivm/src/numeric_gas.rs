@@ -4,6 +4,7 @@
 //! bigint allocation strategies or hardware instructions, so equal inputs cost
 //! the same on every validator architecture.
 use crate::error::VMError;
+use crate::error::VmTrap;
 use iroha_primitives::numeric::NumericWorkStep;
 /// Version of the complete consensus numeric-gas formula and staged phase map.
 ///
@@ -43,16 +44,18 @@ const POW10_BIT_LENGTH: [u16; 57] = [
 /// Checked addition in the consensus gas domain.
 #[inline]
 pub fn checked_add(lhs: u64, rhs: u64) -> Result<u64, VMError> {
-    lhs.checked_add(rhs).ok_or(VMError::GasCostOverflow)
+    lhs.checked_add(rhs)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 /// Checked multiplication in the consensus gas domain.
 #[inline]
 pub fn checked_mul(lhs: u64, rhs: u64) -> Result<u64, VMError> {
-    lhs.checked_mul(rhs).ok_or(VMError::GasCostOverflow)
+    lhs.checked_mul(rhs)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 /// Convert a bounded byte count to the consensus gas domain.
 pub fn checked_bytes(bytes: usize) -> Result<u64, VMError> {
-    u64::try_from(bytes).map_err(|_| VMError::GasCostOverflow)
+    u64::try_from(bytes).map_err(|_| VMError::Trap(VmTrap::GasCostOverflow))
 }
 /// Charge one envelope exactly once: header first, then digest and payload.
 pub fn envelope_tail_bytes(payload_bytes: usize) -> Result<u64, VMError> {
@@ -118,7 +121,7 @@ pub fn pow10_bit_length(exponent: u8) -> Result<u64, VMError> {
         .get(usize::from(exponent))
         .copied()
         .map(u64::from)
-        .ok_or(VMError::GasCostOverflow)
+        .ok_or(VMError::Trap(VmTrap::GasCostOverflow))
 }
 /// Logical limb width of `10^exponent`.
 pub fn pow10_limbs(exponent: u8) -> Result<u64, VMError> {
@@ -476,6 +479,7 @@ pub fn successful_call_gas(call: SuccessfulCallGas) -> Result<u64, VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn pow10_widths_pin_scale_boundaries() {
         assert!(matches!(pow10_bit_length(0), Ok(1)));
@@ -486,7 +490,7 @@ mod tests {
         assert!(matches!(pow10_limbs(56), Ok(3)));
         assert!(matches!(
             pow10_bit_length(57),
-            Err(VMError::GasCostOverflow)
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
         ));
         assert!(matches!(power_construction_work(0), Ok(0)));
         assert!(matches!(power_construction_work(1), Ok(1)));
@@ -720,13 +724,16 @@ mod tests {
     fn checked_formulas_reject_host_integer_overflow() {
         assert!(matches!(
             checked_add(u64::MAX, 1),
-            Err(VMError::GasCostOverflow)
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
         ));
         assert!(matches!(
             checked_mul(u64::MAX, 2),
-            Err(VMError::GasCostOverflow)
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
         ));
-        assert!(matches!(work_gas(u64::MAX), Err(VMError::GasCostOverflow)));
+        assert!(matches!(
+            work_gas(u64::MAX),
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
+        ));
         assert!(matches!(
             successful_call_gas(SuccessfulCallGas {
                 input_envelope_bytes: u64::MAX,
@@ -738,7 +745,7 @@ mod tests {
                 validation_limb_work: 0,
                 normalization_limb_work: 0,
             }),
-            Err(VMError::GasCostOverflow)
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
         ));
     }
     #[test]

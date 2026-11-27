@@ -200,13 +200,13 @@ fn physical_transfer_joins_actual_native_d7_success_and_every_physical_transfer(
                     original
                         .native()
                         .block()
-                        .network_output_at(network_index)
+                        .network_execution_output_at(network_index)
                         .unwrap()
                         .1
                 ));
                 assert!(std::ptr::eq(fact.transcript(), transcript));
                 assert!(std::ptr::eq(fact.delta(), delta));
-                assert!(fact.output().result.is_ok());
+                assert!(fact.output().result().is_ok());
                 assert_eq!(fact.location(), location);
                 assert_eq!(
                     Hash::from(fact.original().native().committed().id().0),

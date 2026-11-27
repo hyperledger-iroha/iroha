@@ -21,8 +21,10 @@ group = "0.14.0"
 rayon = "1.11.0"
 blake3 = { version = "1.8.2", features = ["zeroize"] }
 blake2 = "0.11.0"
+sha2 = { version = "0.11.1", default-features = false }
 getrandom = "0.4.3"
 zeroize = "1.8.2"
+zstd = "=0.14.3"
 num-bigint = "0.4.8"
 num-integer = "0.1.46"
 num-traits = "0.2.19"

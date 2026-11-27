@@ -3,10 +3,8 @@
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::AxtAnchoredSpendV1;
 use iroha_model_base::topology::DataSpaceId;
-use ivm::{
-    Memory, PointerType,
-    axt::{AxtDescriptor, AxtTouchSpec, ProofBlob},
-};
+use ivm::{Memory, PointerType};
+use ivm_abi::axt::{AxtDescriptor, AxtTouchSpec, ProofBlob};
 use norito::{decode_from_bytes, to_bytes};
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);

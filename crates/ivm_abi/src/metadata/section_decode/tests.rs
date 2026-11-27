@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::error::ExecutionDeferral;
+use crate::error::{VmDeferral, VmTrap};
 use crate::metadata::*;
 use norito::core::with_decode_limits_scope;
 
@@ -74,7 +75,7 @@ fn encoded_sections_preserve_enclosing_refusal_then_retry_identically() {
                 refusal.execution_deferral(),
                 Some(ExecutionDeferral::ActiveMemoryCapacity)
             );
-            let VMError::DecodeDeferred(original) = refusal else {
+            let VMError::Deferred(VmDeferral::DecodeDeferred(original)) = refusal else {
                 panic!("metadata must retain the original decoder refusal");
             };
             assert_eq!(
@@ -104,11 +105,11 @@ fn canonical_protocol_refusal_remains_invalid_with_equal_enclosing_limit() {
     let protocol = allocation_limit(0);
     assert!(matches!(
         decode::<Vec<String>>(&bytes, protocol).unwrap_err(),
-        VMError::InvalidMetadata
+        VMError::Trap(VmTrap::InvalidMetadata)
     ));
     assert!(matches!(
         with_decode_limits_scope(protocol, || decode::<Vec<String>>(&bytes, protocol)).unwrap_err(),
-        VMError::InvalidMetadata
+        VMError::Trap(VmTrap::InvalidMetadata)
     ));
     assert_eq!(
         decode::<Vec<String>>(&bytes, allocation_limit(usize::MAX)).unwrap(),
@@ -131,7 +132,7 @@ fn assert_malformed<T: std::fmt::Debug>(
     ] {
         assert!(matches!(
             with_decode_limits_scope(allocation_limit(0), || parser(&malformed, 0)).unwrap_err(),
-            VMError::InvalidMetadata
+            VMError::Trap(VmTrap::InvalidMetadata)
         ));
     }
 }
@@ -153,11 +154,11 @@ fn whole_artifact_image_limit_precedes_section_resource_admission() {
     assert!(matches!(
         with_decode_limits_scope(allocation_limit(0), || ProgramMetadata::parse(&bytes))
             .unwrap_err(),
-        VMError::InvalidMetadata
+        VMError::Trap(VmTrap::InvalidMetadata)
     ));
     assert!(matches!(
         ProgramMetadata::parse(&bytes).unwrap_err(),
-        VMError::InvalidMetadata
+        VMError::Trap(VmTrap::InvalidMetadata)
     ));
 }
 
@@ -234,7 +235,7 @@ fn trigger_json_metadata_preserves_each_cumulative_refusal_then_retries() {
                     refused.execution_deferral(),
                     Some(ExecutionDeferral::ActiveMemoryCapacity)
                 );
-                let VMError::DecodeDeferred(original) = refused else {
+                let VMError::Deferred(VmDeferral::DecodeDeferred(original)) = refused else {
                     panic!("trigger metadata must retain the original decoder refusal");
                 };
                 assert_eq!(

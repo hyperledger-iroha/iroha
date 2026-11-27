@@ -1052,12 +1052,31 @@ def validate_run(path: Path, request: dict[str, Any], validator_sha: str,
             "result_sha256": sha(read_bytes(path / "rust-result.json"))}
 
 
-def sanitized_environment() -> dict[str, str]:
+def build_environment(registered_release: bool) -> dict[str, str]:
+    """Use the standalone smoke or the registered scope's exact release build policy."""
+    if not registered_release:
+        return {"CARGO_BUILD_JOBS": "4", "CARGO_INCREMENTAL": "0"}
+    units = str(release_runner.CARGO_RELEASE_CODEGEN_UNITS)
+    return {"CARGO_BUILD_JOBS": str(release_runner.CARGO_BUILD_JOBS),
+            "CARGO_INCREMENTAL": "1" if release_runner.CARGO_INCREMENTAL else "0",
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": units,
+            "CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS": units}
+
+
+def worker_environment_record(environment: dict[str, str]) -> dict[str, str | None]:
+    """Retain the actual Cargo build controls alongside the proving worker settings."""
+    keys = set(WORKER_ENVIRONMENT_KEYS) | {
+        key for key in build_environment(True) if key in environment
+    }
+    return {key: environment.get(key) for key in keys}
+
+
+def sanitized_environment(*, registered_release: bool = False) -> dict[str, str]:
     """Allow only toolchain/user paths; do not inherit test, compiler, or loader overrides."""
     allowed = {"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "CARGO_HOME", "RUSTUP_HOME",
                "SYSTEMROOT", "GNUPGHOME", "GPG_TTY"}
     environment = {name: value for name, value in os.environ.items() if name in allowed}
-    environment.update({"LC_ALL": "C", "LANG": "C", "CARGO_BUILD_JOBS": "4", "CARGO_INCREMENTAL": "0",
+    environment.update({"LC_ALL": "C", "LANG": "C", **build_environment(registered_release),
                         "SCCACHE_DISABLE": "1",
                         "RUST_BACKTRACE": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1"})
     return environment
@@ -1150,7 +1169,7 @@ def command(arguments: list[str], repo: Path, environment: dict[str, str], direc
         record = {"version": 1, "command": arguments, "exit_code": completed.returncode,
                   "started_ns": started, "finished_ns": time.time_ns(), "log": output.name,
                   "log_sha256": file_digest(output),
-                  "worker_environment": {key: environment.get(key) for key in WORKER_ENVIRONMENT_KEYS}}
+                  "worker_environment": worker_environment_record(environment)}
     finally:
         os.close(descriptor)
     write_json(directory / f"{name}.json", record)
@@ -1158,10 +1177,16 @@ def command(arguments: list[str], repo: Path, environment: dict[str, str], direc
     return record
 
 
-def build_commands(repo: Path, target: Path) -> dict[str, list[str]]:
+def build_commands(repo: Path, target: Path, *, registered_release: bool = False) -> dict[str, list[str]]:
     """Request the canonical CPU/ARM SHA3 smoke capability and its declared native dependencies."""
-    prefix = [str(repo / "scripts/cargo_fast.sh"), "--no-sccache", "--no-incremental", "--jobs", "4", "--"]
+    policy = build_environment(registered_release)
+    prefix = [str(repo / "scripts/cargo_fast.sh"), "--no-sccache", "--no-incremental",
+              "--jobs", policy["CARGO_BUILD_JOBS"], "--"]
     common = ["--locked", "--offline", "--release"]
+    if registered_release:
+        common += ["--config", f"profile.release.codegen-units={policy['CARGO_PROFILE_RELEASE_CODEGEN_UNITS']}",
+                   "--config", "profile.release.build-override.codegen-units="
+                   + policy["CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS"]]
     return {
         "build-validator": prefix + ["build", *common, "-p", "irohad", "--bin", "iroha3d",
                                       "--features", "test-network-private-settlement-route-control", "--target-dir", str(target)],
@@ -1204,9 +1229,10 @@ def validate_discovery(output: str, *, kind: str = "smoke") -> None:
             "exact ignored smoke test discovery failed")
 
 
-def invocation_environment(request_path: Path, evidence: Path, result_path: Path, validator: dict[str, str]) -> dict[str, str]:
+def invocation_environment(request_path: Path, evidence: Path, result_path: Path, validator: dict[str, str],
+                           *, registered_release: bool = False) -> dict[str, str]:
     """Construct the strict network/request environment from retained bytes only."""
-    environment = sanitized_environment()
+    environment = sanitized_environment(registered_release=registered_release)
     environment.update({"RAYON_NUM_THREADS": str(RAYON_WORKER_THREADS),
         "IROHA_TEST_REQUIRE_NETWORK": "1", "IROHA_TEST_NETWORK_START_ATTEMPTS": "1",
         "IROHA_TEST_SKIP_BUILD": "1", "IROHA_TEST_BUILD_PROFILE": "release",
@@ -1219,6 +1245,9 @@ def invocation_environment(request_path: Path, evidence: Path, result_path: Path
 
 def run_campaign(repo: Path, output: Path, target: Path, commit: str, *, kind: str = "smoke") -> dict[str, Any]:
     """Build once and run ten fresh serialized positive gates, stopping at the first failure."""
+    registered_release = kind == "registered_release_smoke"
+    campaign_kind = kind
+    kind = "smoke" if registered_release else kind
     require(kind in ("smoke", "cold_one_call"), "use the separate happy-day owner for its campaign")
     selected = selected_test(kind)
     repo = repo.resolve(strict=True)
@@ -1230,7 +1259,7 @@ def run_campaign(repo: Path, output: Path, target: Path, commit: str, *, kind: s
     output.mkdir(mode=0o700)
     owner_path(output, directory=True)
     try:
-        environment = sanitized_environment()
+        environment = sanitized_environment(registered_release=registered_release)
         signature = command(["git", "verify-commit", commit], repo, environment, output, "verify-commit")
         seal = source_seal(repo, commit)
         require((repo / "scripts/private_settlement_smoke_campaign.py").resolve() == Path(__file__).resolve(),
@@ -1239,7 +1268,7 @@ def run_campaign(repo: Path, output: Path, target: Path, commit: str, *, kind: s
         toolchain = {name: command(arguments, repo, environment, output, name)
                      for name, arguments in toolchain_commands().items()}
         builds = {}
-        for name, arguments in build_commands(repo, target).items():
+        for name, arguments in build_commands(repo, target, registered_release=registered_release).items():
             require(source_seal(repo, commit) == seal, "source drift before build")
             builds[name] = command(arguments, repo, environment, output, name)
             require(source_seal(repo, commit) == seal, "source drift during build")
@@ -1266,7 +1295,8 @@ def run_campaign(repo: Path, output: Path, target: Path, commit: str, *, kind: s
                     "source or executable drift before smoke")
             write_json(directory / "before.json", {"source": seal, "artifacts": binaries})
             run_environment = invocation_environment(directory / "request.json", evidence,
-                                                     directory / "rust-result.json", binaries["validator"])
+                                                     directory / "rust-result.json", binaries["validator"],
+                                                     registered_release=registered_release)
             receipt = command([str(integration), selected, "--exact", "--ignored", "--nocapture", "--test-threads=1"],
                               repo, run_environment, directory, "stdout", check=False)
             post_source, post_binaries = source_seal(repo, commit), artifact_bindings(validator, integration)
@@ -1287,19 +1317,20 @@ def run_campaign(repo: Path, output: Path, target: Path, commit: str, *, kind: s
                 fresh["identity"].add(identity)
             runs.append({"run": index, "request_id": request["request_id"], "result_sha256": summary["result_sha256"],
                          "command_sha256": sha(canonical(receipt)), "summary": summary})
-        campaign = {"version": 1, "protocol": PROTOCOL, "kind": f"{kind}_campaign", "runs": runs,
+        campaign = {"version": 1, "protocol": PROTOCOL, "kind": f"{campaign_kind}_campaign", "runs": runs,
                     "repo": str(repo), "target": str(target), "source": seal, "artifacts": binaries,
                     "builds": builds, "toolchain": toolchain, "signature_verification": signature, "discovery": discovery,
                     "passed": True, "cryptographic_scope": CRYPTOGRAPHIC_SCOPE}
         write_json(output / "campaign.json", campaign)
-        return validate_campaign(output, expected_commit=commit, kind=kind)
+        return validate_campaign(output, expected_commit=commit, kind=campaign_kind)
     except Exception as error:
         write_json(output / "failure.json", {"version": 1, "passed": False, "error": str(error),
                                              "time_ns": time.time_ns()})
         raise
 
 
-def validate_command_record(path: Path, arguments: list[str], *, proving: bool = False) -> dict[str, Any]:
+def validate_command_record(path: Path, arguments: list[str], *, proving: bool = False,
+                            registered_release: bool = False) -> dict[str, Any]:
     """Validate a successful terminal command, its worker environment, and retained log."""
     record = fields(read_json(path), {"version", "command", "exit_code", "started_ns", "finished_ns", "log",
                                      "log_sha256", "worker_environment"}, "command receipt")
@@ -1309,7 +1340,7 @@ def validate_command_record(path: Path, arguments: list[str], *, proving: bool =
             "failed/substituted command receipt")
     require(record["worker_environment"] == {
         "RAYON_NUM_THREADS": str(RAYON_WORKER_THREADS) if proving else None,
-        "RUST_TEST_THREADS": None, "CARGO_BUILD_JOBS": "4", "CARGO_INCREMENTAL": "0",
+        "RUST_TEST_THREADS": None, **build_environment(registered_release),
     }, "command worker environment differs from the pinned invocation")
     start = integer(record["started_ns"], 1, 2**64 - 1, "command start")
     integer(record["finished_ns"], start, 2**64 - 1, "command finish")
@@ -1325,7 +1356,10 @@ def validate_campaign(path: Path | str, *, expected_commit: str | None = None, k
     retained record. It performs no build, network startup, repair, or write.
     Callers must retain the checkout and artifacts until qualification ends.
     """
-    require(kind in ("smoke", "cold_one_call"), "unknown campaign selection")
+    require(kind in ("smoke", "registered_release_smoke", "cold_one_call"), "unknown campaign selection")
+    campaign_kind = kind
+    registered_release = kind == "registered_release_smoke"
+    kind = "smoke" if registered_release else kind
     selected = selected_test(kind)
     path = Path(path)
     owner_path(path, directory=True)
@@ -1333,7 +1367,7 @@ def validate_campaign(path: Path | str, *, expected_commit: str | None = None, k
     campaign = fields(read_json(path / "campaign.json"), {"version", "protocol", "kind", "runs", "repo", "target",
         "source", "artifacts", "builds", "toolchain", "signature_verification", "discovery", "passed", "cryptographic_scope"}, "campaign")
     require(type(campaign["version"]) is int and campaign["version"] == 1
-            and campaign["protocol"] == PROTOCOL and campaign["kind"] == f"{kind}_campaign"
+            and campaign["protocol"] == PROTOCOL and campaign["kind"] == f"{campaign_kind}_campaign"
             and campaign["passed"] is True and campaign["cryptographic_scope"] == CRYPTOGRAPHIC_SCOPE,
             "campaign is not a current completed smoke gate")
     repo, target = Path(campaign["repo"]), Path(campaign["target"])
@@ -1349,23 +1383,25 @@ def validate_campaign(path: Path | str, *, expected_commit: str | None = None, k
     require(Path(binaries["validator"]["path"]) == target / "release" / "iroha3d"
             and discover_artifact(path / "build-integration.log", target) == Path(binaries["integration"]["path"]),
             "build artifact path binding changed")
-    signature = validate_command_record(path / "verify-commit.json", ["git", "verify-commit", commit])
+    signature = validate_command_record(path / "verify-commit.json", ["git", "verify-commit", commit],
+                                        registered_release=registered_release)
     require(campaign["signature_verification"] == signature, "signature command substituted")
     previous_end = signature["finished_ns"]
     require(set(campaign["toolchain"]) == set(toolchain_commands()), "incomplete compiler/Cargo provenance")
     for name, arguments in toolchain_commands().items():
-        record = validate_command_record(path / f"{name}.json", arguments)
+        record = validate_command_record(path / f"{name}.json", arguments, registered_release=registered_release)
         require(campaign["toolchain"][name] == record and record["started_ns"] >= previous_end,
                 "toolchain provenance command changed/overlapping")
         previous_end = record["finished_ns"]
-    require(set(campaign["builds"]) == set(build_commands(repo, target)), "unexpected or missing build commands")
-    for name, arguments in build_commands(repo, target).items():
-        record = validate_command_record(path / f"{name}.json", arguments)
+    require(set(campaign["builds"]) == set(build_commands(repo, target, registered_release=registered_release)), "unexpected or missing build commands")
+    for name, arguments in build_commands(repo, target, registered_release=registered_release).items():
+        record = validate_command_record(path / f"{name}.json", arguments, registered_release=registered_release)
         require(campaign["builds"].get(name) == record and record["started_ns"] >= previous_end,
                 "builds overlap or differ from retained commands")
         previous_end = record["finished_ns"]
     integration = binaries["integration"]["path"]
-    discovery = validate_command_record(path / "discovery.json", [integration, selected, "--exact", "--ignored", "--list"])
+    discovery = validate_command_record(path / "discovery.json", [integration, selected, "--exact", "--ignored", "--list"],
+                                        registered_release=registered_release)
     require(campaign["discovery"] == discovery and discovery["started_ns"] >= previous_end, "discovery command substituted/overlapping")
     validate_discovery(read_bytes(path / "discovery.log").decode(), kind=kind)
     previous_end = discovery["finished_ns"]
@@ -1393,7 +1429,7 @@ def validate_campaign(path: Path | str, *, expected_commit: str | None = None, k
             require(read_json(directory / f"{phase}.json") == {"source": seal, "artifacts": binaries},
                     "per-run source/executable seal changed")
         record = validate_command_record(directory / "stdout.json", [integration, selected, "--exact", "--ignored",
-                                        "--nocapture", "--test-threads=1"], proving=True)
+                                        "--nocapture", "--test-threads=1"], proving=True, registered_release=registered_release)
         require(record["started_ns"] >= previous_end and row["command_sha256"] == sha(canonical(record)),
                 "smoke runs overlap or command receipt changed")
         previous_end = record["finished_ns"]
@@ -1429,8 +1465,8 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("campaign", type=Path)
     validate.add_argument("--commit", help="required source commit for a later campaign prerequisite")
     for command_parser in (execute, validate):
-        command_parser.add_argument("--kind", choices=("smoke", "cold_one_call"), default="smoke",
-                                    help="exact prepared or cold one-call campaign; never interchangeable")
+        command_parser.add_argument("--kind", choices=("smoke", "registered_release_smoke", "cold_one_call"), default="smoke",
+                                    help="exact standalone, registered release prerequisite, or cold one-call campaign")
     arguments = parser.parse_args(argv)
     try:
         if arguments.action == "run":

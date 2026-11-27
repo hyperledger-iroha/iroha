@@ -294,6 +294,7 @@ enum TestAction {
     /// Run the selected tests and report which seiyaku functions executed.
     Coverage(TestCoverageArgs),
     /// Run the selected tests and print a per-instruction execution trace.
+    #[command(long_flag = "trace")]
     Trace(TestTraceArgs),
 }
 /// Suite discovery and selection shared by every `koto test` action.
@@ -2310,6 +2311,7 @@ mod tests {
             ("list", KotoTestAction::List),
             ("coverage", KotoTestAction::Coverage),
             ("trace", KotoTestAction::Trace),
+            ("--trace", KotoTestAction::Trace),
         ] {
             let Cli {
                 command: KotoCommand::Test(args),

@@ -13,6 +13,8 @@ type Owner = EnrollmentOwnerV1<KagemushaWalletSimFsV1, FakePlatformV1>;
 mod multischeme_custody;
 #[path = "tests/native_exchange.rs"]
 mod native_exchange;
+#[path = "tests/spartan_e6.rs"]
+mod spartan_e6;
 fn owner(f: &Fixture, d: &DeviceV1) -> Owner {
     let provider = NativeProviderV1::open(
         d.fs.clone(),

@@ -1,12 +1,38 @@
 //! Immutable bounded metadata publication shared by raw compiler and encoded carriers.
 
-use iroha_fs::PrivateDirectory;
-use rand::rand_core::TryRng as _;
+use iroha_fs::{PendingPrivateFile, PrivateDirectory};
 use sha2::{Digest as _, Sha256};
 use std::{io, io::Read as _, io::Write as _};
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+/// Reserve the sole staging name for an immutable carrier entry. An exact retry
+/// must authenticate the published original without introducing a second entry.
+pub(super) fn stage_if_absent(
+    directory: &PrivateDirectory,
+    name: &str,
+    maximum: usize,
+) -> io::Result<Option<PendingPrivateFile>> {
+    let published = || directory.open_retained_read_only_optional(name, maximum);
+    if published()?.is_some() {
+        return Ok(None);
+    }
+    let staging = format!("{name}.partial");
+    let writer = directory.create_retained_private(&staging, maximum)?;
+    if published()?.is_none() {
+        return Ok(Some(writer));
+    }
+    // A publisher completed after our first observation and before our exclusive
+    // create. Only discard the empty original we just created, by exact snapshot.
+    let empty = writer.finish_private()?;
+    let snapshot = empty.snapshot()?;
+    drop(empty);
+    if !directory.remove_private_if_snapshot(staging, &snapshot)? {
+        return Err(invalid("carrier staging original disappeared"));
+    }
+    Ok(None)
 }
 
 pub(super) fn verify_metadata(
@@ -66,23 +92,12 @@ pub(super) fn publish_metadata(
     if bytes.is_empty() {
         return Err(invalid("empty metadata original"));
     }
-    if verify_metadata(directory, name, bytes)?.is_some() {
-        return Ok(());
-    }
-    let mut nonce = [0_u8; 16];
-    rand::rngs::SysRng
-        .try_fill_bytes(&mut nonce)
-        .map_err(io::Error::other)?;
-    let staging = format!("wallet-metadata-{}.partial", hex::encode(nonce));
-    let mut writer = directory.create_retained_private(staging, bytes.len())?;
-    writer.write_all(bytes)?;
-    let sealed = writer.seal_read_only()?;
-    match sealed.publish_new_name(name) {
-        Ok(original) => original.revalidate()?,
-        // A competing identical writer may win. Its whole original must still pass
-        // all checks; neither the winning file nor our partial evidence is replaced.
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error),
+    if let Some(mut writer) = stage_if_absent(directory, name, bytes.len())? {
+        writer.write_all(bytes)?;
+        writer
+            .seal_read_only()?
+            .publish_new_name(name)?
+            .revalidate()?;
     }
     verify_metadata(directory, name, bytes)?.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
 }

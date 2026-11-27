@@ -6,6 +6,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, syscalls as ivm_sys};
+use ivm_abi::error::VmTrap;
 use norito::to_bytes;
 fn program_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
@@ -78,7 +79,7 @@ fn wrong_type_for_asset_def_rejected() {
     )
     .unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }
 #[test]
 fn wrong_type_for_set_account_detail_value_rejected() {
@@ -121,5 +122,5 @@ fn wrong_type_for_set_account_detail_value_rejected() {
     )
     .unwrap();
     let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::Trap(VmTrap::NoritoInvalid)));
 }

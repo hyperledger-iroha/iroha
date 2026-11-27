@@ -1,6 +1,7 @@
 //! Exact original-pool custody for symbolic state keys and immutable output.
 
 use super::{StaticNoritoKey, StaticStatePath, static_state_literals::LiteralSource};
+use crate::error::{VmDeferral, VmTrap};
 use crate::{
     VMError,
     cache_memory::MemoryReservation,
@@ -161,9 +162,9 @@ impl Parts<'_> {
             .checked_add(self.text.len())
             .and_then(|len| len.checked_add(hex?))
             .and_then(|len| len.checked_add(if self.wildcard { 3 } else { 0 }))
-            .ok_or(VMError::AllocationDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::DemandOverflow,
-            ))
+            )))
     }
     fn bytes(self) -> impl Iterator<Item = u8> {
         let hex = self.hex.into_iter().flat_map(|bytes| {
@@ -207,12 +208,15 @@ impl KeyScratch {
     ) -> Result<Self, VMError> {
         let sites = decoded.filter(move |op| state_syscall(engine, op).is_some());
         let count = sites.clone().count();
-        let plan =
-            ExecutionMemoryPlan::array::<Site>(count).map_err(VMError::AllocationDeferred)?;
-        let mut lease =
-            ExecutionMemoryLease::reserve(budget, plan).map_err(VMError::AllocationDeferred)?;
-        let mut storage = ExecutionBuffer::new(count, &mut lease)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        let plan = ExecutionMemoryPlan::array::<Site>(count)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        let mut lease = ExecutionMemoryLease::reserve(budget, plan)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
+        let mut storage = ExecutionBuffer::new(count, &mut lease).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         for op in sites {
             storage.push_reserved(Site {
                 pc: op.pc,
@@ -227,16 +231,18 @@ impl KeyScratch {
         key: Descriptor,
         literals: &impl LiteralSource,
     ) -> Result<(), VMError> {
-        key.parts(literals).ok_or(VMError::DecodeError)?.len()?;
+        key.parts(literals)
+            .ok_or(VMError::Trap(VmTrap::DecodeError))?
+            .len()?;
         let index = self
             .sites
             .as_slice()
             .binary_search_by_key(&pc, |site| site.pc)
-            .map_err(|_| VMError::DecodeError)?;
+            .map_err(|_| VMError::Trap(VmTrap::DecodeError))?;
         let site = &mut self.sites.as_mut_slice()[index];
         match site.key {
             Some(original) if original.compare(&key, literals) != Ordering::Equal => {
-                Err(VMError::DecodeError)
+                Err(VMError::Trap(VmTrap::DecodeError))
             }
             Some(_) => Ok(()),
             None => {
@@ -275,46 +281,66 @@ impl KeyScratch {
             count += 1;
             reads += usize::from(!key.write);
             bytes = bytes
-                .checked_add(key.parts(literals).ok_or(VMError::DecodeError)?.len()?)
-                .ok_or(VMError::AllocationDeferred(
+                .checked_add(
+                    key.parts(literals)
+                        .ok_or(VMError::Trap(VmTrap::DecodeError))?
+                        .len()?,
+                )
+                .ok_or(VMError::Deferred(VmDeferral::AllocationDeferred(
                     AllocationRefusal::DemandOverflow,
-                ))?;
+                )))?;
         }
         if count == 0 {
             return Ok((StaticStateKeys::default(), StaticStateKeys::default()));
         }
-        let ranges_layout = Layout::array::<KeyRange>(count)
-            .map_err(|_| VMError::AllocationDeferred(AllocationRefusal::DemandOverflow))?;
-        let bytes_layout = Layout::array::<u8>(bytes)
-            .map_err(|_| VMError::AllocationDeferred(AllocationRefusal::DemandOverflow))?;
+        let ranges_layout = Layout::array::<KeyRange>(count).map_err(|_| {
+            VMError::Deferred(VmDeferral::AllocationDeferred(
+                AllocationRefusal::DemandOverflow,
+            ))
+        })?;
+        let bytes_layout = Layout::array::<u8>(bytes).map_err(|_| {
+            VMError::Deferred(VmDeferral::AllocationDeferred(
+                AllocationRefusal::DemandOverflow,
+            ))
+        })?;
         let total = ranges_layout
             .size()
             .checked_add(bytes_layout.size())
             .and_then(|bytes| {
                 bytes.checked_add(ChargedShared::<KeyStorage>::allocation_layout().size())
             })
-            .ok_or(VMError::AllocationDeferred(
+            .ok_or(VMError::Deferred(VmDeferral::AllocationDeferred(
                 AllocationRefusal::DemandOverflow,
-            ))?;
+            )))?;
         // All destinations and the shared shell are admitted together while
         // symbolic scratch and its borrowed literal evidence are still alive.
         let mut admission = budget
             .try_reserve_bytes(total)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let retention = MemoryReservation::active(total);
-        let unavailable = |_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable);
+        let unavailable = |_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        };
         #[cfg(test)]
         allocation_gate(1)?;
         let shell =
             ChargedShared::<KeyStorage>::reserve_from(&mut admission).map_err(unavailable)?;
         #[cfg(test)]
         allocation_gate(2)?;
-        let mut ranges = ChargedBuffer::from_reservation(count, &mut admission)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        let mut ranges = ChargedBuffer::from_reservation(count, &mut admission).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         #[cfg(test)]
         allocation_gate(3)?;
-        let mut output = ChargedBuffer::from_reservation(bytes, &mut admission)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        let mut output = ChargedBuffer::from_reservation(bytes, &mut admission).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         #[cfg(test)]
         allocation_gate(4)?;
         for key in unique() {
@@ -377,9 +403,9 @@ fn allocation_gate(stage: u8) -> Result<(), VMError> {
     if OUTPUT_FAULT.get() == stage {
         OUTPUT_FAULT.set(0);
         assert_ne!(stage, 4, "output construction interrupted");
-        return Err(VMError::ExecutionDeferred(
+        return Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
             ExecutionDeferral::AllocationUnavailable,
-        ));
+        )));
     }
     Ok(())
 }

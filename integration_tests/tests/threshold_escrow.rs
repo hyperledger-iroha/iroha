@@ -217,17 +217,19 @@ async fn call_contract_expect_status(
                 details
                     .transaction
                     .result()
-                    .0
                     .as_ref()
                     .err()
-                    .cloned()
+                    .map(|reason| match reason {
+                        iroha_data_model::block::execution_output::TransactionRejectionRef::Baseline(reason) => eyre::Report::new(reason.clone()),
+                        iroha_data_model::block::execution_output::TransactionRejectionRef::C10(reason) => eyre::Report::new(reason.clone()),
+                    })
                     .ok_or_else(|| {
                         eyre!("rejected contract call has a successful committed result")
                     })
             })
             .await
             .wrap_err_with(|| format!("{stage}: read exact committed rejection"))?;
-            return Err(eyre::Report::new(rejection).wrap_err(format!(
+            return Err(rejection.wrap_err(format!(
                 "{stage}: expected `{expected_status}`, observed `Rejected`"
             )));
         }

@@ -171,9 +171,13 @@ pub(super) async fn authenticate_rejection(
         ensure!(norito::encode_canonical(terms)? == norito::encode_canonical(request.intent())?);
         let included = evidence(verified.block(), u32::try_from(*index)?)?;
         verified.verify_transaction_execution(&network.network_id(), &included)?;
+        let result = included
+            .result()
+            .baseline()
+            .ok_or_else(|| eyre!("the native payment did not produce its baseline result"))?;
         ensure!(
             matches!(
-                &included.result().0,
+                &result.0,
                 Err(TransactionRejectionReason::Validation(
                     ValidationFail::InstructionFailed(InstructionExecutionError::Math(
                         MathError::NotEnoughQuantity

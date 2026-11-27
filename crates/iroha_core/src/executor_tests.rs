@@ -57,6 +57,7 @@ mod zk_hydration_route_tests {
         proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
+    use ivm_abi::error::VmTrap;
 
     #[inline(never)]
     fn route_state() -> Box<State> {
@@ -270,7 +271,10 @@ mod zk_hydration_route_tests {
             };
             assert_eq!(
                 message,
-                format!("invalid ZK snapshot state: {}", ivm::VMError::NoritoInvalid)
+                format!(
+                    "invalid ZK snapshot state: {}",
+                    ivm::VMError::Trap(VmTrap::NoritoInvalid)
+                )
             );
             route_allocation_limit = usize::try_from(budget.consumed_allocated_bytes()).unwrap();
             assert!(!warm.is_execution_deferred());
@@ -3705,7 +3709,10 @@ fn initial_executor_committee_publication_preserves_owner_proofs_and_parameter_a
         .enumerate()
     {
         assert_eq!(
-            committed.block().output_error(index),
+            committed
+                .block()
+                .output_error(index)
+                .map(|reason| reason.baseline().expect("baseline execution")),
             Some(&crate::tx::TransactionRejectionReason::Validation(
                 ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
                     refusal.into()
@@ -6709,15 +6716,15 @@ fn proved_empty_overlay_accounts_verified_replay_gas() {
     let state = State::new_for_testing(World::default(), kura, query_handle);
     let tx = supplied_replay_fixture_source(&state, &authority, &keypair, Vec::new());
     let replay_gas = 40_000;
-    let (axt_descriptor, axt_binding) = ivm::axt::AxtDescriptor::builder()
+    let (axt_descriptor, axt_binding) = ivm_abi::axt::AxtDescriptor::builder()
         .dataspace(DataSpaceId::UNIVERSAL)
         .build_with_binding()
         .expect("AXT descriptor");
-    let mut completed_axt = ivm::axt::HostAxtState::new(axt_descriptor, axt_binding);
+    let mut completed_axt = ivm_abi::axt::HostAxtState::new(axt_descriptor, axt_binding);
     completed_axt
         .record_proof(
             DataSpaceId::UNIVERSAL,
-            Some(ivm::axt::ProofBlob {
+            Some(ivm_abi::axt::ProofBlob {
                 payload: vec![1],
                 expiry_slot: None,
             }),

@@ -688,6 +688,31 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         )
 
 
+    def test_private_sessions_measure_one_product_call_and_its_verified_receipt(self):
+        root = SOURCE_ROOT / "integration_tests/tests/nexus"
+        harness = (root / "atomic_private_settlement_real_process_harness.rs").read_text()
+        primary = harness[harness.index("fn run_real_process_private_benchmark("):
+                          harness.index("struct PrivateBenchmarkExecution")]
+        self.assertNotIn("shape.participants == PARTICIPANT_COUNT", primary)
+        self.assertLess(primary.index("benchmark_one_call::Case::new"), primary.index('measurement_boundary("ready")'))
+        self.assertLess(primary.index('measurement_boundary("ready")'), primary.index("payment.measure("))
+        self.assertLess(primary.index("payment.measure("), primary.index('measurement_boundary("finished")'))
+        owner = (root / "atomic_private_settlement_benchmark_one_call.rs").read_text()
+        self.assertIn("OneCallPrivateSettlementOperation::new(", owner)
+        self.assertEqual(owner.count("runtime.block_on(operation.run(&options))"), 1)
+        self.assertNotIn("operation.prepare(", owner)
+        self.assertNotIn("operation.recover(", owner)
+        self.assertIn("VerifiedPrivateSettlementOutcome::Settled(receipt)", owner)
+        self.assertLess(owner.index("runtime.block_on(operation.run(&options))"), owner.index("Ok((receipt, Instant::now()))"))
+        self.assertNotIn("wait_for_identical_receipt", owner)
+        self.assertLess(primary.index('measurement_boundary("finished")'), primary.index("wait_for_identical_receipt"))
+        self.assertIn("all_peers_receipt == receipt", primary)
+        self.assertIn("private_settlement_auditor_capsule_quorum_for_authority_v1(", owner)
+        self.assertIn("submit_private_settlement_audit_approval_quorum_for_authority_v1(", owner)
+        self.assertIn("private_settlement_committee_proof_v1(", owner)
+        self.assertIn("private_settlement_sidecar_material_digest_v1(", owner)
+        self.assertIn('assert_no_partial_visibility(network, bundle, "commit-certified")', owner)
+
     def test_retired_profile_warmups_are_not_a_compatibility_path(self):
         bound = fault_request()
         benchmark = bound['configuration']['benchmark']

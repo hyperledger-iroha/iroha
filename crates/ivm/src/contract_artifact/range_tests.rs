@@ -1,6 +1,7 @@
 //! Original artifact range custody and single canonical admission-pass regressions.
 
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use crate::{IVM, ProgramMetadata, VMError};
 use iroha_allocation::AllocationBudget;
 use norito::core::{DecodeLimits, with_decode_limits_measured, with_decode_limits_scope};
@@ -85,7 +86,7 @@ fn canonical_cntr_refusal_keeps_existing_vm_state_and_retries_without_reclassifi
         error.execution_deferral(),
         Some(crate::error::ExecutionDeferral::ActiveMemoryCapacity)
     );
-    let VMError::DecodeDeferred(original_refusal) = error else {
+    let VMError::Deferred(VmDeferral::DecodeDeferred(original_refusal)) = error else {
         panic!("program loading must retain the original decoder owner");
     };
     assert_eq!(
@@ -121,7 +122,7 @@ fn original_pool_refusal_precedes_preparation_and_same_artifact_retries() {
     };
     assert!(matches!(
         error.into_vm_error(),
-        VMError::AllocationDeferred(_)
+        VMError::Deferred(VmDeferral::AllocationDeferred(_))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
     budget.set_limit_bytes(16 * 1024 * 1024);
@@ -145,11 +146,11 @@ fn malformed_cntr_and_production_dbg1_never_take_the_generic_path() {
             .err()
             .unwrap()
             .into_vm_error(),
-        VMError::InvalidMetadata
+        VMError::Trap(VmTrap::InvalidMetadata)
     ));
     assert!(matches!(
         IVM::validate_program(&malformed),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
     let parsed = ProgramMetadata::parse(&bytes).unwrap();
     let debug_offset = parsed
@@ -194,10 +195,13 @@ fn malformed_cntr_and_production_dbg1_never_take_the_generic_path() {
         .err()
         .unwrap();
     assert!(error.to_string().contains("DBG1"));
-    assert!(matches!(error.into_vm_error(), VMError::InvalidMetadata));
+    assert!(matches!(
+        error.into_vm_error(),
+        VMError::Trap(VmTrap::InvalidMetadata)
+    ));
     assert!(matches!(
         IVM::validate_program(&debug),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::Trap(VmTrap::InvalidMetadata))
     ));
     assert_eq!(budget.reserved_bytes(), 0);
 }

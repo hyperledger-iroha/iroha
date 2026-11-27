@@ -1317,6 +1317,18 @@ impl Drop for DecodeDepthGuard {
         DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
     }
 }
+/// Run one schema-directed nested value decode under the original depth budgets.
+///
+/// Dynamic codecs use this scope for containers whose shape comes from an authenticated
+/// schema instead of a Rust type. It neither resets counters nor supplies allocation or
+/// schema authority. Ordinary typed field decoders already enter their own depth scope.
+///
+/// # Errors
+/// Returns the original enclosing depth refusal or the decoder's unchanged error.
+pub fn with_decode_depth_scope<T>(decode: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    let _depth = DecodeDepthGuard::enter()?;
+    decode()
+}
 /// Guard one nested encode or encoded-length operation.
 ///
 /// Derive-generated implementations enter this guard before evaluating fields. This makes

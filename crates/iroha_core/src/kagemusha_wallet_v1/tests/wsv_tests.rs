@@ -18,6 +18,12 @@ use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaW
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use mv::storage::StorageReadOnly as _;
 
+#[path = "spartan_registry.rs"]
+mod spartan_registry;
+
+#[path = "spartan_unload.rs"]
+mod spartan_unload;
+
 #[path = "suffix_genuine_tests.rs"]
 mod suffix_genuine_tests;
 
@@ -100,9 +106,17 @@ fn transact<T>(
     height: u64,
     action: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T>,
 ) -> Result<T> {
+    transact_with_invocation(state, height, Hash::new(height.to_le_bytes()), action)
+}
+
+fn transact_with_invocation<T>(
+    state: &mut State,
+    height: u64,
+    invocation: Hash,
+    action: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T>,
+) -> Result<T> {
     let header = BlockHeader::new(height.try_into().unwrap(), None, None, height * 1_000, 0);
     let mut block = state.block(header);
-    let invocation = Hash::new(height.to_le_bytes());
     let mut tx = block.transaction_for_fastpq_testing(invocation);
     // Explicit local fixture binding: this is not network/finality qualification.
     tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(invocation));

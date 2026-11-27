@@ -363,8 +363,11 @@ impl TransactionEventFilter {
 }
 #[cfg(feature = "transparent_api")]
 impl BlockEventFilter {
-    fn field_matches<T: Eq>(filter: Option<&T>, event: &T) -> bool {
-        filter.is_none_or(|field| field == event)
+    /// Apply the shared block predicate, including the rejected-status wildcard.
+    pub(crate) fn matches_event(&self, event: &BlockEvent) -> bool {
+        self.height
+            .is_none_or(|height| height == event.header.height)
+            && Self::status_matches(self.status.as_ref(), event.status)
     }
 }
 #[cfg(feature = "transparent_api")]
@@ -374,15 +377,7 @@ impl super::EventFilter for PipelineEventFilterBox {
     #[inline]
     fn matches(&self, event: &PipelineEventBox) -> bool {
         match (self, event) {
-            (Self::Block(block_filter), PipelineEventBox::Block(block_event)) => [
-                BlockEventFilter::field_matches(
-                    block_filter.height.as_ref(),
-                    &block_event.header.height,
-                ),
-                BlockEventFilter::status_matches(block_filter.status.as_ref(), block_event.status),
-            ]
-            .into_iter()
-            .all(core::convert::identity),
+            (Self::Block(filter), PipelineEventBox::Block(event)) => filter.matches_event(event),
             (
                 Self::Transaction(transaction_filter),
                 PipelineEventBox::Transaction(transaction_event),

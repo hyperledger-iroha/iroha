@@ -48,6 +48,7 @@ pub const PARLIAMENT_PUBLIC_FINDING_ENDORSEMENT_ROOT_V1: &[u8] =
     b"iroha.governance.parliament.public_finding_endorsement.root.v1";
 pub const PARLIAMENT_EXECUTION_FAILURE_ROOT_V1: &[u8] =
     b"iroha.governance.parliament.execution_failure.root.v1";
+/// Existing domain of a Parliament compare-and-set predecessor head.
 pub const PARLIAMENT_EXPECTED_HEAD_ROOT_V1: &[u8] =
     b"iroha.governance.parliament.expected_head.root.v1";
 pub const GOVERNANCE_CERTIFICATE_ID_V1: &[u8] = b"iroha.governance.certificate.id.v1";
@@ -78,10 +79,131 @@ pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     hasher.update(&encoded);
     hasher.finalize().into()
 }
+
+/// Stream the existing fingerprint preimage while retaining the original codec refusal.
+///
+/// The domain length, domain and bare Norito payload are exactly those of
+/// [`fingerprint`]. This checked entrypoint does not allocate an output frame or change
+/// the installed fingerprint function.
+///
+/// # Errors
+/// The original bare payload encoder error, including its local resource classification.
+pub fn checked_fingerprint(
+    domain: &[u8],
+    proposal: &impl Encode,
+) -> Result<[u8; 32], norito::core::DecodeAttemptError> {
+    struct DigestWriter(Blake2b<U32>);
+
+    impl std::io::Write for DigestWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    norito::core::classify_decode_attempt(|| {
+        let domain_len = u64::try_from(domain.len())
+            .map_err(|_| norito::Error::LengthMismatch)?
+            .to_le_bytes();
+        let mut writer = DigestWriter(Blake2b::<U32>::new());
+        writer.0.update(domain_len);
+        writer.0.update(domain);
+        norito::codec::encode_adaptive_into(proposal, &mut writer)?;
+        Ok(writer.0.finalize().into())
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn checked_fingerprint_preserves_the_exact_bare_payload_preimage() {
+        #[derive(Encode)]
+        struct Payload {
+            label: String,
+            values: Vec<Vec<u64>>,
+        }
+        for value in [
+            Payload {
+                label: String::new(),
+                values: Vec::new(),
+            },
+            Payload {
+                label: "runtime proposal".into(),
+                values: vec![Vec::new(), vec![0, 127, 256, u64::MAX]],
+            },
+        ] {
+            let bare = value.encode();
+            for domain in [
+                b"".as_slice(),
+                RUNTIME_UPGRADE_V1,
+                GOVERNANCE_EFFECT_PREIMAGE_V1,
+            ] {
+                let mut original = Blake2b::<U32>::new();
+                original.update(u64::try_from(domain.len()).unwrap().to_le_bytes());
+                original.update(domain);
+                original.update(&bare);
+                let original: [u8; 32] = original.finalize().into();
+                assert_eq!(checked_fingerprint(domain, &value).unwrap(), original);
+                assert_eq!(fingerprint(domain, &value), original);
+            }
+        }
+    }
+
+    #[test]
+    fn checked_fingerprint_preserves_a_serializer_error() {
+        struct RefusedPayload;
+        impl norito::core::SerializePayload for RefusedPayload {
+            fn serialize(&self, _: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+                Err(norito::Error::NonCanonicalEncoding)
+            }
+        }
+        let error = checked_fingerprint(RUNTIME_UPGRADE_V1, &RefusedPayload).unwrap_err();
+        assert!(error.into_local_refusal().is_err());
+        let error = checked_fingerprint(RUNTIME_UPGRADE_V1, &RefusedPayload).unwrap_err();
+        assert!(matches!(error.error(), norito::Error::NonCanonicalEncoding));
+    }
+
+    #[test]
+    fn checked_fingerprint_retains_original_serializer_scratch_refusal() {
+        // Norito sorts the actual map entries in admitted scratch before encoding them.
+        // Streaming the fingerprint must not hide that serializer-owned allocation.
+        let value = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
+        let limits =
+            |bytes| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, 64);
+        let (result, usage) = norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+            checked_fingerprint(RUNTIME_UPGRADE_V1, &value)
+        });
+        let expected = result.unwrap();
+        assert_eq!(expected, fingerprint(RUNTIME_UPGRADE_V1, &value));
+        let required = usage.total_allocated_bytes();
+        assert!(
+            required > 0,
+            "the native map serializer retains ordering scratch"
+        );
+        assert_eq!(
+            norito::core::with_decode_limits_scope(limits(required), || {
+                checked_fingerprint(RUNTIME_UPGRADE_V1, &value)
+            })
+            .unwrap(),
+            expected
+        );
+        let error = norito::core::with_decode_limits_scope(limits(required - 1), || {
+            checked_fingerprint(RUNTIME_UPGRADE_V1, &value)
+        })
+        .unwrap_err();
+        let original = error.into_local_refusal().unwrap();
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeLocalRefusalKind::EnclosingLimit
+        );
+    }
+
     #[test]
     fn proposal_domains_are_unique() {
         let domains = [

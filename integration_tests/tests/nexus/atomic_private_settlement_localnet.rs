@@ -16,6 +16,8 @@ mod peer_observation;
 #[cfg(feature = "atomic-private-settlement-smoke")]
 #[path = "atomic_private_settlement_prepared_operation.rs"]
 mod prepared_operation;
+#[path = "atomic_private_settlement_wallet_input.rs"]
+mod wallet_input;
 use peer_observation::collect_bounded_observations;
 
 use super::localnet_npos::npos_override_instruction;

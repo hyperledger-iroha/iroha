@@ -7,6 +7,7 @@
 //! explicit local owner and never creates a replacement State pool.
 
 use super::RegEvent;
+use crate::error::VmDeferral;
 use crate::{
     VMError,
     cache_memory::{OwnedVec, OwnedVecGrowthError},
@@ -134,7 +135,7 @@ impl RegLog {
         match (&self.original, scope) {
             (Some(original), Some(scope)) if scope.belongs_to(original) => Ok(()),
             (None, None) => Ok(()),
-            _ => Err(VMError::HostUnavailable),
+            _ => Err(VMError::Deferred(VmDeferral::HostUnavailable)),
         }
     }
 
@@ -164,10 +165,10 @@ impl RegLog {
             .max(needed)
             .max(4);
         let plan = ExecutionMemoryPlan::array::<RegEvent>(capacity)
-            .map_err(VMError::AllocationDeferred)?;
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
         let mut replacement = if let Some(original) = &self.original {
             let mut lease = ExecutionMemoryLease::reserve(original, plan)
-                .map_err(VMError::AllocationDeferred)?;
+                .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))?;
             #[cfg(test)]
             if REFUSE_NEXT_ALLOCATION.replace(false) {
                 return Err(unavailable());
@@ -213,7 +214,7 @@ impl RegLog {
     pub(crate) fn allocated_bytes(&self) -> Result<usize, VMError> {
         ExecutionMemoryPlan::array::<RegEvent>(self.capacity())
             .map(|plan| plan.requested_bytes())
-            .map_err(VMError::AllocationDeferred)
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
     }
 
     /// Erase every initialized field while keeping the same prepaid backing.
@@ -247,10 +248,14 @@ impl RegLog {
 }
 
 fn overflow() -> VMError {
-    VMError::AllocationDeferred(AllocationRefusal::DemandOverflow)
+    VMError::Deferred(VmDeferral::AllocationDeferred(
+        AllocationRefusal::DemandOverflow,
+    ))
 }
 fn unavailable() -> VMError {
-    VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable)
+    VMError::Deferred(VmDeferral::ExecutionDeferred(
+        ExecutionDeferral::AllocationUnavailable,
+    ))
 }
 fn local_error(error: OwnedVecGrowthError) -> VMError {
     match error {
@@ -261,7 +266,7 @@ fn local_error(error: OwnedVecGrowthError) -> VMError {
 fn prepaid_error(error: PrepaidBufferError) -> VMError {
     match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(refusal)) => {
-            VMError::AllocationDeferred(refusal)
+            VMError::Deferred(VmDeferral::AllocationDeferred(refusal))
         }
         PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. })
         | PrepaidBufferError::Reservation(_) => unavailable(),

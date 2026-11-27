@@ -7,6 +7,8 @@ mod app_api_canonical_auth;
 mod asset;
 #[path = "asset_propagation.rs"]
 mod asset_propagation;
+#[path = "child_runtime_admin.rs"]
+mod child_runtime_admin;
 #[path = "config.rs"]
 mod config;
 #[path = "contracts.rs"]

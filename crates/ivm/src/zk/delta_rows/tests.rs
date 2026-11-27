@@ -2,6 +2,7 @@
 
 use super::super::trace_storage::{PANIC_AFTER_COPY, REFUSE_ALLOCATION};
 use super::*;
+use crate::error::{VmDeferral, VmTrap};
 use iroha_allocation::AllocationRefusal;
 use sha2::{Digest, Sha256};
 use std::{alloc::Layout, mem::size_of};
@@ -142,11 +143,11 @@ fn complete_dual_backing_growth_refuses_atomically_with_original_release_source(
     let row_ptr = log.rows.as_slice().as_ptr();
     let change_ptr = log.changes.as_slice().as_ptr();
     original.set_limit_bytes(old + demand - 1);
-    let Err(VMError::AllocationDeferred(AllocationRefusal::Capacity {
+    let Err(VMError::Deferred(VmDeferral::AllocationDeferred(AllocationRefusal::Capacity {
         requested_bytes,
         release,
         ..
-    })) = prepare(&mut log, 7, crate::parallel::REGISTER_COUNT, 0, &original)
+    }))) = prepare(&mut log, 7, crate::parallel::REGISTER_COUNT, 0, &original)
     else {
         panic!("combined growth refusal");
     };
@@ -197,9 +198,9 @@ fn second_allocation_refusal_and_partial_copy_unwind_keep_live_rows() {
         } else {
             assert!(matches!(
                 result.unwrap(),
-                Err(VMError::ExecutionDeferred(
+                Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                     crate::error::ExecutionDeferral::AllocationUnavailable
-                ))
+                )))
             ));
         }
         assert_eq!(original.reserved_bytes(), before);
@@ -220,15 +221,15 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
     let foreign = AllocationBudget::new(LIMIT);
     let mut log = DeltaTraceLog::new(Some(&original));
     assert!(
-        matches!(log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, None), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
     foreign.with_deferred_refund_notifications(|scope| {
-        assert!(matches!(log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, Some(scope)), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        assert!(matches!(log.prepare_batch(1, crate::parallel::REGISTER_COUNT, 0, Some(scope)), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
             )));
-        assert!(matches!(log.reset(Some(scope)), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        assert!(matches!(log.reset(Some(scope)), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
                 crate::error::ExecutionDeferral::TraceOwnerUnavailable
             )));
     });
@@ -240,15 +241,15 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
             crate::parallel::REGISTER_COUNT,
             &original
         ),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::DemandOverflow
-        ))
+        )))
     ));
     assert_eq!(original.reserved_bytes(), 0);
     prepare(&mut log, 2, 0, 0, &original).unwrap();
     let before = original.reserved_bytes();
     assert!(
-        matches!(prepare(&mut log, 1, 0, 0, &original), Err(VMError::ExecutionDeferred(__actual_error_field)) if __actual_error_field == (
+        matches!(prepare(&mut log, 1, 0, 0, &original), Err(VMError::Deferred(VmDeferral::ExecutionDeferred(__actual_error_field))) if __actual_error_field == (
             crate::error::ExecutionDeferral::TraceOwnerUnavailable
         ))
     );
@@ -282,9 +283,9 @@ fn foreign_scope_pending_overlap_and_overflow_do_not_change_credit() {
     assert_eq!(original.reserved_bytes(), 0);
     assert!(matches!(
         prepare(&mut log, 1, crate::parallel::REGISTER_COUNT, 0, &original),
-        Err(VMError::AllocationDeferred(
+        Err(VMError::Deferred(VmDeferral::AllocationDeferred(
             AllocationRefusal::ExceedsLimit { .. }
-        ))
+        )))
     ));
 }
 
@@ -520,7 +521,7 @@ fn diagnostic_capture_rejects_corrupt_indices_without_a_raw_row_constructor() {
     };
     assert!(matches!(
         source.try_snapshot(&original),
-        Err(VMError::DecodeError)
+        Err(VMError::Trap(VmTrap::DecodeError))
     ));
     assert_eq!(original.reserved_bytes(), before);
     assert_eq!(log.changes.as_slice()[7].0, crate::parallel::REGISTER_COUNT);

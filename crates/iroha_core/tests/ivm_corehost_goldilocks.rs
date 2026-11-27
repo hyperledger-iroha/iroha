@@ -5,6 +5,7 @@ mod goldilocks {
     use iroha_data_model::prelude::AccountId;
     use iroha_test_samples::ALICE_ID;
     use ivm::{IVMHost, syscalls as ivm_sys};
+    use ivm_abi::error::VmTrap;
     use std::{convert::TryFrom, sync::Arc};
     fn make_goldilocks_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
         use iroha_zkp_halo2::{
@@ -102,7 +103,7 @@ mod goldilocks {
         assert!(
             matches!(
                 host.set_verifying_keys(&(BTreeMap::from([(id, record)]))),
-                Err(ivm::VMError::NoritoInvalid)
+                Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
             ),
             "retired IVM binding circuit cannot enter the production verifier registry"
         );

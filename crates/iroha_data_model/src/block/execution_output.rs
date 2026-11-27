@@ -16,6 +16,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_crypto::{Hash, HashOf};
 use norito::codec::{Decode, Encode};
 
+mod c10;
+use crate::ivm_c10::TransactionRejectionReasonC10V1;
+pub use c10::{
+    ExecutionOutputC10V1, ExecutionSourceC10V1, ProfiledTransactionRejection,
+    TransactionRejectionRef, TransactionResultRef,
+};
+
 use super::BlockHeader;
 use crate::{
     events::{time::TimeEvent, trigger_completed::TriggerCompletedOutcome},
@@ -330,6 +337,8 @@ pub enum ExecutionOutputV1 {
     /// These rows precede every Network row of their block, in emission order, and belong to
     /// no input, invocation or execution call.
     GovernanceBlockStart(GovernanceBlockStartOutputV1),
+    /// Full result owned by one selected C10 execution.
+    C10(ExecutionOutputC10V1),
 }
 
 /// Full execution result for one network source; the input body is not duplicated.
@@ -503,9 +512,9 @@ pub struct TimeExecutionOutputV2 {
 /// Borrowed fields common to historical and trace-bearing rows. This view grants
 /// no lifecycle coverage; callers must inspect the enclosing variant separately.
 enum ExecutionOutputRef<'a> {
-    Network(&'a NetworkExecutionOutputV1),
-    Pipeline(&'a PipelineExecutionOutputV1),
-    Time(&'a TimeExecutionOutputV1),
+    Network(u32),
+    Pipeline(&'a PipelineInvocationV1, &'a Option<TriggerFailureRootV1>),
+    Time(&'a TimeInvocationV1, &'a Option<TriggerFailureRootV1>),
     /// A governance block-start row: no input, invocation, result or completion.
     Governance(&'a GovernanceBlockStartOutputV1),
 }
@@ -570,12 +579,30 @@ impl ExecutionOutputV1 {
     /// Borrow the Network execution in either carrier. This projection grants
     /// no lifecycle coverage; hashes and inclusion proofs must bind the full row.
     pub fn network(&self) -> Option<&NetworkExecutionOutputV1> {
-        match self.execution_ref() {
-            ExecutionOutputRef::Network(row) => Some(row),
-            ExecutionOutputRef::Pipeline(_)
-            | ExecutionOutputRef::Time(_)
-            | ExecutionOutputRef::Governance(_) => None,
+        match self {
+            Self::Network(row) => Some(row),
+            Self::NetworkWithLifecycle(row) => Some(&row.execution),
+            _ => None,
         }
+    }
+
+    /// Canonical input position for a network result of any selected family.
+    pub fn network_index(&self) -> Option<u32> {
+        match self.execution_ref() {
+            ExecutionOutputRef::Network(index) => Some(index),
+            _ => None,
+        }
+    }
+
+    /// Check the input and output coordinates of a selected Network row.
+    ///
+    /// A governance prefix can shift Network outputs by at most the block-start row limit.
+    /// The caller authenticates both membership paths against their independent Merkle roots.
+    pub fn matches_network_proof_positions(&self, entry_leaf: u32, output_leaf: u32) -> bool {
+        self.network_index() == Some(entry_leaf)
+            && output_leaf.checked_sub(entry_leaf).is_some_and(|prefix| {
+                prefix <= crate::governance::anonymous_ballot::GOVERNANCE_START_OUTPUT_ROWS_V1
+            })
     }
 
     /// Borrow the governance block-start output of a governance-start row.
@@ -588,13 +615,30 @@ impl ExecutionOutputV1 {
 
     fn execution_ref(&self) -> ExecutionOutputRef<'_> {
         match self {
-            Self::Network(row) => ExecutionOutputRef::Network(row),
-            Self::Pipeline(row) => ExecutionOutputRef::Pipeline(row),
-            Self::Time(row) => ExecutionOutputRef::Time(row),
-            Self::NetworkWithLifecycle(row) => ExecutionOutputRef::Network(&row.execution),
-            Self::PipelineWithLifecycle(row) => ExecutionOutputRef::Pipeline(&row.execution),
-            Self::TimeWithLifecycle(row) => ExecutionOutputRef::Time(&row.execution),
+            Self::Network(row)
+            | Self::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: row, .. }) => {
+                ExecutionOutputRef::Network(row.input_index)
+            }
+            Self::Pipeline(row)
+            | Self::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: row, .. }) => {
+                ExecutionOutputRef::Pipeline(&row.invocation, &row.failure_root)
+            }
+            Self::Time(row)
+            | Self::TimeWithLifecycle(TimeExecutionOutputV2 { execution: row, .. }) => {
+                ExecutionOutputRef::Time(&row.invocation, &row.failure_root)
+            }
             Self::GovernanceBlockStart(row) => ExecutionOutputRef::Governance(row),
+            Self::C10(row) => match &row.source {
+                ExecutionSourceC10V1::Network(index) => ExecutionOutputRef::Network(*index),
+                ExecutionSourceC10V1::Pipeline {
+                    invocation,
+                    failure_root,
+                } => ExecutionOutputRef::Pipeline(invocation, failure_root),
+                ExecutionSourceC10V1::Time {
+                    invocation,
+                    failure_root,
+                } => ExecutionOutputRef::Time(invocation, failure_root),
+            },
         }
     }
 
@@ -608,6 +652,7 @@ impl ExecutionOutputV1 {
             Self::NetworkWithLifecycle(row) => Some(&row.trigger_lifecycle),
             Self::PipelineWithLifecycle(row) => Some(&row.trigger_lifecycle),
             Self::TimeWithLifecycle(row) => Some(&row.trigger_lifecycle),
+            Self::C10(row) => row.trigger_lifecycle.as_ref(),
         }
     }
 
@@ -708,11 +753,10 @@ impl ExecutionOutputV1 {
     /// This checks the typed reason, receipt absence, omitted internal diagnostic
     /// and sole root completion. It does not classify arbitrary error strings.
     pub fn is_output_limit_rejection(&self) -> bool {
-        use crate::transaction::error::TransactionRejectionReason;
-
         if !matches!(
-            &self.result().0,
-            Err(TransactionRejectionReason::LimitCheck(error))
+            self.result().as_ref(),
+            Err(TransactionRejectionRef::Baseline(TransactionRejectionReason::LimitCheck(error))
+              | TransactionRejectionRef::C10(TransactionRejectionReasonC10V1::LimitCheck(error)))
                 if error.reason == EXECUTION_OUTPUT_LIMIT_REASON
         ) || !self.result().batch_transfer_outcomes().is_empty()
             || self.result().nexus_fee_receipt().is_some()
@@ -720,9 +764,9 @@ impl ExecutionOutputV1 {
             || self.trigger_lifecycle().is_some_and(|trace| {
                 let effects = trace.effects();
                 if effects.is_empty() { return false; }
-                let ExecutionOutputRef::Time(output) = self.execution_ref() else { return true; };
+                let ExecutionOutputRef::Time(invocation, _) = self.execution_ref() else { return true; };
                 !matches!(effects, [effect]
-                    if effect.trigger_id == output.invocation.trigger.trigger_id
+                    if effect.trigger_id == invocation.trigger.trigger_id
                         && effect.origin == (TriggerLifecycleOriginV1::InvocationPolicy {
                             callback_index: 0,
                             policy: TriggerLifecyclePolicyV1::ConsumeTimeProgress,
@@ -735,22 +779,16 @@ impl ExecutionOutputV1 {
         {
             return false;
         }
-        let (trigger, diagnostic, completions) = match self.execution_ref() {
-            ExecutionOutputRef::Network(output) => return output.completions.is_empty(),
+        let (trigger, diagnostic) = match self.execution_ref() {
+            ExecutionOutputRef::Network(_) => return self.completions().is_empty(),
             ExecutionOutputRef::Governance(_) => return false,
-            ExecutionOutputRef::Pipeline(output) => (
-                &output.invocation.trigger,
-                &output.failure_root,
-                &output.completions,
-            ),
-            ExecutionOutputRef::Time(output) => (
-                &output.invocation.trigger,
-                &output.failure_root,
-                &output.completions,
-            ),
+            ExecutionOutputRef::Pipeline(invocation, diagnostic) => {
+                (&invocation.trigger, diagnostic)
+            }
+            ExecutionOutputRef::Time(invocation, diagnostic) => (&invocation.trigger, diagnostic),
         };
         matches!(diagnostic, Some(TriggerFailureRootV1::OmittedByOutputLimit))
-            && matches!(completions.as_slice(), [completion]
+            && matches!(self.completions(), [completion]
                 if completion.callback_index == 0
                     && completion.trigger_id == trigger.trigger_id
                     && matches!(&completion.outcome, TriggerCompletedOutcome::Failure(reason)
@@ -762,23 +800,16 @@ impl ExecutionOutputV1 {
     /// This does not authenticate execution or authorize quarantine/retry effects.
     /// The distinct omitted-root tag prevents confusion with healthy overflow.
     pub fn is_internal_rejection_diagnostic_omitted(&self) -> bool {
-        use crate::transaction::error::TransactionRejectionReason;
-
-        let (trigger, diagnostic, completions) = match self.execution_ref() {
+        let (trigger, diagnostic) = match self.execution_ref() {
             ExecutionOutputRef::Network(_) | ExecutionOutputRef::Governance(_) => return false,
-            ExecutionOutputRef::Pipeline(output) => (
-                &output.invocation.trigger,
-                &output.failure_root,
-                &output.completions,
-            ),
-            ExecutionOutputRef::Time(output) => (
-                &output.invocation.trigger,
-                &output.failure_root,
-                &output.completions,
-            ),
+            ExecutionOutputRef::Pipeline(invocation, diagnostic) => {
+                (&invocation.trigger, diagnostic)
+            }
+            ExecutionOutputRef::Time(invocation, diagnostic) => (&invocation.trigger, diagnostic),
         };
-        matches!(&self.result().0,
-            Err(TransactionRejectionReason::LimitCheck(error))
+        matches!(self.result().as_ref(),
+            Err(TransactionRejectionRef::Baseline(TransactionRejectionReason::LimitCheck(error))
+              | TransactionRejectionRef::C10(TransactionRejectionReasonC10V1::LimitCheck(error)))
                 if error.reason == INTERNAL_REJECTION_DIAGNOSTIC_OMITTED)
             && self.result().batch_transfer_outcomes().is_empty()
             && self.result().nexus_fee_receipt().is_none()
@@ -787,7 +818,7 @@ impl ExecutionOutputV1 {
                 diagnostic,
                 Some(TriggerFailureRootV1::OmittedAfterRejection)
             )
-            && matches!(completions.as_slice(), [completion]
+            && matches!(self.completions(), [completion]
                 if completion.callback_index == 0
                     && completion.trigger_id == trigger.trigger_id
                     && matches!(&completion.outcome, TriggerCompletedOutcome::Failure(reason)
@@ -796,22 +827,44 @@ impl ExecutionOutputV1 {
 
     /// Borrow the one full result without projecting away its receipts. A governance
     /// block-start row has no execution: it projects the applied empty trace.
-    pub fn result(&self) -> &TransactionResult {
-        match self.execution_ref() {
-            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { result, .. })
-            | ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { result, .. })
-            | ExecutionOutputRef::Time(TimeExecutionOutputV1 { result, .. }) => result,
-            ExecutionOutputRef::Governance(_) => governance_start_result(),
+    pub fn result(&self) -> TransactionResultRef<'_> {
+        match self {
+            Self::Network(row)
+            | Self::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: row, .. }) => {
+                TransactionResultRef::Baseline(&row.result)
+            }
+            Self::Pipeline(row)
+            | Self::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: row, .. }) => {
+                TransactionResultRef::Baseline(&row.result)
+            }
+            Self::Time(row)
+            | Self::TimeWithLifecycle(TimeExecutionOutputV2 { execution: row, .. }) => {
+                TransactionResultRef::Baseline(&row.result)
+            }
+            Self::GovernanceBlockStart(_) => {
+                TransactionResultRef::Baseline(governance_start_result())
+            }
+            Self::C10(row) => TransactionResultRef::C10(&row.result),
         }
     }
 
     /// Borrow this output's sole ordered completion collection.
     pub fn completions(&self) -> &[InvocationCompletionV1] {
-        match self.execution_ref() {
-            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { completions, .. })
-            | ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { completions, .. })
-            | ExecutionOutputRef::Time(TimeExecutionOutputV1 { completions, .. }) => completions,
-            ExecutionOutputRef::Governance(_) => &[],
+        match self {
+            Self::Network(row)
+            | Self::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: row, .. }) => {
+                &row.completions
+            }
+            Self::Pipeline(row)
+            | Self::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: row, .. }) => {
+                &row.completions
+            }
+            Self::Time(row)
+            | Self::TimeWithLifecycle(TimeExecutionOutputV2 { execution: row, .. }) => {
+                &row.completions
+            }
+            Self::GovernanceBlockStart(_) => &[],
+            Self::C10(row) => &row.completions,
         }
     }
 
@@ -830,15 +883,11 @@ impl ExecutionOutputV1 {
         network_inputs: &S,
     ) -> Result<Hash, String> {
         match self.execution_ref() {
-            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { input_index, .. }) => Ok(
-                Hash::from(network_input(network_inputs, *input_index)?.execution_call_hash()),
-            ),
-            ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) => {
-                invocation.execution_call_hash(proposal)
-            }
-            ExecutionOutputRef::Time(TimeExecutionOutputV1 { invocation, .. }) => {
-                invocation.execution_call_hash(proposal)
-            }
+            ExecutionOutputRef::Network(input_index) => Ok(Hash::from(
+                network_input(network_inputs, input_index)?.execution_call_hash(),
+            )),
+            ExecutionOutputRef::Pipeline(invocation, _) => invocation.execution_call_hash(proposal),
+            ExecutionOutputRef::Time(invocation, _) => invocation.execution_call_hash(proposal),
             ExecutionOutputRef::Governance(_) => {
                 Err("a governance block-start output has no execution call".into())
             }
@@ -877,13 +926,14 @@ impl ExecutionOutputV1 {
                 }
                 return Ok(());
             }
-            ExecutionOutputRef::Network(NetworkExecutionOutputV1 {
-                input_index,
-                result,
-                completions,
-            }) => {
-                let input = network_input(network_inputs, *input_index)?;
+            ExecutionOutputRef::Network(input_index) => {
+                let result = self.result();
+                let completions = self.completions();
+                let input = network_input(network_inputs, input_index)?;
                 if matches!(input, TransactionEntrypoint::AnonymousBallot(_)) {
+                    let TransactionResultRef::Baseline(result) = result else {
+                        return Err("anonymous ballot requires its native output family".into());
+                    };
                     match &result.0 {
                         Ok(steps) if steps.is_empty() => {}
                         Err(TransactionRejectionReason::AnonymousBallot(
@@ -908,8 +958,12 @@ impl ExecutionOutputV1 {
                         return Err("anonymous ballot output cannot retain side outputs".into());
                     }
                 } else if matches!(
-                    &result.0,
-                    Err(TransactionRejectionReason::AnonymousBallot(_))
+                    result.as_ref(),
+                    Err(TransactionRejectionRef::Baseline(
+                        TransactionRejectionReason::AnonymousBallot(_)
+                    ) | TransactionRejectionRef::C10(
+                        TransactionRejectionReasonC10V1::AnonymousBallot(_)
+                    ))
                 ) {
                     return Err(
                         "ordinary Network output cannot contain an anonymous ballot rejection"
@@ -924,11 +978,7 @@ impl ExecutionOutputV1 {
                 }
                 None
             }
-            ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 {
-                invocation,
-                failure_root,
-                ..
-            }) => {
+            ExecutionOutputRef::Pipeline(invocation, failure_root) => {
                 if let PipelineEventPositionV1::Network(input_index) = invocation.event
                     && !matches!(
                         network_input(network_inputs, input_index)?,
@@ -939,11 +989,7 @@ impl ExecutionOutputV1 {
                 }
                 Some((&invocation.trigger, failure_root))
             }
-            ExecutionOutputRef::Time(TimeExecutionOutputV1 {
-                invocation,
-                failure_root,
-                ..
-            }) => {
+            ExecutionOutputRef::Time(invocation, failure_root) => {
                 invocation
                     .event
                     .interval
@@ -954,7 +1000,7 @@ impl ExecutionOutputV1 {
             }
         };
         let result = self.result();
-        if result.0.is_err() && !result.contract_events().is_empty() {
+        if result.is_err() && !result.contract_events().is_empty() {
             return Err("rejected execution output cannot publish contract emissions".into());
         }
         for event in result.contract_events() {
@@ -974,13 +1020,17 @@ impl ExecutionOutputV1 {
                 return Err("contract emission payload does not match its exact schema".into());
             }
         }
-        if result.0.is_err() && !result.batch_transfer_outcomes().is_empty() {
+        if result.is_err() && !result.batch_transfer_outcomes().is_empty() {
             return Err("rolled-back output retains batch-transfer receipts".into());
         }
         if let Some((trigger, failure_root)) = internal {
             if matches!(
-                &result.0,
-                Err(TransactionRejectionReason::AnonymousBallot(_))
+                result.as_ref(),
+                Err(TransactionRejectionRef::Baseline(
+                    TransactionRejectionReason::AnonymousBallot(_)
+                ) | TransactionRejectionRef::C10(
+                    TransactionRejectionReasonC10V1::AnonymousBallot(_)
+                ))
             ) {
                 return Err("internal output cannot contain an anonymous ballot rejection".into());
             }
@@ -991,7 +1041,7 @@ impl ExecutionOutputV1 {
             if trigger.registered_at_height >= proposal_height {
                 return Err("internal action was not registered before applying height".into());
             }
-            match (&result.0, failure_root) {
+            match (result.as_ref(), failure_root) {
                 (Ok(steps), None)
                     if steps
                         .first()
@@ -1039,11 +1089,11 @@ impl ExecutionOutputV1 {
         if let Some(trace) = self.trigger_lifecycle() {
             let owner = match self.execution_ref() {
                 ExecutionOutputRef::Network(_) => TriggerLifecycleOwnerV1::Network,
-                ExecutionOutputRef::Pipeline(row) => {
-                    TriggerLifecycleOwnerV1::Pipeline(&row.invocation.trigger)
+                ExecutionOutputRef::Pipeline(invocation, _) => {
+                    TriggerLifecycleOwnerV1::Pipeline(&invocation.trigger)
                 }
-                ExecutionOutputRef::Time(row) => {
-                    TriggerLifecycleOwnerV1::Time(&row.invocation.trigger)
+                ExecutionOutputRef::Time(invocation, _) => {
+                    TriggerLifecycleOwnerV1::Time(&invocation.trigger)
                 }
                 ExecutionOutputRef::Governance(_) => {
                     unreachable!("a governance block-start row returned before its trace")
@@ -1100,13 +1150,13 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
     for output in outputs {
         output.validate_structure(proposal_height, network_inputs)?;
         match output.execution_ref() {
-            ExecutionOutputRef::Network(NetworkExecutionOutputV1 { input_index, .. }) => {
-                if phase != 0 || usize::try_from(*input_index).ok() != Some(network_count) {
+            ExecutionOutputRef::Network(input_index) => {
+                if phase != 0 || usize::try_from(input_index).ok() != Some(network_count) {
                     return Err("network outputs are missing, duplicated or unordered".into());
                 }
                 network_count += 1;
             }
-            ExecutionOutputRef::Pipeline(PipelineExecutionOutputV1 { invocation, .. }) => {
+            ExecutionOutputRef::Pipeline(invocation, _) => {
                 if phase == 2 {
                     return Err("pipeline output follows Time phase".into());
                 }
@@ -1120,7 +1170,7 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
                 }
                 previous_pipeline = Some(position);
             }
-            ExecutionOutputRef::Time(TimeExecutionOutputV1 { invocation, .. }) => {
+            ExecutionOutputRef::Time(invocation, _) => {
                 phase = 2;
                 if previous_time.is_some_and(|previous| previous >= invocation.schedule_index)
                     || time_event.is_some_and(|previous| previous != invocation.event)
@@ -1135,10 +1185,10 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
             }
         }
         let (call, anonymous_network) = match output.execution_ref() {
-            ExecutionOutputRef::Network(row) => {
+            ExecutionOutputRef::Network(input_index) => {
                 // Resolve once for both the call identity and the exception's
                 // owner kind, preserving bounded random-access input validation.
-                let input = network_input(network_inputs, row.input_index)?;
+                let input = network_input(network_inputs, input_index)?;
                 (
                     Hash::from(input.execution_call_hash()),
                     matches!(input, TransactionEntrypoint::AnonymousBallot(_)),

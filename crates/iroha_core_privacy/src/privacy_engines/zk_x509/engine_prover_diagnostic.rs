@@ -5,6 +5,8 @@
 //! the optimized exact test under `/usr/bin/time -l` on macOS to measure RSS;
 //! the private allocation ledger is not an observation of process memory.
 
+#![cfg(test)]
+
 use super::*;
 use std::{
     fs::{self, OpenOptions},

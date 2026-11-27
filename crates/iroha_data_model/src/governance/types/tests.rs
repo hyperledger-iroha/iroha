@@ -39,6 +39,32 @@ fn parliament_expected_head_root_keeps_the_length_prefixed_domain_preimage() {
 }
 
 #[test]
+fn checked_public_finding_root_preserves_owned_preimage_without_assignment_copy() {
+    let attempt = GovernanceAttemptId::new([1; 32]);
+    let body = BodyInstanceId::new([2; 32]);
+    for assignments in [
+        Vec::new(),
+        vec![AssignmentId::new([3; 32]), AssignmentId::new([4; 32])],
+    ] {
+        let expected =
+            parliament_public_finding_endorsement_root_v1(attempt, body, [5; 32], &assignments);
+        let actual = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || {
+                checked_parliament_public_finding_endorsement_root_v1(
+                    attempt,
+                    body,
+                    [5; 32],
+                    &assignments,
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn governance_subject_preimage_tags_are_closed_and_dense() {
     assert_eq!(
         &GovernanceSubjectPreimageV1::SorafsAdmissionCouncil.encode()[..4],
@@ -761,6 +787,73 @@ fn runtime_upgrade_proposal_roundtrip() {
         }
     }
 }
+
+#[test]
+fn checked_runtime_fingerprints_preserve_proposal_effect_and_subject_preimages() {
+    let scheduled = crate::runtime::lifecycle::test_schedule(42);
+    let RuntimeUpgradeActionV1::Schedule(change) = &scheduled else {
+        panic!("schedule fixture");
+    };
+    let canceled = RuntimeUpgradeActionV1::Cancel(change.id().unwrap());
+    let mut subjects = Vec::new();
+    for action in [scheduled, canceled] {
+        let payload = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+            proposal_operator: checked_account_id(),
+            action,
+            notice: crate::runtime::lifecycle::RuntimeNoticeV1 {
+                blocks: 3,
+                ms: 70,
+                approval_cushion_ms: 11,
+            },
+            proposed_ms: 19,
+        });
+        let original_wire = payload.encode();
+        assert_eq!(
+            payload.checked_fingerprint_v1().unwrap(),
+            payload.fingerprint()
+        );
+        assert_eq!(
+            ProposalContentId::derive_checked_v1(&payload).unwrap(),
+            ProposalContentId::derive_v1(&payload)
+        );
+        assert_eq!(
+            payload.checked_effect_preimage_hash_v1().unwrap(),
+            payload.effect_preimage_hash_v1()
+        );
+        let ProposalKind::RuntimeUpgrade(runtime) = &payload else {
+            unreachable!();
+        };
+        let subject = checked_runtime_upgrade_subject_id_v1(&runtime.action).unwrap();
+        assert_eq!(subject, payload.governed_subject_id_v1().unwrap());
+        subjects.push(subject);
+        assert_eq!(
+            payload.encode(),
+            original_wire,
+            "identity checks do not change content"
+        );
+        let limits = || norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let content = norito::core::with_decode_limits_scope(limits(), || {
+            ProposalContentId::derive_checked_v1(&payload)
+        })
+        .unwrap();
+        assert_eq!(content, ProposalContentId::derive_v1(&payload));
+        let effect = norito::core::with_decode_limits_scope(limits(), || {
+            payload.checked_effect_preimage_hash_v1()
+        })
+        .unwrap();
+        assert_eq!(effect, payload.effect_preimage_hash_v1());
+        let checked_subject = norito::core::with_decode_limits_scope(limits(), || {
+            checked_runtime_upgrade_subject_id_v1(&runtime.action)
+        })
+        .unwrap();
+        assert_eq!(checked_subject, subject);
+    }
+    assert_eq!(
+        subjects[0], subjects[1],
+        "schedule and cancel contend on one subject"
+    );
+}
+
 #[test]
 fn runtime_upgrade_proposal_bounds_number_encoded_heights() {
     let proposal = |effective_height| {

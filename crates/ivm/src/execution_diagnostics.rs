@@ -5,6 +5,7 @@
 //! ordinary VM, host scratch, or the access recorder's small shared control
 //! allocation, and it is not a production private-witness custody boundary.
 
+use crate::error::VmDeferral;
 use iroha_allocation::AllocationBudget;
 
 use crate::{
@@ -39,7 +40,11 @@ impl DiagnosticExecutionRecorders {
             access_capacity,
             initial_image_bytes,
         )?)
-        .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable))?;
+        .map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::AllocationUnavailable,
+            ))
+        })?;
         Ok(plan)
     }
 
@@ -54,8 +59,11 @@ impl DiagnosticExecutionRecorders {
         budget: &AllocationBudget,
     ) -> Result<Self, VMError> {
         let plan = Self::allocation_plan(step_capacity, access_capacity, initial_image_bytes)?;
-        let mut root = ExecutionMemoryLease::reserve(budget, plan)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity))?;
+        let mut root = ExecutionMemoryLease::reserve(budget, plan).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::ActiveMemoryCapacity,
+            ))
+        })?;
         Self::try_new_from_parent(
             step_capacity,
             access_capacity,
@@ -80,9 +88,11 @@ impl DiagnosticExecutionRecorders {
         parent: &mut ExecutionMemoryLease,
     ) -> Result<Self, VMError> {
         let plan = Self::allocation_plan(step_capacity, access_capacity, initial_image_bytes)?;
-        let mut child = parent
-            .partition(plan)
-            .map_err(|_| VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity))?;
+        let mut child = parent.partition(plan).map_err(|_| {
+            VMError::Deferred(VmDeferral::ExecutionDeferred(
+                ExecutionDeferral::ActiveMemoryCapacity,
+            ))
+        })?;
         let steps = DiagnosticStepRecorder::try_new_from_lease(step_capacity, &mut child)?;
         let memory_accesses = DiagnosticMemoryAccessRecorder::try_new_from_lease(
             access_capacity,
@@ -99,6 +109,7 @@ impl DiagnosticExecutionRecorders {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{VmDeferral, VmTrap};
     use crate::{IVM, encoding::wide, host::DefaultHost};
 
     #[test]
@@ -178,14 +189,14 @@ mod tests {
         let mut parent = ExecutionMemoryLease::reserve(&budget, plan).unwrap();
         assert!(matches!(
             DiagnosticExecutionRecorders::try_new_from_parent(2, 1, None, &mut parent),
-            Err(VMError::ExecutionDeferred(
+            Err(VMError::Deferred(VmDeferral::ExecutionDeferred(
                 ExecutionDeferral::ActiveMemoryCapacity
-            ))
+            )))
         ));
         assert_eq!(parent.remaining_bytes(), plan.requested_bytes());
         assert!(matches!(
             DiagnosticExecutionRecorders::try_new_from_parent(1, 1, Some(0), &mut parent),
-            Err(VMError::MemoryOutOfBounds)
+            Err(VMError::Trap(VmTrap::MemoryOutOfBounds))
         ));
         assert_eq!(parent.remaining_bytes(), plan.requested_bytes());
         drop(parent);

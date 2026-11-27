@@ -10,6 +10,7 @@ use iroha_data_model::{
 };
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, encoding, instruction, syscalls};
+use ivm_abi::error::VmTrap;
 
 fn attachment() -> ProofAttachment {
     ProofAttachment::new_ref(
@@ -28,7 +29,7 @@ fn assert_generic_bridge_rejected(instruction: &InstructionBox) {
     let mut vm = IVM::new(10_000_000);
     let expected_syscall = syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION;
     assert!(
-        matches!(vm.load_program(&program), Err(ivm::VMError::GenericSyscallNotAllowed { syscall }) if syscall == expected_syscall)
+        matches!(vm.load_program(&program), Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall })) if syscall == expected_syscall)
     );
     let payload = norito::to_bytes(instruction).unwrap();
     let mut tlv = Vec::new();
@@ -43,7 +44,7 @@ fn assert_generic_bridge_rejected(instruction: &InstructionBox) {
     let mut host = CoreHost::new(ALICE_ID.clone());
     assert!(
         matches!(host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
-        Err(ivm::VMError::GenericSyscallNotAllowed { syscall }) if syscall == expected_syscall)
+        Err(ivm::VMError::Trap(VmTrap::GenericSyscallNotAllowed { syscall })) if syscall == expected_syscall)
     );
     assert_eq!(vm.register(10), pointer);
 }

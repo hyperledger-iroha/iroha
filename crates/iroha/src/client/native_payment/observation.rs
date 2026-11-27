@@ -345,7 +345,7 @@ fn evidence(
         .ok_or(NativePaymentObservationError::CandidateMismatch)?
         .clone();
     let (output_index, _) = block
-        .network_output_at(index)
+        .network_execution_output_at(index)
         .ok_or(NativePaymentObservationError::CandidateMismatch)?;
     let output = block
         .execution_outputs()

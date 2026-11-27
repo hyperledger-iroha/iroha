@@ -16,7 +16,6 @@ use iroha_fs::{
     FileSnapshot, PendingPrivateFile, PrivateDirectory, PrivateReadScope, ScopedSealedPrivateFile,
     SealedPrivateFile,
 };
-use rand::rand_core::TryRng as _;
 use sha2::{Digest as _, Sha256};
 
 use super::{
@@ -34,6 +33,9 @@ pub const TRANSPORT_MAX_BYTES_V1: usize = 32 << 20;
 const ROWS: usize = ARTIFACT_MAX_COUNT_V1 * 3;
 const WINDOW_LOG: u32 = 23;
 const SCHEMA: &str = "iroha.kagemusha.wallet-artifact-original-transport.v1";
+
+#[path = "encoded/spartan.rs"]
+pub mod spartan;
 
 #[path = "encoded/snapshot.rs"]
 mod snapshot;
@@ -572,19 +574,22 @@ impl OriginalSourceV1 for EncodedDirectoryOriginalsV1 {
 }
 
 struct StoredWriter {
-    file: PendingPrivateFile,
+    file: Option<PendingPrivateFile>,
     hash: Sha256,
     bytes: u64,
 }
 impl Write for StoredWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let count = self.file.write(bytes)?;
+        let count = match &mut self.file {
+            Some(file) => file.write(bytes)?,
+            None => bytes.len(),
+        };
         self.hash.update(&bytes[..count]);
         self.bytes += count as u64;
         Ok(count)
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()
+        self.file.as_mut().map_or(Ok(()), Write::flush)
     }
 }
 
@@ -597,21 +602,29 @@ pub fn encode_original(
     destination: &PrivateDirectory,
     identity: BlobV1,
 ) -> io::Result<EncodedOriginalV1> {
+    let mut input = source
+        .open_original(identity.sha256)
+        .map_err(io::Error::other)?;
+    let row = encode_stream(&mut input, destination, identity)?;
+    source.root()?;
+    Ok(row)
+}
+
+fn encode_stream(
+    input: &mut dyn Read,
+    destination: &PrivateDirectory,
+    identity: BlobV1,
+) -> io::Result<EncodedOriginalV1> {
     if identity.bytes == 0
         || identity.bytes > PROVING_KEY_MAX_BYTES_V1 as u64
         || identity.sha256 == [0; 32]
     {
         return Err(invalid("raw encoding identity bound"));
     }
-    let mut input = source
-        .open_original(identity.sha256)
-        .map_err(io::Error::other)?;
-    let mut nonce = [0_u8; 16];
-    rand::rngs::SysRng
-        .try_fill_bytes(&mut nonce)
-        .map_err(io::Error::other)?;
-    let file = destination.create_retained_private(
-        format!("encoded-{}.partial", hex::encode(nonce)),
+    let name = hex::encode(identity.sha256);
+    let file = super::transport_metadata::stage_if_absent(
+        destination,
+        &name,
         ENCODED_ORIGINAL_MAX_BYTES_V1,
     )?;
     let mut encoder = zstd::stream::write::Encoder::new(
@@ -653,16 +666,14 @@ pub fn encode_original(
         },
     };
     transport_identity.validate()?;
-    let sealed = writer.file.seal_read_only()?;
-    match sealed.publish_new_name(hex::encode(identity.sha256)) {
-        Ok(file) => file.revalidate()?,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error),
+    if let Some(file) = writer.file {
+        file.seal_read_only()?
+            .publish_new_name(name)?
+            .revalidate()?;
     }
     let transport = EncodedTransportV1::new(vec![transport_identity])?;
     EncodedDirectoryOriginalsV1::open_existing(destination.path(), &transport)?
         .verify_original(identity)?;
-    source.root()?;
     Ok(transport_identity)
 }
 
@@ -748,6 +759,15 @@ fn require_carrier_entries(root: &PrivateDirectory, complete: bool) -> io::Resul
 }
 
 pub(super) fn financial_json(pack: &[u8], catalog: &[u8], transport: &[u8]) -> io::Result<Vec<u8>> {
+    financial_json_for_scope(pack, catalog, transport, None)
+}
+
+fn financial_json_for_scope(
+    pack: &[u8],
+    catalog: &[u8],
+    transport: &[u8],
+    spartan_scope: Option<([u8; 32], [u8; 32])>,
+) -> io::Result<Vec<u8>> {
     if pack.is_empty()
         || pack.len() > VERIFIER_PACK_MAX_BYTES_V1
         || catalog.is_empty()
@@ -757,11 +777,25 @@ pub(super) fn financial_json(pack: &[u8], catalog: &[u8], transport: &[u8]) -> i
     {
         return Err(invalid("financial metadata bounds"));
     }
+    let (scope, schema) = match spartan_scope {
+        Some((asset, manifest)) => (
+            format!(
+                "\"assetDigest\":\"{}\",\"manifestDigest\":\"{}\",",
+                hex::encode(asset),
+                hex::encode(manifest)
+            ),
+            "iroha.kagemusha.spartan.wallet-financial-originals.v1",
+        ),
+        None => (
+            String::new(),
+            "iroha.kagemusha.wallet-financial-originals.v1",
+        ),
+    };
     let digest = artifact_digest(b"producer-catalog", catalog);
     let pack = BlobV1::of(pack);
     let catalog = BlobV1::of(catalog);
     let transport = BlobV1::of(transport);
-    Ok(format!("{{\"producerCatalogDigest\":\"{}\",\"producerInventory\":{{\"bytes\":{},\"sha256\":\"{}\"}},\"schema\":\"iroha.kagemusha.wallet-financial-originals.v1\",\"transport\":{{\"bytes\":{},\"sha256\":\"{}\"}},\"verifierPack\":{{\"bytes\":{},\"sha256\":\"{}\"}}}}\n",
+    Ok(format!("{{{scope}\"producerCatalogDigest\":\"{}\",\"producerInventory\":{{\"bytes\":{},\"sha256\":\"{}\"}},\"schema\":\"{schema}\",\"transport\":{{\"bytes\":{},\"sha256\":\"{}\"}},\"verifierPack\":{{\"bytes\":{},\"sha256\":\"{}\"}}}}\n",
         hex::encode(digest), catalog.bytes, hex::encode(catalog.sha256), transport.bytes,
         hex::encode(transport.sha256), pack.bytes, hex::encode(pack.sha256)).into_bytes())
 }

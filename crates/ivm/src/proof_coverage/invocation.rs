@@ -98,7 +98,7 @@ pub const INVOCATION_OBLIGATIONS: &[InvocationObligation] = &[
     )
     .citing(&[cite(
         PROGRAM_HEADER,
-        "VMError::UnsupportedProgramAbiVersion",
+        "VmTrap::UnsupportedProgramAbiVersion",
     )]),
     open(
         "statement.code_hash",
@@ -117,7 +117,7 @@ pub const INVOCATION_OBLIGATIONS: &[InvocationObligation] = &[
     )
     .citing(&[
         cite("crates/ivm_abi/src/syscalls.rs", "pub fn compute_abi_hash("),
-        cite(PROGRAM_HEADER, "VMError::ArtifactAbiHashMismatch"),
+        cite(PROGRAM_HEADER, "VmTrap::ArtifactAbiHashMismatch"),
         cite(
             "crates/iroha_core/src/smartcontracts/ivm.rs",
             "IvmAdmissionError::ManifestAbiHashMismatch(",

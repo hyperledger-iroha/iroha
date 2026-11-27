@@ -137,7 +137,7 @@ fn governance_rows_lead_the_block_and_own_no_input_call_or_result() {
         );
         assert!(output.governance_block_start().is_some());
         assert!(output.network().is_none());
-        assert_eq!(output.result().0, Ok(Vec::new()));
+        assert_eq!(output.result().as_ref(), Ok(&Vec::new()));
         assert!(output.completions().is_empty());
         assert!(output.trigger_lifecycle().is_none());
         assert!(!output.is_output_limit_rejection());
@@ -490,4 +490,147 @@ fn an_item_is_deferred_before_it_mutates_when_its_ceiling_does_not_fit() {
         "one prelude row is still reserved"
     );
     assert!(reserved.fits(ReceiptAndOutput));
+}
+
+#[test]
+fn payment_proofs_keep_their_coordinates_across_c10_and_governance_outputs() {
+    use crate::{
+        asset::AssetId,
+        block::{BlockSignatures, builder::BlockBuilder, decode_framed_signed_block},
+        isi::Transfer,
+        ivm_c10::{
+            IvmAdmissionErrorC10V1, TransactionRejectionReasonC10V1, TransactionResultC10V1,
+            ValidationFailC10V1,
+        },
+        smart_contract::event::ContractEmissionsV1,
+    };
+    let source = KeyPair::from_seed(vec![0x37; 32], Algorithm::Ed25519);
+    let authority = AccountId::new(source.public_key().clone());
+    let recipient = KeyPair::from_seed(vec![0x38; 32], Algorithm::Ed25519);
+    let asset = AssetId::new(
+        "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap(),
+        authority.clone(),
+    );
+    let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"mixed output proof",
+    )));
+    let mut builder = BlockBuilder::new(BlockHeader::new(
+        HEIGHT.try_into().unwrap(),
+        None,
+        None,
+        TIME_MS,
+        0,
+    ));
+    for i in 0_u32..3 {
+        let mut tx = TransactionBuilder::new(
+            network.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(vec![], None),
+        );
+        tx.set_creation_time(std::time::Duration::from_millis(700 + u64::from(i)));
+        let tx = if i == 1 {
+            tx
+        } else {
+            tx.with_instructions([Transfer::asset_quantity(
+                asset.clone(),
+                1 + i,
+                AccountId::new(recipient.public_key().clone()),
+            )])
+        };
+        assert_eq!(
+            builder.push_transaction(tx.sign(source.private_key())),
+            i as usize
+        );
+    }
+    let mut block = builder.build(BlockSignatures::default());
+    let ordinary = |input_index| {
+        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index,
+            result: TransactionResult::new(Ok(vec![])),
+            completions: vec![],
+        })
+    };
+    let c10 = ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+        source: ExecutionSourceC10V1::Network(1),
+        result: TransactionResultC10V1(
+            Err(TransactionRejectionReasonC10V1::Validation(
+                ValidationFailC10V1::IvmAdmission(IvmAdmissionErrorC10V1::MaxCyclesWithoutZk(19)),
+            )),
+            vec![],
+            None,
+            ContractEmissionsV1::default(),
+        ),
+        completions: vec![],
+        trigger_lifecycle: None,
+    });
+    assert_eq!(c10.encode()[..4], 7_u32.to_le_bytes());
+    let outputs = vec![row(clock(1)), ordinary(0), c10, ordinary(2)];
+    let limits = ExecutionOutputLimits {
+        max_outputs: 8,
+        max_output_bytes: 64 * 1024,
+        max_total_output_bytes: 512 * 1024,
+        max_executed_wire_bytes: GOVERNANCE_START_OUTPUT_BYTES_V1 + 1024 * 1024,
+    };
+    block
+        .set_execution_outputs(
+            outputs.clone(),
+            0,
+            Default::default(),
+            vec![],
+            Default::default(),
+            Default::default(),
+            &limits,
+        )
+        .unwrap();
+    let restored = decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
+    restored.validate_execution_result_structure().unwrap();
+    restored.validate_output_merkle_cache().unwrap();
+    assert_eq!(restored.execution_outputs(), outputs);
+    let input_root = restored.network_input_merkle_commitment().unwrap();
+    let output_root = restored.output_merkle_commitment().unwrap();
+    for i in 0_usize..3 {
+        let input = restored.network_entrypoint_at(i).unwrap();
+        let proof = restored.network_input_proof(i as u32).unwrap();
+        assert!(proof.verify(&input.hash(), &input_root));
+        let (index, output) = restored.network_execution_output_at(i as u32).unwrap();
+        assert_eq!(index as usize, i + 1);
+        assert!(
+            restored
+                .output_proof(index)
+                .unwrap()
+                .verify(&HashOf::new(output), &output_root)
+        );
+        assert!(
+            !restored
+                .output_proof(index - 1)
+                .unwrap()
+                .verify(&HashOf::new(output), &output_root)
+        );
+        assert_eq!(
+            restored.network_output_at(i as u32).map(|(index, _)| index),
+            (i != 1).then_some(index)
+        );
+    }
+    assert_eq!(
+        restored
+            .failed_outputs()
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>(),
+        [2]
+    );
+    let mut reordered = outputs;
+    reordered.swap(2, 3);
+    assert!(
+        block
+            .set_execution_outputs(
+                reordered,
+                0,
+                Default::default(),
+                vec![],
+                Default::default(),
+                Default::default(),
+                &limits
+            )
+            .is_err()
+    );
 }

@@ -237,3 +237,66 @@ internal fun synchronizeKagemushaLedgerEpochsV1(
     } catch (error: Throwable) { result.completeExceptionally(error) }
     return result
 }
+
+/** Confirm one released Spartan Unload through its account-authenticated Torii route.
+ * A typed wait leaves the locally retained claim and any previously certified payout intact. */
+@JvmOverloads
+fun KagemushaSpartanWalletV1.confirmUnload(operationId: ByteArray, signedTransaction: ByteArray,
+    schemeId: ByteArray, walletId: ByteArray, transport: org.hyperledger.iroha.sdk.client.HttpClientTransport,
+    canonicalAuth: org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth, requireCurrentOwner: Runnable,
+    maximumBoundaries: Int = 64,
+): CompletableFuture<KagemushaSpartanUnloadSettlementV1> {
+    val operation = operationId.copyOf()
+    val signed = signedTransaction.copyOf()
+    return confirmSpartanLedgerAttempt(schemeId, walletId, transport, canonicalAuth, requireCurrentOwner, maximumBoundaries) { proof ->
+        unloadSettlement(operation, signed, proof)
+    }
+}
+
+/** Verify the exact signed Bootstrap registration through the authenticated Torii attempt and epoch routes. */
+@JvmOverloads
+fun KagemushaSpartanWalletV1.confirmActivation(signedTransaction: ByteArray, schemeId: ByteArray, walletId: ByteArray,
+    transport: org.hyperledger.iroha.sdk.client.HttpClientTransport,
+    canonicalAuth: org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth, requireCurrentOwner: Runnable,
+    maximumBoundaries: Int = 64,
+): CompletableFuture<KagemushaSpartanActivationSettlementV1> {
+    val signed = signedTransaction.copyOf()
+    return confirmSpartanLedgerAttempt(schemeId, walletId, transport, canonicalAuth, requireCurrentOwner, maximumBoundaries) { proof ->
+        activationSettlement(signed, proof)
+    }
+}
+
+private fun <T: KagemushaSpartanCertifiedAttemptV1> KagemushaSpartanWalletV1.confirmSpartanLedgerAttempt(
+    schemeId: ByteArray, walletId: ByteArray, transport: org.hyperledger.iroha.sdk.client.HttpClientTransport,
+    canonicalAuth: org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth, requireCurrentOwner: Runnable,
+    maximumBoundaries: Int, read: (ByteArray) -> T,
+): CompletableFuture<T> {
+    require(maximumBoundaries in 1..64)
+    val scheme = schemeId.copyOf()
+    val wallet = walletId.copyOf()
+    fun retained(proof: ByteArray = byteArrayOf()) = read(proof)
+    fun selection(entrypoint: ByteArray) =
+        org.hyperledger.iroha.sdk.client.ToriiKagemushaWalletLedgerSelectionV1(scheme, wallet, entrypoint)
+    fun outcome(value: T): KagemushaWalletLedgerOutcomeV1 {
+        if (value.height.signum() == 0) return KagemushaWalletLedgerOutcomeV1.Awaiting(value.entrypoint())
+        val commit = KagemushaWalletLedgerCommitV1(value.height.toLong(), value.block())
+        return if (value.accepted) KagemushaWalletLedgerOutcomeV1.Confirmed(commit) else KagemushaWalletLedgerOutcomeV1.Rejected(commit)
+    }
+    val progress = confirmKagemushaLedgerAttemptV1(requireCurrentOwner,
+        { outcome(retained()) },
+        { entry -> transport.getKagemushaWalletLedgerAttemptFinalityV1(selection(entry), canonicalAuth, requireCurrentOwner) },
+        { proof ->
+            val seen = retained(proof)
+            seen.requiredHeight?.let { KagemushaWalletLedgerIngestV1.EpochRequired(it.toLong()) }
+                ?: KagemushaWalletLedgerIngestV1.Outcome(outcome(seen))
+        },
+        { entry, height ->
+            val route = selection(entry)
+            synchronizeKagemushaLedgerEpochsV1(height, maximumBoundaries, requireCurrentOwner, ::epochProgress,
+                { boundary -> transport.getKagemushaWalletLedgerAttemptEpochV1(route, boundary, canonicalAuth, requireCurrentOwner) },
+                ::ingestEpochBoundary)
+        })
+    val result = progress.thenApply { requireCurrentOwner.run(); retained() }
+    result.whenComplete { _, _ -> if (result.isCancelled) progress.cancel(false) }
+    return result
+}

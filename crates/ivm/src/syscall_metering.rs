@@ -4,6 +4,7 @@
 //! calls instead debit deterministic phases immediately before the associated work. An unaffordable
 //! phase leaves remaining gas intact; charges for earlier completed phases are never refunded.
 use crate::VMError;
+use crate::error::{VmDeferral, VmTrap};
 /// Fixed entry charge for a staged syscall lifecycle.
 pub(crate) const STAGED_SYSCALL_ENTRY_GAS: u64 = crate::numeric_gas::NUMERIC_ENTRY_GAS;
 /// Consensus-visible syscall metering lifecycle.
@@ -130,18 +131,19 @@ impl StagedSyscallContext {
         gas: u64,
     ) -> Result<(), VMError> {
         if self.completion.is_some() {
-            return Err(VMError::SyscallMeteringModeMismatch {
+            return Err(VmDeferral::SyscallMeteringModeMismatch {
                 syscall: self.syscall,
-            });
+            }
+            .into());
         }
         let phase_index = phase as usize;
         let phase_total = self.phase_charges[phase_index]
             .checked_add(gas)
-            .ok_or(VMError::GasCostOverflow)?;
+            .ok_or(VMError::Trap(VmTrap::GasCostOverflow))?;
         let total = self
             .charged
             .checked_add(gas)
-            .ok_or(VMError::GasCostOverflow)?;
+            .ok_or(VMError::Trap(VmTrap::GasCostOverflow))?;
         self.phase_charges[phase_index] = phase_total;
         self.charged = total;
         Ok(())
@@ -153,6 +155,7 @@ impl StagedSyscallContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VmTrap;
     #[test]
     fn phase_tags_are_contiguous_and_stable() {
         assert_eq!(SyscallMeteringPhase::ALL.len(), SyscallMeteringPhase::COUNT);
@@ -192,7 +195,7 @@ mod tests {
             .expect("maximum first charge");
         assert!(matches!(
             context.record_charge(SyscallMeteringPhase::Arithmetic, 1),
-            Err(VMError::GasCostOverflow)
+            Err(VMError::Trap(VmTrap::GasCostOverflow))
         ));
     }
 }

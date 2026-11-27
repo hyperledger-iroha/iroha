@@ -3,6 +3,7 @@
 //! Both sets are reserved with the memory image, before execution. Stores,
 //! commits and warm resets only change initialized words and cannot grow them.
 
+use crate::error::VmDeferral;
 use crate::{
     cache_memory::OwnedAllocation,
     error::VMError,
@@ -39,7 +40,8 @@ pub(crate) struct DirtyChunks {
 
 impl DirtyChunks {
     pub(crate) fn memory_plan(chunks: usize) -> Result<ExecutionMemoryPlan, VMError> {
-        ExecutionMemoryPlan::array::<u64>(chunks.div_ceil(64)).map_err(VMError::AllocationDeferred)
+        ExecutionMemoryPlan::array::<u64>(chunks.div_ceil(64))
+            .map_err(|cause| VMError::Deferred(VmDeferral::AllocationDeferred(cause)))
     }
 
     pub(crate) fn new(
@@ -49,7 +51,9 @@ impl DirtyChunks {
         let count = chunks.div_ceil(64);
         let words = if let Some(lease) = lease {
             let mut words = ExecutionBuffer::new(count, lease).map_err(|_| {
-                VMError::ExecutionDeferred(crate::error::ExecutionDeferral::AllocationUnavailable)
+                VMError::Deferred(VmDeferral::ExecutionDeferred(
+                    crate::error::ExecutionDeferral::AllocationUnavailable,
+                ))
             })?;
             for _ in 0..count {
                 words.push_reserved(0);

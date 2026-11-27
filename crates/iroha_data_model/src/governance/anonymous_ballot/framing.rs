@@ -97,6 +97,15 @@ pub enum AnonymousBallotCodecErrorV1 {
 }
 
 impl AnonymousBallotCodecErrorV1 {
+    /// Retain an original codec attempt's local refusal instead of stringifying it.
+    #[must_use]
+    pub fn from_attempt(error: norito::core::DecodeAttemptError) -> Self {
+        match error.into_local_refusal() {
+            Ok(original) => Self::DecodeUnavailable(original),
+            Err(error) => Self::codec(error.error()),
+        }
+    }
+
     /// Wrap a Norito codec error.
     #[must_use]
     pub fn codec(error: &norito::Error) -> Self {
@@ -218,8 +227,12 @@ fn check_canonical_layout() -> Result<(), AnonymousBallotCodecErrorV1> {
 /// `COMPACT_LEN` or the produced header is not the pinned layout.
 pub fn enc<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, AnonymousBallotCodecErrorV1> {
     check_canonical_layout()?;
-    let bytes = norito::encode_canonical(value)
-        .map_err(|error| AnonymousBallotCodecErrorV1::codec(&error))?;
+    let bytes = norito::core::classify_decode_attempt(|| norito::encode_canonical(value)).map_err(
+        |error| match error.into_local_refusal() {
+            Ok(original) => AnonymousBallotCodecErrorV1::DecodeUnavailable(original),
+            Err(error) => AnonymousBallotCodecErrorV1::codec(error.error()),
+        },
+    )?;
     check_enc_header::<T>(&bytes)?;
     Ok(bytes)
 }
@@ -253,8 +266,8 @@ pub fn enc_bounded<T: norito::NoritoSerialize>(
     kind: &'static str,
     max: usize,
 ) -> Result<Vec<u8>, AnonymousBallotCodecErrorV1> {
-    let actual = norito::canonical_frame_len(value)
-        .map_err(|error| AnonymousBallotCodecErrorV1::codec(&error))?;
+    let actual = norito::core::classify_decode_attempt(|| norito::canonical_frame_len(value))
+        .map_err(AnonymousBallotCodecErrorV1::from_attempt)?;
     if actual > max {
         return Err(AnonymousBallotCodecErrorV1::TooLarge { kind, actual, max });
     }
@@ -456,6 +469,28 @@ mod tests {
         assert_eq!(decode(), expected);
         assert_eq!(norito::with_decode_limits_scope(limits, decode), expected);
         assert_eq!(decode_enc::<Vec<u16>>(&bytes), Ok(value));
+    }
+
+    #[test]
+    fn bounded_encoder_retains_original_measurement_scratch_refusal() {
+        let value = std::collections::HashMap::from([(3_u64, 7_u64), (1, 9)]);
+        let expected = enc(&value).unwrap();
+        let error = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
+            || enc_bounded(&value, "ordered map", expected.len()),
+        )
+        .unwrap_err();
+        let AnonymousBallotCodecErrorV1::DecodeUnavailable(original) = error else {
+            panic!("measurement must retain the native map serializer's original refusal");
+        };
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeLocalRefusalKind::EnclosingLimit
+        );
+        assert_eq!(
+            enc_bounded(&value, "ordered map", expected.len()).unwrap(),
+            expected
+        );
     }
 
     #[test]

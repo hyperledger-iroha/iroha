@@ -137,12 +137,17 @@ pub(super) fn for_selection(
 pub(super) fn inherited_restriction(
     selection: &RootSelectionV1,
     effective_height: u64,
+    wire: &str,
+    module: &str,
 ) -> Result<Option<RestrictionKindV1>, CatalogError> {
     let implementation = selection
         .bindings
         .iter()
-        .find(|binding| binding.wire_id == "iroha.grant")
-        .ok_or_else(|| failure("restricted-read predecessor grant binding is missing"))?
+        .find(|binding| binding.wire_id == wire)
+        .ok_or_else(|| CatalogError::Addition {
+            module: module.into(),
+            reason: format!("predecessor binding {wire} is missing"),
+        })?
         .implementation;
     let Some(entry) = selection
         .restrictions
@@ -158,9 +163,10 @@ pub(super) fn inherited_restriction(
         RestrictionV1::Disabled(height) => (RestrictionKindV1::Disabled, height),
     };
     if height > effective_height {
-        return Err(failure(
-            "restricted-read activation precedes an inherited restriction",
-        ));
+        return Err(CatalogError::Addition {
+            module: module.into(),
+            reason: "activation precedes an inherited restriction".into(),
+        });
     }
     Ok(Some(kind))
 }

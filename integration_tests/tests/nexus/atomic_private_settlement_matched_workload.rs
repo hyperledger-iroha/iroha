@@ -700,8 +700,12 @@ pub(super) fn validate_matched_replay_details(
         "settlement id `{}` has already been committed",
         settlement.settlement_id
     );
+    let result = transaction
+        .result()
+        .baseline()
+        .ok_or_else(|| eyre!("native settlement replay did not produce its baseline result"))?;
     ensure!(
-        matches!(&transaction.result().0,
+        matches!(&result.0,
         Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             InstructionExecutionError::InvariantViolation(message)))) if message.as_ref() == expected),
         "replay lacks the typed committed-settlement failure"
@@ -1084,7 +1088,13 @@ mod tests {
     fn matched_replay_requires_exact_authenticated_transaction_and_typed_result() {
         use iroha::data_model::{
             ValidationFail,
+            block::execution_output::{
+                ExecutionOutputC10V1, ExecutionOutputV1, ExecutionSourceC10V1,
+            },
             isi::error::InstructionExecutionError,
+            ivm_c10::{
+                TransactionRejectionReasonC10V1, TransactionResultC10V1, ValidationFailC10V1,
+            },
             query::CommittedTransaction,
             transaction::{
                 TransactionBuilder, TransactionResult, error::TransactionRejectionReason,
@@ -1128,6 +1138,24 @@ mod tests {
             }
         };
         validate_matched_replay_details(&make(&expected), &replay, &settlement).unwrap();
+        let mut wrong_family = make(&expected);
+        wrong_family.transaction.output = ExecutionOutputV1::C10(ExecutionOutputC10V1 {
+            source: ExecutionSourceC10V1::Network(0),
+            result: TransactionResultC10V1(
+                Err(TransactionRejectionReasonC10V1::Validation(
+                    ValidationFailC10V1::InstructionFailed(
+                        InstructionExecutionError::InvariantViolation(expected.clone().into()),
+                    ),
+                )),
+                Vec::new(),
+                None,
+                Default::default(),
+            ),
+            completions: Vec::new(),
+            trigger_lifecycle: None,
+        });
+        wrong_family.transaction.output_hash = HashOf::new(&wrong_family.transaction.output);
+        assert!(validate_matched_replay_details(&wrong_family, &replay, &settlement).is_err());
         assert!(
             validate_matched_replay_details(&make("other invariant"), &replay, &settlement)
                 .is_err()

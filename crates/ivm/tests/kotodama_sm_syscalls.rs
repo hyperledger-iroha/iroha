@@ -5,6 +5,7 @@ use iroha_crypto::{Hash, Sm2PrivateKey, Sm2PublicKey, Sm3Digest};
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use ivm::{IVM, PointerType, ProgramMetadata};
+use ivm_abi::error::VmTrap;
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use std::collections::BTreeMap;
 fn new_sm_host() -> ivm::host::DefaultHost {
@@ -405,7 +406,10 @@ fn kotodama_sm4_gcm_open_rejects_bad_tag() {
         ],
         &[],
     );
-    assert!(matches!(vm.run(), Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
     assert!(
         vm.call_result_word_count().is_err(),
         "a failed open cannot return bytes"
@@ -517,7 +521,10 @@ fn kotodama_sm4_ccm_open_rejects_bad_tag() {
             i64::try_from(tag.len()).expect("tag length fits i64"),
         )],
     );
-    assert!(matches!(vm.run(), Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        vm.run(),
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
     assert!(
         vm.call_result_word_count().is_err(),
         "a failed CCM open cannot return bytes"

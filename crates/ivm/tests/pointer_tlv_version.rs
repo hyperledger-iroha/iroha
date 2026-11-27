@@ -1,5 +1,6 @@
 use crate::common;
 use ivm::{self, Memory, PointerType};
+use ivm_abi::error::VmTrap;
 fn build_tlv_with_version(ty: PointerType, ver: u8, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(ty, payload);
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -20,5 +21,8 @@ fn validate_tlv_rejects_wrong_version() {
     mem.preload_input(0, &tlv).expect("preload input");
     let ptr = Memory::INPUT_START;
     let res = mem.validate_tlv(ptr);
-    assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+    assert!(matches!(
+        res,
+        Err(ivm::VMError::Trap(VmTrap::NoritoInvalid))
+    ));
 }

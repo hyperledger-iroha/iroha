@@ -26,9 +26,9 @@ use iroha_data_model::{
         JindoLimitsV1, PrivacyCapabilityReadinessV1, PrivacyCompiledProfileResultV1,
         PrivacyCompiledProfileSnapshotV1, PrivacyExact12CapabilityManifestV1,
         PrivacyExact12CapabilityRowV1, PrivacyParameterDigestV1, PrivacyProofBytesV1,
-        PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProofV1,
-        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1, PrivacyStatementDigestV1,
-        PrivacyTransactionIntentDigestV1,
+        PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProofEnvelopeV1,
+        PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
+        PrivacyStatementDigestV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
@@ -370,8 +370,7 @@ fn independently_resigned_jindo_tamper(
     let (original_intent, submission) = transaction
         .privacy_transaction_intent_binding_if_present_v1()?
         .ok_or_else(|| eyre!("canonical Jindo transaction omitted its direct submission"))?;
-    let submission_envelope = submission.runtime_envelope();
-    let mut envelope = submission_envelope.clone();
+    let mut envelope = submission.runtime_envelope();
     match tamper {
         JindoTamper::ProofMagic => {
             let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(proof) =
@@ -396,10 +395,10 @@ fn independently_resigned_jindo_tamper(
         }
     }
     let mut payload = transaction.payload().clone();
-    let executable = |value| {
+    let executable = |value: PrivacyRuntimeProofEnvelopeV1| {
         Executable::Instructions(
             vec![InstructionBox::from(SubmitPrivacyProofV1::new(
-                (value).try_into().expect("frozen Exact12 test input"),
+                value.try_into().expect("frozen Exact12 test input"),
             ))]
             .into(),
         )

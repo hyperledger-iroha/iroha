@@ -56,7 +56,7 @@ fn nested_call_funding_refuses_without_effects_then_retries() {
     let error = refused.expect_err("cold nested execution cannot fit a zero pool");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::AllocationDeferred(_)
+        VmErrorRef::Deferred(VmDeferral::AllocationDeferred(_))
     ));
     assert!(error.execution_deferral().is_some());
     assert_eq!(error.metered_gas(), None);
@@ -113,7 +113,7 @@ fn nested_call_funding_refuses_without_effects_then_retries() {
     let error = refused.expect_err("zero pool refuses original nested allocation custody");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::AllocationDeferred(_)
+        VmErrorRef::Deferred(VmDeferral::AllocationDeferred(_))
     ));
     assert!(error.execution_deferral().is_some());
     assert_eq!(error.metered_gas(), None);
@@ -203,7 +203,7 @@ fn prepaid_nested_return_is_released_when_child_effects_roll_back() {
     let error = result.expect_err("callee aborts after staging its write");
     assert!(matches!(
         error.as_unmetered(),
-        ivm::VMError::ContractAbort { code: 1, .. }
+        VmErrorRef::Trap(VmTrap::ContractAbort { code: 1, .. })
     ));
     assert!(
         error.metered_gas().is_some(),
