@@ -1466,6 +1466,75 @@ fn cold_dc_cycles_materialize_records_symbols_and_reusable_keys() {
 }
 
 #[test]
+fn raster_dc_spans_match_literal_reports_with_remapped_and_unmapped_contexts() {
+    let width = 71;
+    let dims = FrameDimensions::new(8 * width, 24);
+    for remap in [
+        None,
+        Some(Arc::new(BundleContextRemap::new(
+            BTreeMap::new(),
+            BundleContextId(91),
+            0,
+            0,
+        ))),
+    ] {
+        let mut previous = None;
+        for split in [44, 52, 52] {
+            let mut slots = [Vec::new(), Vec::new()];
+            let [mut cached, mut direct] = slots.each_mut().map(|s| {
+                BundleStreamRecorder::new(
+                    s,
+                    4,
+                    dims,
+                    16,
+                    default_bundle_tables(),
+                    BundleAcceleration::None,
+                    0,
+                    remap.clone(),
+                )
+            });
+            let mut previous_dc = 0;
+            for index in 0..dims.block_count() {
+                let kind = if index < 103 {
+                    FrameType::Intra
+                } else {
+                    FrameType::Predicted
+                };
+                let mut levels = [0; BLOCK_PIXELS];
+                levels[0] = if (89..123).contains(&index) {
+                    0
+                } else {
+                    [7, -2, 1][index % 3]
+                };
+                let diff = levels[0] - previous_dc;
+                previous_dc = levels[0];
+                if index == split || index == 131 {
+                    levels[ZIG_ZAG[19]] = -3;
+                    cached.record_masked_block(index, &levels, kind, ac_support(&levels));
+                    cached.record_dc(diff);
+                    cached.record_ac(18, -3);
+                    cached.record_eob();
+                } else {
+                    cached.record_dc_only(&levels, diff, index, kind);
+                }
+                direct.record_ac_range(direct.tile(index), &levels, kind, 1..BLOCK_PIXELS);
+                direct.record_dc(diff);
+                if levels[ZIG_ZAG[19]] != 0 {
+                    direct.record_ac(18, -3);
+                }
+                direct.record_eob();
+            }
+            let actual = cached.finish_segment(previous);
+            assert_eq!(
+                crate::core::to_bytes(&actual.telemetry).unwrap(),
+                crate::core::to_bytes(&direct.finish(None)).unwrap()
+            );
+            previous = Some(actual);
+        }
+    }
+}
+
+#[test]
 fn zero_pattern_cycles_preserve_partial_rows_and_terminal_contexts() {
     for width in [8, 136, 160] {
         let mut slots = Vec::new();
@@ -3021,6 +3090,50 @@ fn band_moments_match_materialized_blocks() {
     }
 }
 
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[test]
+fn predicted_pair_moments_only_replace_proven_zero_blocks() {
+    if !std::arch::is_aarch64_feature_detected!("dotprod") {
+        return;
+    }
+    let dims = FrameDimensions::new(40, 8);
+    let stride = usize::from(dims.width);
+    let previous = vec![97; dims.pixel_count()];
+    for qp in [1, 2, 16, 37, 255] {
+        let g = BlockQuantization::new(qp);
+        for amplitude in [0, 1, 7, 8, 15, 64, 95] {
+            let frame: Vec<_> = previous
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| {
+                    if i % stride < 16 {
+                        p + amplitude
+                    } else if i % 3 == 0 {
+                        p - amplitude
+                    } else {
+                        p
+                    }
+                })
+                .collect();
+            let mut row = [(0, 0); 5];
+            // SAFETY: dotprod was detected and both inputs contain all eight rows.
+            unsafe {
+                predicted_moments(&frame, &previous, stride, g.zero_squares, &mut row);
+            }
+            for (col, actual) in row.into_iter().enumerate() {
+                let exact = block_moments(&frame, Some(&previous), stride, col);
+                if actual != exact {
+                    assert_eq!(actual, (0, 0));
+                    assert!(matches!(
+                        g.classify(&frame, Some(&previous), dims, col, exact),
+                        BlockSpectrum::DcLevel(0)
+                    ));
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn predicted_sample_limit_certifies_zero_at_every_quantizer() {
     let dims = FrameDimensions::new(16, 16);
@@ -3338,7 +3451,9 @@ fn quantize_test_block(
     limit: u8,
 ) -> [i16; BLOCK_PIXELS] {
     let folded = fold_rows(|y| block.as_chunks::<BLOCK_SIZE>().0[y]);
-    geometry.quantize_folded(&folded, folded_sum(&folded), limit, || *block)
+    let (levels, mask) = geometry.quantize_folded(&folded, folded_sum(&folded), limit, || *block);
+    assert_eq!(mask, ac_support(&levels));
+    levels
 }
 
 #[test]

@@ -571,6 +571,24 @@ const ZIG_ZAG: [usize; 64] = [
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
+const ZIGZAG_BIT: [u64; BLOCK_PIXELS] = {
+    let mut bits = [0; BLOCK_PIXELS];
+    let mut order = 1;
+    while order < BLOCK_PIXELS {
+        bits[ZIG_ZAG[order]] = 1 << order;
+        order += 1;
+    }
+    bits
+};
+
+fn ac_support(levels: &[i16; BLOCK_PIXELS]) -> u64 {
+    levels
+        .iter()
+        .zip(ZIGZAG_BIT)
+        .fold(0, |bits, (&level, flag)| {
+            bits | (u64::from(level != 0) * flag)
+        })
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub(crate) enum FrameType {
@@ -1848,8 +1866,49 @@ impl BaselineEncoder {
         quantizer: u8,
         retain_reference: bool,
         hooks: &mut impl BundledHooks,
-        mut rdo: Option<&mut BlockRdo<'_>>,
+        rdo: Option<&mut BlockRdo<'_>>,
     ) {
+        if quantizer == 16 && rdo.is_none() {
+            Self::encode_plane::<true>(
+                payload,
+                frame,
+                frame_type,
+                reference,
+                dims,
+                16,
+                retain_reference,
+                hooks,
+                None,
+            );
+        } else {
+            Self::encode_plane::<false>(
+                payload,
+                frame,
+                frame_type,
+                reference,
+                dims,
+                quantizer,
+                retain_reference,
+                hooks,
+                rdo,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_plane<const DEFAULT_Q16: bool>(
+        payload: &mut Vec<u8>,
+        frame: &[u8],
+        frame_type: FrameType,
+        reference: &mut Vec<u8>,
+        dims: FrameDimensions,
+        quantizer: u8,
+        retain_reference: bool,
+        hooks: &mut impl BundledHooks,
+        rdo: Option<&mut BlockRdo<'_>>,
+    ) {
+        let quantizer = if DEFAULT_Q16 { 16 } else { quantizer };
+        let mut rdo = if DEFAULT_Q16 { None } else { rdo };
         debug_assert_eq!(frame.len(), dims.pixel_count());
         // Prediction reads only the collocated block. Once captured, its old
         // pixels can be replaced in place, including on a scene refresh.
@@ -1869,17 +1928,43 @@ impl BaselineEncoder {
                 let range = band_start..band_start + BLOCK_SIZE * stride;
                 let prediction =
                     (frame_type == FrameType::Predicted).then_some(reference.as_slice());
-                row_moments(
-                    &frame[range.clone()],
-                    prediction.map(|p| &p[range]),
-                    stride,
-                    &mut moments,
-                );
+                let source = &frame[range.clone()];
+                let reference = prediction.map(|p| &p[range]);
+                #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+                let shortcut = if let Some(prev) = reference
+                    && std::arch::is_aarch64_feature_detected!("dotprod")
+                {
+                    // SAFETY: the CPU supports dotprod and the plane slices contain the whole band.
+                    unsafe {
+                        predicted_moments(
+                            source,
+                            prev,
+                            stride,
+                            geometry.zero_squares,
+                            &mut moments,
+                        );
+                    }
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+                let shortcut = false;
+                if !shortcut {
+                    row_moments(source, reference, stride, &mut moments);
+                }
             }
             for (column, &moments) in moments.iter().enumerate() {
                 let block_index = band * blocks_per_row + column;
                 let prediction =
                     (frame_type == FrameType::Predicted).then_some(reference.as_slice());
+                if quantizer != 0
+                    && frame_type == FrameType::Predicted
+                    && moments == (0, 0)
+                    && rdo.is_none()
+                {
+                    continue;
+                }
                 let decision = geometry.classify(frame, prediction, dims, block_index, moments);
                 if matches!(decision, BlockSpectrum::DcLevel(0))
                     && frame_type == FrameType::Predicted
@@ -1907,11 +1992,11 @@ impl BaselineEncoder {
                     BlockSpectrum::WeightsThrough(limit) => {
                         let start = band_start + column * BLOCK_SIZE;
                         let rows = ResidualRows::new(frame, prediction, stride, start);
-                        let quantized = if let Some(optimizer) = rdo.as_deref_mut() {
+                        let (quantized, active) = if let Some(optimizer) = rdo.as_deref_mut() {
                             let coeffs = forward_dct(&rows.block(), limit, quantizer);
                             let mut levels = quantize_coeffs(&coeffs, quantizer);
                             optimizer.select_levels(&coeffs, &mut levels, frame_type, block_index);
-                            levels
+                            (levels, ac_support(&levels))
                         } else {
                             let folded = rows.folded();
                             let sum = if quantizer == 0 {
@@ -1921,9 +2006,10 @@ impl BaselineEncoder {
                             };
                             geometry.quantize_folded(&folded, sum, limit, || rows.block())
                         };
-                        if quantized[1..].iter().any(|&ac| ac != 0) {
-                            encode_block_rle(
+                        if active != 0 {
+                            encode_active_block(
                                 &quantized,
+                                active,
                                 &mut prev_dc,
                                 payload,
                                 hooks,
@@ -2327,6 +2413,7 @@ pub(crate) fn forward_dct(
         sum,
         limit,
         quantizer,
+        false,
         || *block,
         |slot, value, _| coeffs[slot] = value,
     );
@@ -2444,6 +2531,61 @@ unsafe fn dot_row_moments(
     }
 }
 
+/// A small uncentered squared norm certifies both zero AC and zero DC:
+/// E <= 64 * squares and sum² <= 64 * squares. Use zero moments as a
+/// representative only for those blocks, otherwise supply the exact moments.
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[target_feature(enable = "dotprod")]
+unsafe fn predicted_moments(
+    src: &[u8],
+    pred: &[u8],
+    stride: usize,
+    limit: u32,
+    out: &mut [(i32, i32)],
+) {
+    use std::arch::aarch64::*;
+    let span = stride.checked_mul(8).expect("band length");
+    let src = &src[..span];
+    let pred = &pred[..span];
+    assert!(out.len() <= stride / 8);
+    let ones = vdupq_n_u8(1);
+    for (pair, dst) in out.chunks_exact_mut(2).enumerate() {
+        let x = pair * 16;
+        // SAFETY: both bands contain eight rows and x..x+16 is inside each.
+        unsafe {
+            let current: [_; 8] =
+                std::array::from_fn(|y| vld1q_u8(src.as_ptr().add(y * stride + x)));
+            let old: [_; 8] = std::array::from_fn(|y| vld1q_u8(pred.as_ptr().add(y * stride + x)));
+            let mut squares = vdupq_n_u32(0);
+            for i in 0..8 {
+                let d = vabdq_u8(current[i], old[i]);
+                squares = vdotq_u32(squares, d, d);
+            }
+            let sq = vpaddq_u32(squares, squares);
+            let first = vgetq_lane_u32::<0>(sq);
+            let second = vgetq_lane_u32::<1>(sq);
+            if first <= limit && second <= limit {
+                dst.fill((0, 0));
+            } else {
+                let mut a = vdupq_n_u32(0);
+                let mut b = vdupq_n_u32(0);
+                for i in 0..8 {
+                    a = vdotq_u32(a, current[i], ones);
+                    b = vdotq_u32(b, old[i], ones);
+                }
+                let delta = vreinterpretq_s32_u32(vsubq_u32(a, b));
+                let sums = vpaddq_s32(delta, delta);
+                dst[0] = (vgetq_lane_s32::<0>(sums), first as i32);
+                dst[1] = (vgetq_lane_s32::<1>(sums), second as i32);
+            }
+        }
+    }
+    if out.len() % 2 != 0 {
+        let i = out.len() - 1;
+        out[i] = block_moments(src, Some(pred), stride, i);
+    }
+}
+
 enum BlockSpectrum {
     DcLevel(i16),
     WeightsThrough(u8),
@@ -2454,6 +2596,8 @@ struct BlockQuantization {
     dc_step: i32,
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     dc_reciprocal: u64,
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    zero_squares: u32,
     zero_dc_sum: u64,
     dc_only_energy: i64,
 }
@@ -2470,10 +2614,14 @@ impl BlockQuantization {
             dc_reciprocal: (1_u64 << 32).div_ceil(dc_step as u64),
             // DC is sum / 8 up to the table and signed rounding error.
             zero_dc_sum: 8 * (dc_step as u64 / 2).saturating_sub(2),
+            #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+            zero_squares: (radius * radius).min((8 * (dc_step as i64 / 2 - 2).max(0)).pow(2) / 64)
+                as u32,
             dc_only_energy: BLOCK_PIXELS as i64 * radius * radius,
         }
     }
 
+    #[inline(always)]
     fn classify(
         &self,
         frame: &[u8],
@@ -2507,6 +2655,7 @@ impl BlockQuantization {
         }
     }
 
+    #[inline(always)]
     fn ac_limit(&self, sum: i64, squares: i64) -> Option<u8> {
         if self.quantizer == 0 {
             return Some(u8::MAX);
@@ -2516,7 +2665,9 @@ impl BlockQuantization {
             return None;
         }
         // ||x - mean(x)|| = sqrt(energy)/8; the basis norm is at most 65/64.
-        let radius_upper = (energy as u64).isqrt() + 1;
+        // E <= 2^42 for signed i16 input. Consecutive integer energies near
+        // a square have roots separated by more than 1/(2^22+1), well over one ulp.
+        let radius_upper = (energy as f64).sqrt() as u64 + 1;
         let bound = (65 * radius_upper).div_ceil(512) + 2;
         Some((2 * bound / u64::from(self.quantizer)).min(u64::from(u8::MAX)) as u8)
     }
@@ -2529,16 +2680,30 @@ impl BlockQuantization {
         sum: i32,
         limit: u8,
         residual: impl Fn() -> [i16; BLOCK_PIXELS],
-    ) -> [i16; BLOCK_PIXELS] {
+    ) -> ([i16; BLOCK_PIXELS], u64) {
+        #[cfg(all(
+            feature = "simd-accel",
+            target_arch = "aarch64",
+            not(feature = "streaming-fixed-point-dct")
+        ))]
+        if self.quantizer != 0 && std::arch::is_aarch64_feature_detected!("dotprod") {
+            // SAFETY: the CPU advertises the integer dot-product instructions.
+            let (mut levels, active) =
+                unsafe { dot_ac_levels(folded, sum, limit, self.quantizer, &residual) };
+            levels[0] = self.quantized_dc(i64::from(sum), residual);
+            return (levels, active);
+        }
         let mut levels = [0; BLOCK_PIXELS];
+        let mut active = 0;
         if self.quantizer == 0 && *folded == [[[0; 4]; 4]; 4] {
-            return levels;
+            return (levels, active);
         }
         visit_ac(
             folded,
             sum,
             limit,
             self.quantizer,
+            true,
             &residual,
             |slot, value, step| {
                 levels[slot] = if self.quantizer == 0 {
@@ -2546,12 +2711,14 @@ impl BlockQuantization {
                 } else {
                     quantize_ac(value, step as i32)
                 };
+                active |= u64::from(levels[slot] != 0) * ZIGZAG_BIT[slot];
             },
         );
         levels[0] = self.quantized_dc(i64::from(sum), residual);
-        levels
+        (levels, active)
     }
 
+    #[inline(always)]
     fn quantized_dc(&self, sum: i64, _residual: impl FnOnce() -> [i16; BLOCK_PIXELS]) -> i16 {
         #[cfg(feature = "streaming-fixed-point-dct")]
         {
@@ -2634,6 +2801,7 @@ struct DctProjection {
     slot: usize,
     weight: u32,
     factors: [i32; 16],
+    axis: [i32; 4],
 }
 
 /// Within each reflection group, sort the AC projections by quantization weight
@@ -2643,6 +2811,7 @@ static AC_PROJECTIONS: [[DctProjection; 16]; 4] = {
         slot: 0,
         weight: 256,
         factors: [0; 16],
+        axis: [0; 4],
     };
     // The even/even group has only 15 AC slots. Its last weight exceeds every u8 limit.
     let mut groups = [[empty; 16]; 4];
@@ -2678,12 +2847,148 @@ static AC_PROJECTIONS: [[DctProjection; 16]; 4] = {
         group[index] = DctProjection {
             slot,
             weight,
+            axis: if v == 0 {
+                [factors[0], factors[4], factors[8], factors[12]]
+            } else {
+                [factors[0], factors[1], factors[2], factors[3]]
+            },
             factors,
         };
         slot += 1;
     }
     groups
 };
+
+/// Four projections per dot-product lane group. Each group of four input
+/// samples multiplies four adjacent weights for each of the four frequencies.
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+static DOT_WEIGHTS: [[[[i8; 16]; 4]; 4]; 4] = {
+    let mut out = [[[[0; 16]; 4]; 4]; 4];
+    let mut g = 0;
+    while g < 4 {
+        let mut i = 0;
+        while i < 16 {
+            let p = AC_PROJECTIONS[g][i];
+            let mut s = 0;
+            while s < 16 {
+                let u = p.slot / 8;
+                let v = p.slot % 8;
+                let w = DCT_FACTORS[u][s / 4] * DCT_FACTORS[v][s % 4];
+                out[g][i / 4][s / 4][4 * (i % 4) + s % 4] = (w * 512.0).round() as i8;
+                s += 1;
+            }
+            i += 1;
+        }
+        g += 1;
+    }
+    out
+};
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+#[target_feature(enable = "dotprod")]
+unsafe fn dot_ac_levels(
+    folded: &FoldedBlock,
+    sum: i32,
+    limit: u8,
+    qp: u8,
+    residual: &impl Fn() -> [i16; BLOCK_PIXELS],
+) -> ([i16; BLOCK_PIXELS], u64) {
+    use std::arch::aarch64::*;
+    let mut levels = [0; BLOCK_PIXELS];
+    let mut active = 0;
+    let scale = u32::from(qp);
+    for (g, samples) in folded.iter().enumerate() {
+        let projections = &AC_PROJECTIONS[g];
+        if projections[0].weight > u32::from(limit) {
+            continue;
+        }
+        let center = if g == 0 { sum / 16 } else { 0 };
+        // SAFETY: each of the four source rows and weight vectors is complete.
+        unsafe {
+            let rows = samples.map(|r| vsubq_s32(vld1q_s32(r.as_ptr()), vdupq_n_s32(center)));
+            let abs = rows.map(|r| vabsq_s32(r));
+            let l1 = vaddvq_s32(vaddq_s32(
+                vaddq_s32(abs[0], abs[1]),
+                vaddq_s32(abs[2], abs[3]),
+            )) as u32;
+            let threshold = (u32::from(limit) * scale).min(2 * (l1.div_ceil(4) + 2));
+            if projections[0].weight * scale > threshold {
+                continue;
+            }
+            let max = vmaxvq_s32(vmaxq_s32(
+                vmaxq_s32(abs[0], abs[1]),
+                vmaxq_s32(abs[2], abs[3]),
+            )) as u32;
+            // Shift by the minimum number of bits that leaves room for a sign.
+            let shift = (32 - max.leading_zeros()).saturating_sub(7);
+            let shrink = vdupq_n_s32(-(shift as i32));
+            let lo = vcombine_s16(
+                vmovn_s32(vshlq_s32(rows[0], shrink)),
+                vmovn_s32(vshlq_s32(rows[1], shrink)),
+            );
+            let hi = vcombine_s16(
+                vmovn_s32(vshlq_s32(rows[2], shrink)),
+                vmovn_s32(vshlq_s32(rows[3], shrink)),
+            );
+            let data = vcombine_s8(vmovn_s16(lo), vmovn_s16(hi));
+            // In Q9 units: rounded weights cost <= L1/2. Truncating each
+            // input costs at most 2^shift-1 samples at |weight| <= 128.
+            let error = l1.div_ceil(2) + 16 * 128 * ((1 << shift) - 1) + 1;
+            for (batch, weights) in DOT_WEIGHTS[g].iter().enumerate() {
+                let first = 4 * batch;
+                if projections[first].weight * scale > threshold {
+                    break;
+                }
+                let mut dots =
+                    vdotq_laneq_s32::<0>(vdupq_n_s32(0), vld1q_s8(weights[0].as_ptr()), data);
+                dots = vdotq_laneq_s32::<1>(dots, vld1q_s8(weights[1].as_ptr()), data);
+                dots = vdotq_laneq_s32::<2>(dots, vld1q_s8(weights[2].as_ptr()), data);
+                dots = vdotq_laneq_s32::<3>(dots, vld1q_s8(weights[3].as_ptr()), data);
+                let mut values = [0; 4];
+                vst1q_s32(values.as_mut_ptr(), dots);
+                for (i, value) in values.into_iter().enumerate() {
+                    let p = &projections[first + i];
+                    let step = p.weight * scale;
+                    if step > threshold {
+                        break;
+                    }
+                    let mag = value.unsigned_abs() << shift;
+                    let zero = (step / 2) * 512 + 256;
+                    if mag + error < zero {
+                        continue;
+                    }
+                    let level =
+                        if mag > zero + error && mag + error < (2 * step - step / 2) * 512 - 256 {
+                            if value < 0 { -1 } else { 1 }
+                        } else {
+                            let wide = folded_dot(samples, &p.factors);
+                            let q = if (wide as u32).abs_diff(1 << 31) <= (1 << 20) + 128 {
+                                direct_dct_coefficient(
+                                    &residual(),
+                                    &FORWARD_BASIS[p.slot / 8],
+                                    &FORWARD_BASIS[p.slot % 8],
+                                )
+                            } else {
+                                ((wide + (1 << 31)) >> 32) as i32
+                            };
+                            quantize_ac(q, step as i32)
+                        };
+                    levels[p.slot] = level;
+                    active |= u64::from(level != 0) * ZIGZAG_BIT[p.slot];
+                }
+            }
+        }
+    }
+    (levels, active)
+}
 
 type FoldedBlock = [[[i32; 4]; 4]; 4];
 
@@ -2756,30 +3061,50 @@ fn visit_ac(
     sum: i32,
     limit: u8,
     quantizer: u8,
+    levels_only: bool,
     _residual: impl Fn() -> [i16; BLOCK_PIXELS],
     mut visit: impl FnMut(usize, i32, u32),
 ) {
-    let scale = u32::from(quantizer.max(1));
-    let block_threshold = u32::from(limit) * scale;
-    for group in 0..4 {
-        let samples = &folded[group];
-        let projections = &AC_PROJECTIONS[group];
+    #[inline(always)]
+    fn group<const G: usize>(
+        folded: &FoldedBlock,
+        sum: i32,
+        limit: u8,
+        quantizer: u8,
+        _levels_only: bool,
+        _residual: &impl Fn() -> [i16; BLOCK_PIXELS],
+        visit: &mut impl FnMut(usize, i32, u32),
+    ) {
+        let scale = u32::from(quantizer.max(1));
+        let block_threshold = u32::from(limit) * scale;
+        let samples = &folded[G];
+        let projections = &AC_PROJECTIONS[G];
         if projections[0].weight > u32::from(limit) {
-            continue;
+            return;
         }
         let mut threshold = block_threshold;
         if quantizer != 0 {
-            let center = if group == 0 { sum / 16 } else { 0 };
+            let center = if G == 0 { sum / 16 } else { 0 };
             let l1 = folded_l1(samples, center);
             threshold = threshold.min(2 * (l1.div_ceil(4) + 2));
         }
+        // Constant horizontal/vertical basis rows factor out of the dot
+        // product. Each collapsed axis needs four products instead of sixteen.
+        let horizontal: [i32; 4] = std::array::from_fn(|x| samples.iter().map(|row| row[x]).sum());
+        let vertical = samples.map(|row| row.iter().sum::<i32>());
         for projection in projections {
             let step = scale * projection.weight;
             if step > threshold {
                 break;
             }
             let slot = projection.slot;
-            let value = folded_dot(samples, &projection.factors);
+            let value = if G < 2 && slot < BLOCK_SIZE {
+                dot_axis(&horizontal, &projection.axis)
+            } else if G % 2 == 0 && slot % BLOCK_SIZE == 0 {
+                dot_axis(&vertical, &projection.axis)
+            } else {
+                folded_dot(samples, &projection.factors)
+            };
             #[cfg(feature = "streaming-fixed-point-dct")]
             let coefficient = round_q30(value) as i32;
             #[cfg(not(feature = "streaming-fixed-point-dct"))]
@@ -2787,7 +3112,12 @@ fn visit_ac(
                 // Quantizing the weights costs at most half a Q32 unit per
                 // absolute folded sample. The extra 128 cover table asymmetry
                 // and binary64 summation for the full i16 input range.
-                if (value as u32).abs_diff(1 << 31) <= (1 << 20) + 128 {
+                let floor = (value >> 32) as i32;
+                if (value as u32).abs_diff(1 << 31) <= (1 << 20) + 128
+                    && !(_levels_only
+                        && quantizer != 0
+                        && quantize_ac(floor, step as i32) == quantize_ac(floor + 1, step as i32))
+                {
                     direct_dct_coefficient(
                         &_residual(),
                         &FORWARD_BASIS[slot / 8],
@@ -2800,6 +3130,51 @@ fn visit_ac(
             visit(slot, coefficient, step);
         }
     }
+    group::<0>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+    group::<1>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+    group::<2>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+    group::<3>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+}
+
+#[inline(always)]
+fn dot_axis(samples: &[i32; 4], weights: &[i32; 4]) -> i64 {
+    samples
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| i64::from(x) * i64::from(w))
+        .sum()
 }
 
 fn folded_l1(samples: &[[i32; 4]; 4], center: i32) -> u32 {
@@ -3007,14 +3382,13 @@ pub(crate) trait BundledHooks {
         _kind: FrameType,
     ) {
     }
-    /// Record AC statistics and return an exclusive upper bound on nonzero zigzag orders.
     fn record_block_coeffs(
         &mut self,
         _coeffs: &[i16; BLOCK_PIXELS],
+        _active: u64,
         _block_index: usize,
         _frame_type: FrameType,
-    ) -> usize {
-        BLOCK_PIXELS
+    ) {
     }
 }
 #[derive(Default)]
@@ -3717,6 +4091,8 @@ const TILE_CLASSES: usize = 64 * 2;
 const FIRST_FIVE_CLASSES: usize = 3_usize.pow(5);
 // Suffix keys follow the 256 tile/frame/DC keys per class. u16::MAX marks an unkeyed span.
 const TAIL_KEY: u16 = (FIRST_FIVE_CLASSES * 256) as u16;
+// Internal repeat tape instruction, followed by a starting tile key and run length.
+const DC_RUN_KEY: u16 = u16::MAX - 1;
 const _: () = assert!(FIRST_FIVE_CLASSES * 256 + 2 * TILE_CLASSES <= u16::MAX as usize);
 
 /// Both full pattern keys and standalone suffix keys name the same neutral tails.
@@ -3845,18 +4221,26 @@ fn telemetry_buffer<T>(mut previous: Vec<T>, len: usize) -> Vec<T> {
 /// inter-record transitions together; allocate a full histogram only for exceptions.
 #[derive(Default)]
 struct ContextTally {
-    single_zeros: u64,
     stays: u64,
     ends: u64,
     detail: Option<std::num::NonZeroU32>,
+}
+
+struct DcSpan {
+    start: usize,
+    end: usize,
+    kind: FrameType,
+    significant: bool,
 }
 
 struct BundleStreamRecorder<'a> {
     stats: BundledStats,
     tokens: Vec<BundledToken>,
     bundles: Vec<BundleRecord>,
-    // One-based slots indexed by the 16-bit wire context. Only active contexts own counters.
+    // Singleton counts use wire IDs directly. Only exceptional transitions need a tally slot.
     context_slots: &'a mut [u32],
+    active_contexts: Vec<u64>,
+    singleton_counts: Vec<u64>,
     contexts: Vec<ContextTally>,
     details: Vec<(BundleContextStats, ContextFrequency)>,
     // Tile, frame class, DC significance and five ternary AC levels identify the records.
@@ -3865,7 +4249,7 @@ struct BundleStreamRecorder<'a> {
     cached_prefixes: Option<&'a mut SparsePrefixes>,
     zero_tails: Vec<ZeroTail>,
     omitted_tail_records: usize,
-    // One template key per repeated block. Literal spans mark the gaps between repeat runs.
+    // Template keys and compact raster DC runs. Literal spans mark the gaps between repeats.
     repeats: Vec<u16>,
     literal_spans: Vec<(usize, usize)>,
     width: u8,
@@ -3874,6 +4258,7 @@ struct BundleStreamRecorder<'a> {
     tables: Arc<BundleAnsTables>,
     acceleration: BundleAcceleration,
     prefetch_distance: u16,
+    pending_dc: Option<DcSpan>,
     last_context_slot: Option<usize>,
     context_remap: Option<Arc<BundleContextRemap>>,
 }
@@ -3896,17 +4281,19 @@ impl<'a> BundleStreamRecorder<'a> {
                 bundle_width,
                 ..BundledStats::default()
             },
-            tokens: Vec::new(),
+            tokens: Vec::with_capacity(dims.block_count() * 3),
             bundles: Vec::new(),
+            singleton_counts: vec![0; 1 << 16],
+            active_contexts: vec![0; (usize::from(u16::MAX) + 1) / 64],
             context_slots,
-            contexts: Vec::new(),
+            contexts: Vec::with_capacity(dims.block_count().min(8192)),
             details: Vec::new(),
             sparse_patterns: vec![SparseAcPattern::default(); 64 * 2 * 2],
             pattern_pages: std::array::from_fn(|_| Vec::new()),
             cached_prefixes: None,
             zero_tails: vec![ZeroTail::default(); 2 * TILE_CLASSES],
             omitted_tail_records: 0,
-            repeats: Vec::new(),
+            repeats: Vec::with_capacity(dims.block_count()),
             literal_spans: Vec::new(),
             width: bundle_width.clamp(1, 4),
             blocks_per_row: (dims.width as usize / BLOCK_SIZE).max(1),
@@ -3914,17 +4301,29 @@ impl<'a> BundleStreamRecorder<'a> {
             tables,
             acceleration,
             prefetch_distance,
+            pending_dc: None,
             last_context_slot: None,
             context_remap,
         }
     }
+    #[inline(always)]
     fn context_slot(&mut self, context: BundleContextId) -> usize {
-        let slot = &mut self.context_slots[usize::from(context.0)];
+        let id = usize::from(context.0);
+        self.active_contexts[id / 64] |= 1_u64 << (id % 64);
+        id
+    }
+
+    fn exceptional_slot(&mut self, id: usize) -> usize {
+        let slot = &mut self.context_slots[id];
         if *slot == 0 {
             self.contexts.push(ContextTally::default());
             *slot = self.contexts.len() as u32;
         }
         (*slot - 1) as usize
+    }
+    fn exceptional(&mut self, id: usize) -> &mut ContextTally {
+        let slot = self.exceptional_slot(id);
+        &mut self.contexts[slot]
     }
     fn map_context(&self, context: BundleContextId) -> BundleContextId {
         if let Some(remap) = self.context_remap.as_ref() {
@@ -4010,8 +4409,7 @@ impl<'a> BundleStreamRecorder<'a> {
                 if tail.distinct_singletons {
                     // Each neutral record has a different context from its predecessor.
                     for record in &self.bundles[tail.start..tail.end] {
-                        let slot = self.context_slots[usize::from(record.context.0)] as usize - 1;
-                        let zeros = &mut self.contexts[slot].single_zeros;
+                        let zeros = &mut self.singleton_counts[usize::from(record.context.0)];
                         *zeros = zeros.saturating_add(tail.repeats);
                     }
                 } else {
@@ -4037,60 +4435,84 @@ impl<'a> BundleStreamRecorder<'a> {
                 )
             })
             .unwrap_or_default();
+        let live: usize = self
+            .active_contexts
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum();
+        // Most contexts contain only singleton zeros. Initialize their unused
+        // histogram bins together before writing the occupied bins in wire order.
         context_stats.clear();
         context_frequencies.clear();
-        context_stats.reserve_exact(self.contexts.len());
-        context_frequencies.reserve_exact(self.contexts.len());
-        // The direct-address map visits each active wire context in report order.
-        for (id, &slot) in self.context_slots.iter().enumerate() {
-            if slot == 0 {
-                continue;
+        if context_stats.capacity() < live {
+            // SAFETY: all fields are unsigned integers or a BundleContextId(u16).
+            context_stats =
+                unsafe { Box::<[BundleContextStats]>::new_zeroed_slice(live).assume_init() }
+                    .into_vec();
+        } else {
+            context_stats.resize(live, BundleContextStats::new(BundleContextId(0)));
+        }
+        if context_frequencies.capacity() < live {
+            // SAFETY: the ID, counts, and histogram elements all admit zero.
+            context_frequencies =
+                unsafe { Box::<[ContextFrequency]>::new_zeroed_slice(live).assume_init() }
+                    .into_vec();
+        } else {
+            context_frequencies.resize(live, ContextFrequency::default());
+        }
+        let mut reports = context_stats.iter_mut().zip(&mut context_frequencies);
+        let empty = ContextTally::default();
+        // Visit only live contexts, in increasing wire-ID order.
+        for (word, &occupied) in self.active_contexts.iter().enumerate() {
+            let mut remaining = occupied;
+            while remaining != 0 {
+                let id = word * 64 + remaining.trailing_zeros() as usize;
+                remaining &= remaining - 1;
+                let slot = self.context_slots[id];
+                let context = BundleContextId(id as u16);
+                let tally = if slot == 0 {
+                    &empty
+                } else {
+                    &self.contexts[slot as usize - 1]
+                };
+                let (stats, freq) = reports.next().expect("one report per occupied context");
+                if let Some(entry) = tally.detail {
+                    (*stats, *freq) = self.details[entry.get() as usize - 1];
+                } else {
+                    stats.context = context;
+                    freq.context = context;
+                }
+                let zeros = self.singleton_counts[id];
+                stats.bundles_total = stats.bundles_total.saturating_add(zeros);
+                stats.type_significance_rle = stats.type_significance_rle.saturating_add(zeros);
+                stats.flush_type_complete = stats.flush_type_complete.saturating_add(zeros);
+                self.stats.bundles_total =
+                    self.stats.bundles_total.saturating_add(stats.bundles_total);
+                self.stats.significance_rle = self
+                    .stats
+                    .significance_rle
+                    .saturating_add(stats.type_significance_rle);
+                self.stats
+                    .record_flush(BundleFlushReason::TypeComplete, stats.flush_type_complete);
+                // The global EOB count already includes the explicit block terminators.
+                self.stats
+                    .record_flush(BundleFlushReason::EndOfBlock, stats.flush_end_of_block);
+                // Partition outgoing edges into switches, same-context edges and block ends.
+                // A final unterminated record has no outgoing edge either.
+                let switches = stats.bundles_total
+                    - tally.stays
+                    - tally.ends
+                    - u64::from(unfinished == Some(id));
+                stats.flush_context_switch = stats.flush_context_switch.saturating_add(switches);
+                self.stats
+                    .record_flush(BundleFlushReason::ContextSwitch, stats.flush_context_switch);
+                stats.flush_end_of_block = stats.flush_end_of_block.saturating_add(tally.ends);
+                freq.bundles = stats.bundles_total;
+                freq.total_bits = freq
+                    .total_bits
+                    .saturating_add(zeros.saturating_mul(u64::from(self.width.max(2))));
+                freq.symbol_counts[1] = freq.symbol_counts[1].saturating_add(zeros);
             }
-            let context = BundleContextId(id as u16);
-            let tally = &self.contexts[slot as usize - 1];
-            let (mut stats, mut freq) = tally.detail.map_or_else(
-                || {
-                    (
-                        BundleContextStats::new(context),
-                        ContextFrequency {
-                            context,
-                            ..ContextFrequency::default()
-                        },
-                    )
-                },
-                |entry| self.details[entry.get() as usize - 1],
-            );
-            let zeros = tally.single_zeros;
-            stats.bundles_total = stats.bundles_total.saturating_add(zeros);
-            stats.type_significance_rle = stats.type_significance_rle.saturating_add(zeros);
-            stats.flush_type_complete = stats.flush_type_complete.saturating_add(zeros);
-            self.stats.bundles_total = self.stats.bundles_total.saturating_add(stats.bundles_total);
-            self.stats.significance_rle = self
-                .stats
-                .significance_rle
-                .saturating_add(stats.type_significance_rle);
-            self.stats
-                .record_flush(BundleFlushReason::TypeComplete, stats.flush_type_complete);
-            // The global EOB count already includes the explicit block terminators.
-            self.stats
-                .record_flush(BundleFlushReason::EndOfBlock, stats.flush_end_of_block);
-            // Partition outgoing edges into switches, same-context edges and block ends.
-            // A final unterminated record has no outgoing edge either.
-            let switches = stats.bundles_total
-                - tally.stays
-                - tally.ends
-                - u64::from(unfinished == Some(slot as usize - 1));
-            stats.flush_context_switch = stats.flush_context_switch.saturating_add(switches);
-            self.stats
-                .record_flush(BundleFlushReason::ContextSwitch, stats.flush_context_switch);
-            stats.flush_end_of_block = stats.flush_end_of_block.saturating_add(tally.ends);
-            freq.bundles = stats.bundles_total;
-            freq.total_bits = freq
-                .total_bits
-                .saturating_add(zeros.saturating_mul(u64::from(self.width.max(2))));
-            freq.symbol_counts[1] = freq.symbol_counts[1].saturating_add(zeros);
-            context_stats.push(stats);
-            context_frequencies.push(freq);
         }
         (context_stats, context_frequencies)
     }
@@ -4128,33 +4550,68 @@ impl<'a> BundleStreamRecorder<'a> {
             stream.resize(total, 1);
         }
         const SLOTS: usize = BLOCK_PIXELS - 1;
+        // Each row covers the eight tile columns for one frame/DC class.
+        // Consecutive DC-only blocks can be copied from a contiguous period,
+        // even when a literal interrupts the run before it completes a cycle.
+        let mut dc_rows = [None; 32];
+        let mut periods = Vec::new();
+        for (group, row) in self.sparse_patterns[..256].chunks_exact(8).enumerate() {
+            if row.iter().all(|p| p.end - p.start == SLOTS)
+                && row.iter().map(|p| p.repeats).sum::<u64>() >= 16
+            {
+                dc_rows[group] = Some(periods.len());
+                if !overwrite {
+                    let start = periods.len();
+                    for p in row {
+                        periods.extend_from_slice(&self.bundles[p.start..p.end]);
+                    }
+                    // Keep a contiguous 32-block seed at each of the eight phases.
+                    for _ in 0..2 {
+                        periods.extend_from_within(start..);
+                    }
+                    periods.extend_from_within(start..start + 8 * SLOTS);
+                }
+            }
+        }
         let mut repeat_keys = vec![u16::MAX; total / SLOTS];
-        const TILE_COLUMNS: usize = 8;
-        let mut written = 0;
+        let mut written = 0_usize;
         enum Source {
             Span(usize, usize, Option<u16>),
-            DcCycles(usize),
+            DcRun(u16, usize, usize),
         }
         let mut append = |source| {
             let (start, end, key) = match source {
                 Source::Span(start, end, key) => (start, end, key),
-                Source::DcCycles(cycles) => {
-                    // The preceding eight DC templates have the same complete
-                    // record sequence and singleton symbols as each following cycle.
-                    let period = TILE_COLUMNS * SLOTS;
-                    let src = written - period;
-                    let mut remaining = cycles * period;
-                    while remaining != 0 {
-                        let len = (written - src).min(remaining);
-                        records.extend_from_within(src..src + len);
-                        if written.is_multiple_of(SLOTS) {
-                            repeat_keys
-                                .copy_within(src / SLOTS..(src + len) / SLOTS, written / SLOTS);
+                Source::DcRun(key, len, row) => {
+                    let n = len * SLOTS;
+                    let aligned = written.is_multiple_of(SLOTS);
+                    let slot = written / SLOTS;
+                    let period: [u16; 8] =
+                        std::array::from_fn(|i| (key & !7) | ((key + i as u16) & 7));
+                    if overwrite {
+                        if !aligned
+                            || !old_keys.get(slot..slot + len).is_some_and(|prior| {
+                                prior.chunks(8).all(|chunk| chunk == &period[..chunk.len()])
+                            })
+                        {
+                            return false;
                         }
-                        written += len;
-                        remaining -= len;
+                    } else {
+                        let start = row + usize::from(key & 7) * SLOTS;
+                        let seed = n.min(32 * SLOTS);
+                        records.extend_from_slice(&periods[start..start + seed]);
+                        while records.len() < written + n {
+                            let len = (records.len() - written).min(written + n - records.len());
+                            records.extend_from_within(written..written + len);
+                        }
                     }
-                    return;
+                    if aligned {
+                        for chunk in repeat_keys[slot..slot + len].chunks_mut(8) {
+                            chunk.copy_from_slice(&period[..chunk.len()]);
+                        }
+                    }
+                    written += n;
+                    return true;
                 }
             };
             let dest = written;
@@ -4169,7 +4626,7 @@ impl<'a> BundleStreamRecorder<'a> {
                 repeat_keys[slot] = key;
                 if overwrite && let Some(&old_key) = old_keys.get(slot) {
                     if key == old_key {
-                        return;
+                        return true;
                     }
                     if self.context_remap.is_none() && old_key != u16::MAX {
                         let tail_id = pattern_tail(key);
@@ -4215,6 +4672,7 @@ impl<'a> BundleStreamRecorder<'a> {
                 stream[dest..dest + symbol_len]
                     .copy_from_slice(&symbols[start..start + symbol_len]);
             }
+            true
         };
         let (mut repeat_start, mut literal_start) = (0, 0);
         for (repeat_end, literal_end) in self
@@ -4225,29 +4683,46 @@ impl<'a> BundleStreamRecorder<'a> {
         {
             let mut keys = &self.repeats[repeat_start..repeat_end];
             while let Some((&key, rest)) = keys.split_first() {
-                if !overwrite
-                    && keys.len() >= 2 * TILE_COLUMNS
-                    && keys[..TILE_COLUMNS] == keys[TILE_COLUMNS..2 * TILE_COLUMNS]
-                    && keys[..TILE_COLUMNS].iter().all(|&k| {
-                        // The first 256 slots are reserved for DC-only patterns.
-                        k < 256
-                            && self.sparse_patterns[usize::from(k)].end
-                                - self.sparse_patterns[usize::from(k)].start
-                                == SLOTS
-                    })
-                {
-                    let period = &keys[..TILE_COLUMNS];
-                    let cycles = keys[TILE_COLUMNS..]
-                        .chunks_exact(TILE_COLUMNS)
-                        .take_while(|chunk| *chunk == period)
-                        .count();
-                    for &k in period {
-                        let p = self.sparse_patterns[usize::from(k)];
-                        append(Source::Span(p.start, p.end, Some(p.key)));
+                if key == DC_RUN_KEY {
+                    let (first, len) = (rest[0], usize::from(rest[1]));
+                    if !dc_rows[usize::from(first) / 8]
+                        .is_some_and(|row| append(Source::DcRun(first, len, row)))
+                    {
+                        for i in 0..len {
+                            let k = (first & !7) | ((first + i as u16) & 7);
+                            let p = self.sparse_patterns[usize::from(k)];
+                            append(Source::Span(p.start, p.end, Some(p.key)));
+                        }
                     }
-                    append(Source::DcCycles(cycles));
-                    keys = &keys[TILE_COLUMNS * (cycles + 1)..];
-                } else {
+                    keys = &rest[2..];
+                    continue;
+                }
+
+                if key < 256
+                    && keys.len() >= 4
+                    && let Some(row) = dc_rows[usize::from(key) / 8]
+                {
+                    let base = key & !7;
+                    let mut len = 1;
+                    while len < keys.len() && keys[len] == base | (key.wrapping_add(len as u16) & 7)
+                    {
+                        len += 1;
+                    }
+                    if len >= 4 && append(Source::DcRun(key, len, row)) {
+                        keys = &keys[len..];
+                        continue;
+                    }
+                    // A changed prior key requires the usual per-block suffix check.
+                    if len >= 4 {
+                        for &k in &keys[..len] {
+                            let p = self.sparse_patterns[usize::from(k)];
+                            append(Source::Span(p.start, p.end, Some(p.key)));
+                        }
+                        keys = &keys[len..];
+                        continue;
+                    }
+                }
+                {
                     if key >= TAIL_KEY {
                         let tail = self.zero_tails[usize::from(key - TAIL_KEY)];
                         append(Source::Span(tail.start, tail.end, Some(key)));
@@ -4265,6 +4740,7 @@ impl<'a> BundleStreamRecorder<'a> {
     }
 
     fn finish_segment(mut self, mut previous: Option<RecordedSegment>) -> RecordedSegment {
+        self.flush_dc();
         let unfinished = self.last_context_slot;
         self.count_repeated_patterns();
         let (context_stats, context_frequencies) =
@@ -4331,8 +4807,7 @@ impl<'a> BundleStreamRecorder<'a> {
             && record.bit_len == self.width.max(2)
             && matches!(record.flush, BundleFlushReason::TypeComplete)
         {
-            self.contexts[slot].single_zeros =
-                self.contexts[slot].single_zeros.saturating_add(count);
+            self.singleton_counts[slot] = self.singleton_counts[slot].saturating_add(count);
         } else {
             self.count_detail(slot, record, count);
         }
@@ -4341,12 +4816,13 @@ impl<'a> BundleStreamRecorder<'a> {
     #[inline]
     fn count_transition(&mut self, slot: usize, count: u64) {
         if self.last_context_slot.replace(slot) == Some(slot) {
-            let stays = &mut self.contexts[slot].stays;
+            let stays = &mut self.exceptional(slot).stays;
             *stays = stays.saturating_add(count);
         }
     }
 
     fn count_detail(&mut self, slot: usize, record: BundleRecord, count: u64) {
+        let slot = self.exceptional_slot(slot);
         let tally = &mut self.contexts[slot];
         let entry = *tally.detail.get_or_insert_with(|| {
             self.details.push((
@@ -4369,25 +4845,35 @@ impl<'a> BundleStreamRecorder<'a> {
     fn count_eob(&mut self) {
         self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(1);
         if let Some(slot) = self.last_context_slot.take() {
-            let tally = &mut self.contexts[slot];
+            let tally = self.exceptional(slot);
             tally.ends = tally.ends.saturating_add(1);
         }
         self.stats.record_flush(BundleFlushReason::EndOfBlock, 1);
     }
+    #[cfg(test)]
     fn record_block(
+        &mut self,
+        index: usize,
+        coeffs: &[i16; BLOCK_PIXELS],
+        kind: FrameType,
+    ) -> usize {
+        self.record_masked_block(index, coeffs, kind, ac_support(coeffs))
+    }
+
+    fn record_masked_block(
         &mut self,
         block_index: usize,
         coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
+        active: u64,
     ) -> usize {
+        self.flush_dc();
         let (h, v, vv, hv, hh) = (coeffs[1], coeffs[8], coeffs[16], coeffs[9], coeffs[2]);
         if self.last_context_slot.is_some()
             || [h, v, vv, hv, hh]
                 .iter()
                 .any(|level| level.unsigned_abs() > 1)
-            || coeffs[3..8] != [0; 5]
-            || coeffs[10..16] != [0; 6]
-            || coeffs[17..] != [0; 47]
+            || active >= 1 << 6
         {
             return self.record_ac_slots(self.tile(block_index), coeffs, frame_type);
         }
@@ -4411,14 +4897,47 @@ impl<'a> BundleStreamRecorder<'a> {
         }
     }
 
-    /// Within a raster row, the eight predicted zero-block keys repeat. Count
+    fn flush_dc(&mut self) {
+        if let Some(span) = self.pending_dc.take() {
+            self.record_dc_patterns(span);
+        }
+    }
+
+    fn queue_dc(&mut self, blocks: std::ops::Range<usize>, significant: bool, kind: FrameType) {
+        if let Some(span) = &mut self.pending_dc
+            && span.end == blocks.start
+            && span.kind == kind
+            && span.significant == significant
+        {
+            span.end = blocks.end;
+        } else {
+            self.flush_dc();
+            self.pending_dc = Some(DcSpan {
+                start: blocks.start,
+                end: blocks.end,
+                kind,
+                significant,
+            });
+        }
+    }
+
+    /// Within a raster row, the eight DC tile keys repeat. Count
     /// each complete cycle once per tile and append its keys in raster order.
-    fn record_zero_patterns(&mut self, blocks: std::ops::Range<usize>) {
+    fn record_dc_patterns(&mut self, span: DcSpan) {
+        let blocks = span.start..span.end;
+        let count = blocks.len() as u64;
+        self.stats.dc_events = self.stats.dc_events.saturating_add(count);
+        self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(count);
+        self.stats
+            .record_flush(BundleFlushReason::EndOfBlock, count);
+        let mut levels = [0; BLOCK_PIXELS];
+        levels[0] = i16::from(span.significant);
         let mut first = blocks.start;
         while first < blocks.end {
             let column = first % self.blocks_per_row;
-            let len = (self.blocks_per_row - column).min(blocks.end - first);
-            let base = (usize::from(FrameType::Predicted.as_byte()) << 6)
+            let mut len = (self.blocks_per_row - column).min(blocks.end - first);
+            let base = (usize::from(span.significant) << 7)
+                | (usize::from(span.kind.as_byte()) << 6)
                 | (((first / self.blocks_per_row) & 7) << 3);
             if len >= 16
                 && self.sparse_patterns[base..base + 8]
@@ -4426,20 +4945,26 @@ impl<'a> BundleStreamRecorder<'a> {
                     .all(|p| p.end != 0)
             {
                 self.mark_literals();
-                self.repeats
-                    .extend((column..column + len).map(|col| (base | (col & 7)) as u16));
+                self.repeats.extend_from_slice(&[
+                    DC_RUN_KEY,
+                    (base | (column & 7)) as u16,
+                    len as u16,
+                ]);
                 for phase in 0..8 {
                     let times = ((len + 7 - phase) / 8) as u64;
                     let p = &mut self.sparse_patterns[base | ((column + phase) & 7)];
                     p.repeats += times;
-                    let tally = &mut self.contexts[p.last_slot];
+                    let last = p.last_slot;
+                    let tally = self.exceptional(last);
                     tally.ends = tally.ends.saturating_add(times);
                 }
             } else {
+                // One tile period populates every missing template in this row.
+                len = len.min(8);
                 for i in first..first + len {
-                    self.record_pattern(i, &[0; BLOCK_PIXELS], FrameType::Predicted, 0);
+                    self.record_pattern(i, &levels, span.kind, 0);
                     let slot = self.last_context_slot.take().expect("completed AC pattern");
-                    let tally = &mut self.contexts[slot];
+                    let tally = self.exceptional(slot);
                     tally.ends = tally.ends.saturating_add(1);
                 }
             }
@@ -4641,8 +5166,7 @@ impl<'a> BundleStreamRecorder<'a> {
             // Each of the 64 - start_order zeros produced one record. The RLE
             // encoder would have merged any adjacent pair with equal context.
             let distinct_singletons = self.bundles.len() - start == BLOCK_PIXELS - start_order
-                && self.context_slots[usize::from(self.bundles[start].context.0)] as usize
-                    != prefix_slot + 1;
+                && usize::from(self.bundles[start].context.0) != prefix_slot;
             self.zero_tails[key] = ZeroTail {
                 distinct_singletons,
                 start,
@@ -4718,7 +5242,7 @@ impl<'a> BundleStreamRecorder<'a> {
         if run == 1 {
             let slot = self.context_slot(context);
             self.count_transition(slot, 1);
-            let tally = &mut self.contexts[slot].single_zeros;
+            let tally = &mut self.singleton_counts[slot];
             *tally = tally.saturating_add(1);
             self.bundles.push(BundleRecord {
                 bundle_type: BundleType::SignificanceRle,
@@ -4775,11 +5299,7 @@ impl BundledHooks for BundleStreamRecorder<'_> {
             &[[BundledToken::DcDiff(0), BundledToken::EndOfBlock]; 32],
             count - 1,
         );
-        self.stats.dc_events = self.stats.dc_events.saturating_add(count as u64);
-        self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(count as u64);
-        self.stats
-            .record_flush(BundleFlushReason::EndOfBlock, count as u64);
-        self.record_zero_patterns(blocks);
+        self.queue_dc(blocks, false, FrameType::Predicted);
     }
     fn record_dc_only(
         &mut self,
@@ -4788,20 +5308,18 @@ impl BundledHooks for BundleStreamRecorder<'_> {
         index: usize,
         kind: FrameType,
     ) {
-        debug_assert!(self.last_context_slot.is_none());
-        self.record_pattern(index, levels, kind, 0);
-        self.stats.dc_events = self.stats.dc_events.saturating_add(1);
-        self.count_eob();
+        self.queue_dc(index..index + 1, levels[0] != 0, kind);
         self.tokens
             .extend_from_slice(&[BundledToken::DcDiff(diff), BundledToken::EndOfBlock]);
     }
     fn record_block_coeffs(
         &mut self,
         coeffs: &[i16; BLOCK_PIXELS],
-        block_index: usize,
-        frame_type: FrameType,
-    ) -> usize {
-        self.record_block(block_index, coeffs, frame_type)
+        active: u64,
+        index: usize,
+        frame: FrameType,
+    ) {
+        self.record_masked_block(index, coeffs, frame, active);
     }
     fn record_dc(&mut self, diff: i16) {
         self.stats.dc_events = self.stats.dc_events.saturating_add(1);
@@ -5560,6 +6078,7 @@ fn emit_dc_block(
     *prev_dc = levels[0];
 }
 
+#[cfg(test)]
 pub(crate) fn encode_block_rle(
     coeffs: &[i16; BLOCK_PIXELS],
     prev_dc: &mut i16,
@@ -5568,23 +6087,42 @@ pub(crate) fn encode_block_rle(
     block_index: usize,
     frame_type: FrameType,
 ) {
-    let end = hooks.record_block_coeffs(coeffs, block_index, frame_type);
+    encode_active_block(
+        coeffs,
+        ac_support(coeffs),
+        prev_dc,
+        out,
+        hooks,
+        block_index,
+        frame_type,
+    )
+}
+
+fn encode_active_block(
+    coeffs: &[i16; BLOCK_PIXELS],
+    mut active: u64,
+    prev_dc: &mut i16,
+    out: &mut Vec<u8>,
+    hooks: &mut impl BundledHooks,
+    block_index: usize,
+    frame_type: FrameType,
+) {
+    hooks.record_block_coeffs(coeffs, active, block_index, frame_type);
     let dc = coeffs[0];
     let diff = dc.wrapping_sub(*prev_dc);
     out.extend_from_slice(&diff.to_le_bytes());
     hooks.record_dc(diff);
     *prev_dc = dc;
-    let mut zeros = 0;
-    for &slot in &ZIG_ZAG[1..end] {
-        let level = coeffs[slot];
-        if level == 0 {
-            zeros += 1;
-        } else {
-            let [lo, hi] = level.to_le_bytes();
-            out.extend_from_slice(&[zeros, lo, hi]);
-            hooks.record_ac(zeros, level);
-            zeros = 0;
-        }
+    let mut first = 1;
+    while active != 0 {
+        let order = active.trailing_zeros() as usize;
+        let zeros = (order - first) as u8;
+        let level = coeffs[ZIG_ZAG[order]];
+        let [lo, hi] = level.to_le_bytes();
+        out.extend_from_slice(&[zeros, lo, hi]);
+        hooks.record_ac(zeros, level);
+        active &= active - 1;
+        first = order + 1;
     }
     out.extend_from_slice(&[RLE_EOB, 0, 0]);
     hooks.record_eob();

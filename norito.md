@@ -1873,13 +1873,16 @@ for one row of blocks at a time. The forward transform folds the block into four
 reflection groups. Within each group it evaluates frequencies in order of quantization weight
 and stops when the remaining levels are provably zero. Integer dot products
 produce the retained coefficients directly from the source and predictor rows,
-with reference-order evaluation at ambiguous binary64 rounding boundaries. Prediction
+with reference-order evaluation at ambiguous binary64 rounding boundaries. On
+AArch64, bounded eight-bit dot products can certify four low-magnitude levels
+at a time. The transform carries the positions of surviving AC levels directly
+into the run/level writer. Prediction
 reuses the reference pixels when all residual levels quantize to zero.
 The bundled entropy recorder counts repeated low-frequency patterns and neutral
 zero suffixes by multiplicity. Unmapped sparse prefixes with the same occupied
 AC positions share their context sequence across signs. On a fresh report the
-recorder fills singleton zero symbols together and copies repeated eight-block
-DC sequences in tile order. Matching aligned spans in successive reports
+recorder fills singleton zero symbols together and expands runs of DC blocks
+with equal significance from contiguous periods of eight tiles. Matching aligned spans in successive reports
 reuse both the records and their projected symbols. The encoder writes luma
 and chroma run/level records directly into the frame buffer.
 Reconstruction sums the contributions of the nonzero coefficients in raster

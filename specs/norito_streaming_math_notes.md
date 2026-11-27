@@ -93,6 +93,18 @@ coefficient magnitude `m`, the first nonzero level has magnitude one when
 `floor(s/2) < m < 2s − floor(s/2)`. The encoder restores its sign directly.
 RDO receives the reference coefficient before selecting levels.
 
+For the binary64 quantizer, AArch64 dot-product instructions test four
+projections together. Round the 16 basis weights to signed Q9 and shift each
+folded sample right by the smallest common shift `k` that fits all samples
+in signed bytes. If `L` is their pre-shift absolute sum after centering, the
+Q9 dot product rescaled by `2ᵏ` has error at most
+`ceil(L/2) + 16 × 128 × (2ᵏ − 1) + 1` Q9 units. The first term covers
+weight rounding, the second bounds discarded sample bits, and the last covers
+binary64 evaluation and the centered basis error. Only an interval strictly
+inside the zero or signed unit quantization bin determines a level. Other
+projections use the Q32 accumulator and its reference-order midpoint check.
+A zigzag bitmask records each nonzero AC level as it is produced.
+
 Each block needs two integer moments, the sum of the residuals and their
 squared sum. The encoder computes one band of eight scanlines before writing
 back its collocated predictors. On AArch64 with SIMD and dot-product support,
@@ -100,7 +112,9 @@ a 16-byte load spans two adjacent blocks. The dot product of pixel bytes
 with ones gives their sum. Subtracting the predictor sum gives the signed
 residual sum. The dot product of the absolute differences with themselves
 gives the squared sum. Each four-byte lane belongs entirely to one block.
-The final pairwise addition produces both block results. An unpaired block
+For a predicted pair with squared sums `T`, the inequalities
+`E ≤ 64T` and `sum(x)² ≤ 64T` can certify both blocks as all-zero before
+computing their signed sums. Other pairs retain both exact moments. An unpaired block
 uses the scalar calculation.
 [Arm, integer dot products with Rust SIMD intrinsics](https://learn.arm.com/learning-paths/cross-platform/simd-on-rust/simd-on-rust-part2/)
 
@@ -147,10 +161,11 @@ for each position and merges adjacent zeros with the same context, up to the
 symbol-width limit. A block with 63 records has one record per AC position.
 All its zero positions therefore project to symbol 1. A fresh report fills
 that symbol once across the output, then overwrites the literal spans and
-occupied prefixes. If two adjacent groups of eight full DC-only blocks have
-identical template keys, their 504 records are identical. The recorder copies
-the period from the preceding records and doubles the initialized span for
-each additional copy, up to the length of the matching run.
+occupied prefixes. In a row of DC-only blocks with the same DC significance, the eight
+tile keys repeat. For frequently used rows with 63 records per template, the
+encoder builds a contiguous seed spanning 32 blocks at every starting phase.
+A longer run doubles the portion already written. Remapped or shorter templates
+can be expanded individually using their actual record counts.
 
 For unmapped contexts, blocks supported in the upper-left 3×3 share one
 more sequence per tile and frame class. From zigzag order 26 onward, the
