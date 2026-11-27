@@ -7,8 +7,8 @@
 //! key, the trusted roster, the signed genesis, listener addresses and a few developer settings
 //! (batched fsync, loopback rate-limit bypass, operator-signed diagnostics, fast transaction
 //! gossip for one-second blocks). They hold no private key and no per-path state setting; every
-//! other value is the node default. The storage layer adds its provider owners and provider
-//! HTTPS listeners.
+//! other value is the node default. The storage layer adds provider owners and HTTPS listeners,
+//! and shares the host's worker capacity across its four validators.
 
 use super::*;
 use iroha_config::parameters::{
@@ -103,6 +103,15 @@ pub(super) struct Layout<'a> {
     pub(super) genesis_public_key: &'a PublicKey,
     pub(super) operator_public_key: &'a PublicKey,
     pub(super) authorities: Option<&'a service_authorities::GeneratedAuthorities>,
+    pub(super) storage_workers: Option<i64>,
+}
+
+/// Each storage validator runs on the same host. Snapshot its share once per generation
+/// so the bootstrap and published configurations describe the same worker pools.
+pub(super) fn storage_workers_per_peer(host_cpus: usize) -> i64 {
+    // Match the pipeline's automatic eight-worker ceiling on larger hosts.
+    let share = host_cpus / usize::from(MANAGED_PEERS);
+    share.clamp(1, 8) as i64
 }
 
 impl Layout<'_> {
@@ -327,7 +336,23 @@ impl Layout<'_> {
                 ),
             ])),
         );
-        if opts.perf_profile.is_some() {
+        if let Some(workers) = self.storage_workers {
+            config.insert(
+                "concurrency".into(),
+                Value::Table(Table::from_iter([
+                    ("scheduler_min_threads".into(), Value::Integer(workers)),
+                    ("scheduler_max_threads".into(), Value::Integer(workers)),
+                    ("rayon_global_threads".into(), Value::Integer(workers)),
+                ])),
+            );
+            config.insert(
+                "pipeline".into(),
+                Value::Table(Table::from_iter([(
+                    "workers".into(),
+                    Value::Integer(workers),
+                )])),
+            );
+        } else if opts.perf_profile.is_some() {
             config.insert(
                 "pipeline".into(),
                 Value::Table(Table::from_iter([(

@@ -530,6 +530,8 @@ fn managed_localnet_prepares_a_standard_generation_the_engine_accepts() {
         let rendered = fs::read_to_string(path).expect("read managed peer config");
         let parsed = config::parse_peer_config(&rendered, path).expect("node accepts peer config");
         assert_loads_from_data_dir(&directory, index, &parsed);
+        assert!(!table.contains_key("concurrency"));
+        assert!(!table.contains_key("pipeline"));
     }
     assert!(!directory.join("start.sh").exists());
     let client = fs::read_to_string(directory.join("client.toml"))
@@ -540,6 +542,13 @@ fn managed_localnet_prepares_a_standard_generation_the_engine_accepts() {
         client["http_transport_policy"].as_str(),
         Some(HttpTransportPolicy::DirectLoopback.as_str())
     );
+}
+
+#[test]
+fn storage_workers_share_host_capacity_across_the_local_committee() {
+    for (cpus, expected) in [(1, 1), (3, 1), (7, 1), (8, 2), (16, 4), (32, 8), (64, 8)] {
+        assert_eq!(config::storage_workers_per_peer(cpus), expected);
+    }
 }
 
 #[test]
@@ -588,12 +597,19 @@ fn storage_preparation_binds_four_native_configs_and_a_private_client() {
     assert_eq!(authorities.manager, config.account);
     let operator = prepared.load_operator_key_pair().unwrap();
     assert_ne!(operator.public_key(), config.key_pair.public_key());
+    let mut first_worker_count = None;
     for (index, peer) in prepared.peers.iter().enumerate() {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
         let table: toml::Table = std::str::from_utf8(&bytes).unwrap().parse().unwrap();
         let config =
             config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
                 .unwrap();
+        let workers = config.pipeline.workers;
+        assert!(workers > 0);
+        assert_eq!(*first_worker_count.get_or_insert(workers), workers);
+        assert_eq!(config.concurrency.scheduler_min_threads, workers);
+        assert_eq!(config.concurrency.scheduler_max_threads, workers);
+        assert_eq!(config.concurrency.rayon_global_threads, workers);
         // Proof validity is committed chain policy; generated node settings must
         // neither select a backend nor preserve a retired compatibility setting.
         let local_zk = table.get("zk").and_then(toml::Value::as_table);
