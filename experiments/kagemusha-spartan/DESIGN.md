@@ -826,6 +826,14 @@ The published version finished sooner and used less CPU in every pair. The first
 fell from 75.843 to 68.144 s (10.15%). The two Receive finalizations together fell from 39.977 to 35.066 s
 (12.28%). This comparison includes all intervening branch changes and uses the signed unmasked 968f bundle.
 
+The ordinary IPA opening reuses public generators across proofs under one wallet installation. Its first round
+computes `G_lo + [u]G_hi` for the public transcript challenge `u`. Write each signed GLV component of `u`
+in two pieces at bit 32. A table of `[2^32]G_hi` lets all four pieces share the same doubling steps, using
+the curve endomorphism for the second component. Later rounds operate on the newly folded basis. At the signed
+wallet dimensions the table occupies 8 MiB on Vesta and 4 MiB on Pallas per installation. The engine prepares
+a table when the early and per-stage memory checks show enough headroom and retains it for the lifetime of that
+installation. A cold wallet below the preparation threshold continues with the ordinary fold.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh

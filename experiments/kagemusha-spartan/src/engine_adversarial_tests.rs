@@ -10,6 +10,57 @@ mod output_reuse_tests;
 #[path = "signed_receive_scalar_tests.rs"]
 mod signed_receive_scalar_tests;
 
+use iroha_data_model::kagemusha::{
+    KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1,
+};
+use std::sync::atomic::{AtomicU64, Ordering};
+struct Memory(AtomicU64);
+type TimeReading = (
+    KagemushaWalletAnchoredTimeV1,
+    KagemushaWalletMonotonicReadingV1,
+);
+impl TimeSource for Memory {
+    fn available_memory_bytes(&self) -> Result<u64> {
+        Ok(self.0.load(Ordering::Relaxed))
+    }
+    fn prepared(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
+        Err(Error::Unavailable("no Send clock in memory fixture"))
+    }
+    fn observe(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
+        Err(Error::Unavailable("no Send clock in memory fixture"))
+    }
+}
+
+#[test]
+fn first_fold_tables_respect_current_headroom() {
+    let base = Ep::generator().to_affine();
+    let gens = Gens::<Ep> {
+        g: vec![base; 1 << 14].into(),
+        h: base,
+        u: base,
+    };
+    let pending = gens.g.pending_cache_bytes() as u64;
+    assert!(pending > 0);
+    let workspace = 100;
+    let minimum = workspace + iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES as u64;
+    let memory = Arc::new(Memory(AtomicU64::new(minimum - 1)));
+    let engine = NativeEngine::with_time_source(memory.clone());
+    assert!(matches!(
+        engine.admit_opening(workspace, &gens, true),
+        Err(Error::NotEnoughMemory { .. })
+    ));
+    memory.0.store(minimum + pending - 1, Ordering::Relaxed);
+    engine.admit_opening(workspace, &gens, true).unwrap();
+    assert_eq!(gens.g.pending_cache_bytes() as u64, pending);
+    memory.0.store(minimum + pending, Ordering::Relaxed);
+    engine.admit_opening(workspace, &gens, false).unwrap();
+    assert_eq!(gens.g.pending_cache_bytes() as u64, pending);
+    engine.admit_opening(workspace, &gens, true).unwrap();
+    assert_eq!(gens.g.pending_cache_bytes(), 0);
+    memory.0.store(minimum, Ordering::Relaxed);
+    engine.admit_opening(workspace, &gens, true).unwrap();
+}
+
 /// Exercise the same private-circuit check as Finalize, using the exact
 /// governed fixture generation supplied to a device run.
 #[test]
@@ -67,26 +118,6 @@ fn repeated_payment_verification_is_exact_and_local_to_an_installation() {
 
     // Receive never needs a time observation, but its available memory may
     // change between receipt-body validation and irreversible selection.
-    use iroha_data_model::kagemusha::{
-        KagemushaWalletAnchoredTimeV1, KagemushaWalletMonotonicReadingV1,
-    };
-    use std::sync::atomic::{AtomicU64, Ordering};
-    struct Memory(AtomicU64);
-    type TimeReading = (
-        KagemushaWalletAnchoredTimeV1,
-        KagemushaWalletMonotonicReadingV1,
-    );
-    impl TimeSource for Memory {
-        fn available_memory_bytes(&self) -> Result<u64> {
-            Ok(self.0.load(Ordering::Relaxed))
-        }
-        fn prepared(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
-            Err(Error::Unavailable("no Send clock in Receive fixture"))
-        }
-        fn observe(&self, _: &[u8; 32], _: &[u8; 32]) -> Result<TimeReading> {
-            Err(Error::Unavailable("no Send clock in Receive fixture"))
-        }
-    }
     let memory = Arc::new(Memory(AtomicU64::new(u64::MAX)));
     let engine = NativeEngine::with_time_source(memory.clone());
     let started = Instant::now();

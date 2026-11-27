@@ -12,7 +12,7 @@
 
 use ff::Field;
 use iroha_pasta::PastaCurve;
-use iroha_pasta::fold::{fold_generators_vartime, folded_generators_vartime};
+use iroha_pasta::fold::{FixedGeneratorBasis, fold_generators_vartime};
 use iroha_pasta::msm::{MemoryBudget, SharedMemoryBudget, msm_public, msm_secret_cancellable};
 use rayon::prelude::*;
 use zeroize::Zeroizing;
@@ -28,9 +28,9 @@ pub const GENERATOR_DOMAIN: &str = "kagemusha-zks-spike/gens";
 
 /// The public commitment bases. Private commitments sum them through the
 /// secret Pippenger MSM ([`secret_msm`], `spartan::column_sums`), which keeps
-/// no per-shape table, so a generator set holds the bases alone.
+/// no per-shape table. Repeated public openings may prepare a first-fold table.
 pub struct Gens<C: PastaCurve> {
-    pub g: Vec<Aff<C>>,
+    pub g: FixedGeneratorBasis<C>,
     pub h: Aff<C>,
     pub u: Aff<C>,
 }
@@ -95,14 +95,18 @@ impl<C: PastaCurve> Gens<C> {
             });
         let u = affine.pop().expect("U generator");
         let h = affine.pop().expect("H generator");
-        Self { g: affine, h, u }
+        Self {
+            g: affine.into(),
+            h,
+            u,
+        }
     }
 
     /// The first `n` generators. Preserve the parent set's `h` and `u`:
     /// `Gens::new(n)` would select different blinding bases.
     pub fn prefix(&self, n: usize) -> Self {
         Self {
-            g: self.g[..n].to_vec(),
+            g: self.g[..n].to_vec().into(),
             h: self.h,
             u: self.u,
         }
@@ -228,7 +232,7 @@ pub fn prove<C: PastaCurve>(
     let u_affine = group::Curve::to_affine(&u_point);
     // The first round reads the installed generators. Its fold allocates
     // only the reduced vector, which later rounds update in place.
-    let mut g = std::borrow::Cow::Borrowed(gens.g.as_slice());
+    let mut g = std::borrow::Cow::Borrowed(&gens.g[..]);
     let mut lr = Vec::with_capacity(n.trailing_zeros() as usize);
     let mut len = n;
     while len > 1 {
@@ -287,8 +291,8 @@ pub fn prove<C: PastaCurve>(
         crate::prof::add("ipa.xb", xb_clock.elapsed().as_secs_f64());
         let fold_clock = std::time::Instant::now();
         match &mut g {
-            std::borrow::Cow::Borrowed(initial) => {
-                g = std::borrow::Cow::Owned(folded_generators_vartime::<C>(initial, &u));
+            std::borrow::Cow::Borrowed(_) => {
+                g = std::borrow::Cow::Owned(gens.g.fold_vartime(&u));
             }
             std::borrow::Cow::Owned(folded) => {
                 fold_generators_vartime::<C>(&mut folded[..len], &u);

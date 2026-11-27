@@ -32,7 +32,10 @@ use crate::curve::endo::wnaf_u128;
 use crate::curve::{PastaAffine, PastaCurve};
 use crate::field::PastaField;
 
+mod fixed;
 mod four;
+mod straus;
+pub use fixed::{FixedGeneratorBasis, fixed_fold_cache_bytes};
 pub use four::folded_generators_four_vartime;
 
 /// Lanes per lockstep block.

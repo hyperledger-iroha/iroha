@@ -1,17 +1,11 @@
 //! Simultaneous multiplication for four consecutive public generator folds.
 
+use super::straus::{Addition, add_digits, straus_block};
 use super::*;
 
 /// Rows of 128 output lanes keep the fifteen width-5 odd-multiple tables
 /// within the per-worker scratch size of the ordinary single-round kernel.
 const LANES: usize = 128;
-
-#[derive(Clone, Copy)]
-struct Addition {
-    row: usize,
-    endomorphism: bool,
-    negative: bool,
-}
 
 /// Expand the four successive half-vector folds in the order the generators
 /// appear in storage: the first challenge weights the most significant bit.
@@ -34,109 +28,10 @@ fn schedule<C: PastaCurve>(weights: &[C::ScalarExt; 16]) -> Option<Vec<Vec<Addit
     for (j, weight) in weights[1..].iter().enumerate() {
         let challenge = FoldChallenge::new::<C>(weight)?;
         for (endomorphism, digits) in [(false, &challenge.d1), (true, &challenge.d2)] {
-            if columns.len() < digits.len() {
-                columns.resize_with(digits.len(), Vec::new);
-            }
-            for (column, &digit) in columns.iter_mut().zip(digits) {
-                if digit != 0 {
-                    column.push(Addition {
-                        row: (usize::from(digit.unsigned_abs()) / 2) * 15 + j,
-                        endomorphism,
-                        negative: digit < 0,
-                    });
-                }
-            }
+            add_digits::<15>(&mut columns, j, endomorphism, digits, false);
         }
     }
     Some(columns)
-}
-
-fn straus_block<C: PastaCurve>(
-    input: &[C::AffineExt],
-    start: usize,
-    output: &mut [C::AffineExt],
-    columns: &[Vec<Addition>],
-) -> bool {
-    let m = output.len();
-    let stride = input.len() / 16;
-    let points = |part: usize| &input[part * stride + start..part * stride + start + m];
-    if (0..16).any(|part| points(part).iter().any(|p| bool::from(p.is_identity()))) {
-        return false;
-    }
-    // Table order is (odd multiple, generator block, lane). All fifteen
-    // blocks can share a single inversion while building each odd multiple.
-    let row = 15 * m;
-    let mut scratch = Scratch {
-        den: vec![C::Base::ZERO; row],
-        prefix: vec![C::Base::ZERO; row],
-    };
-    let mut xs = vec![C::Base::ZERO; TABLE * row];
-    let mut ys = xs.clone();
-    for j in 0..15 {
-        for (i, point) in points(j + 1).iter().enumerate() {
-            xs[j * m + i] = point.x();
-            ys[j * m + i] = point.y();
-        }
-    }
-    let mut dx = xs[..row].to_vec();
-    let mut dy = ys[..row].to_vec();
-    if !ba_double(&mut dx, &mut dy, &mut scratch) {
-        return false;
-    }
-    for index in 1..TABLE {
-        let (prev_x, rest_x) = xs.split_at_mut(index * row);
-        let (prev_y, rest_y) = ys.split_at_mut(index * row);
-        let (x, y) = (&mut rest_x[..row], &mut rest_y[..row]);
-        x.copy_from_slice(&prev_x[(index - 1) * row..]);
-        y.copy_from_slice(&prev_y[(index - 1) * row..]);
-        if !ba_add(x, y, &dx, &dy, false, &mut scratch) {
-            return false;
-        }
-    }
-    let beta = C::AffineExt::endo_beta();
-    let endo_xs: Vec<_> = xs.iter().map(|&x| x * beta).collect();
-    let mut ax = vec![C::Base::ZERO; m];
-    let mut ay = ax.clone();
-    let mut started = false;
-    for column in columns.iter().rev() {
-        if started && !ba_double(&mut ax, &mut ay, &mut scratch) {
-            return false;
-        }
-        for add in column {
-            let row = add.row * m..(add.row + 1) * m;
-            let px = if add.endomorphism { &endo_xs } else { &xs };
-            let (x, y) = (&px[row.clone()], &ys[row]);
-            if started {
-                if !ba_add(&mut ax, &mut ay, x, y, add.negative, &mut scratch) {
-                    return false;
-                }
-            } else {
-                ax.copy_from_slice(x);
-                ay.copy_from_slice(y);
-                if add.negative {
-                    for v in &mut ay {
-                        *v = -*v;
-                    }
-                }
-                started = true;
-            }
-        }
-    }
-    if started {
-        for (i, p) in points(0).iter().enumerate() {
-            dx[i] = p.x();
-            dy[i] = p.y();
-        }
-        if !ba_add(&mut ax, &mut ay, &dx, &dy, false, &mut scratch) {
-            return false;
-        }
-        for (i, p) in output.iter_mut().enumerate() {
-            *p = crate::curve::affine_unchecked::<C::AffineExt>(ax[i], ay[i]);
-        }
-    } else {
-        output.copy_from_slice(points(0));
-    }
-    true
 }
 
 /// Apply four public IPA generator challenges to a borrowed basis, in
@@ -165,9 +60,12 @@ pub fn folded_generators_four_vartime<C: PastaCurve>(
         .with_max_len(1)
         .for_each(|(index, block)| {
             let start = index * LANES;
+            let len = block.len();
+            let terms =
+                std::array::from_fn(|j| &bases[(j + 1) * n + start..(j + 1) * n + start + len]);
             if columns
                 .as_ref()
-                .is_some_and(|columns| straus_block::<C>(bases, start, block, columns))
+                .is_some_and(|columns| straus_block::<C, 15, TABLE>(terms, block, columns))
             {
                 return;
             }

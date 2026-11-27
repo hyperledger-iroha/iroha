@@ -1973,7 +1973,7 @@ impl NativeEngine {
     /// use the secret Pippenger MSMs, whose digit and bucket scratch is
     /// admitted within that ceiling; no commitment table is built, so none is
     /// charged.
-    fn require_stage_memory(&self, workspace: u64) -> Result<()> {
+    fn require_stage_memory(&self, workspace: u64) -> Result<u64> {
         if let Some(source) = &self.time {
             let required = workspace
                 .checked_add(
@@ -1988,9 +1988,26 @@ impl NativeEngine {
                     available,
                 });
             }
+            return Ok(available - required);
+        }
+        Ok(u64::MAX)
+    }
+    /// A cold public fold table is optional. Only allocate it when both early
+    /// admission and the live stage have room above the ordinary prover peak.
+    fn admit_opening<C: iroha_pasta::PastaCurve>(
+        &self,
+        workspace: u64,
+        generators: &Gens<C>,
+        allow_tables: bool,
+    ) -> Result<()> {
+        let headroom = self.require_stage_memory(workspace)?;
+        let pending = generators.g.pending_cache_bytes() as u64;
+        if allow_tables && pending != 0 && pending <= headroom {
+            crate::prof::time("ipa.fold1.prepare", || generators.g.prepare_first_fold());
         }
         Ok(())
     }
+
     /// Reuse an Execute caller's reconstructed witness only while this installation
     /// and its protected finality reader still match. The provider checks the exact
     /// capsule and every live control again at the irreversible boundary.
@@ -2093,7 +2110,7 @@ impl NativeEngine {
         &self,
         parameters: &AuthenticatedParameters,
         kind: usize,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         if let Some(source) = &self.time {
             let required = parameters.minimum_proving_memory_bytes(kind)?;
             let available = source.available_memory_bytes()?;
@@ -2103,8 +2120,9 @@ impl NativeEngine {
                     available,
                 });
             }
+            return Ok(available - required);
         }
-        Ok(())
+        Ok(u64::MAX)
     }
     /// Whether this owner already verified the exact Payment under this installation.
     #[cfg(test)]
@@ -3003,10 +3021,15 @@ impl Engine for NativeEngine {
         }
         // A selected capsule can resume in a colder, smaller process than the
         // one that prepared it. Check again before cloning its private witness.
-        self.require_minimum_memory(
+        let headroom = self.require_minimum_memory(
             parameters,
             kind(&prepared.witness, parameters.inner.programs.len())?,
         )?;
+        let generators = &parameters.inner.generators;
+        // Retained tables already count against the OS's reported headroom,
+        // including those of another wallet sharing this process.
+        let pending = generators.p.g.pending_cache_bytes() + generators.s.g.pending_cache_bytes();
+        let allow_fold_tables = pending as u64 <= headroom;
         self.authorize_debit(DebitBoundary::AfterSelection, &prepared, parameters)?;
         let stage = crate::prof::Stage::start();
         let actual = HardwareAdvanceReceipt::verify_selected(
@@ -3254,7 +3277,11 @@ impl Engine for NativeEngine {
         crate::prof::release_free_memory();
         stage.mark("digest");
         let rlc = |_: &[u8; 32]| [0; 32];
-        self.require_stage_memory(cs.phase_memory_accounting().additional_peak_bytes)?;
+        self.admit_opening(
+            cs.phase_memory_accounting().additional_peak_bytes,
+            &p.generators.s,
+            allow_fold_tables,
+        )?;
         let (ps, rho, r) = spartan::prove_linked_witness(
             &cs.shape,
             &p.generators.s,
@@ -3270,7 +3297,11 @@ impl Engine for NativeEngine {
         drop(cs);
         crate::prof::release_free_memory();
         stage.mark("s-proof");
-        self.require_stage_memory(cp.phase_memory_accounting().additional_peak_bytes)?;
+        self.admit_opening(
+            cp.phase_memory_accounting().additional_peak_bytes,
+            &p.generators.p,
+            allow_fold_tables,
+        )?;
         let (pp, d2, _) = primary.prove_first(rho, r);
         if d != d2 {
             return Err(Error::Rejected("primary preparation replay".into()));
