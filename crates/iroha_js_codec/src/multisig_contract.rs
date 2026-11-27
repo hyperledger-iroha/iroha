@@ -6,7 +6,6 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::address::{AccountAddress, ChainDiscriminantGuard},
     smart_contract::{ContractAddress, ContractAlias, multisig_call::build_multisig_contract_call},
-    transaction::executable::ContractArgumentRecord,
 };
 use iroha_primitives::json::Json;
 use norito::json;
@@ -15,13 +14,15 @@ use std::{num::NonZeroU64, str::FromStr};
 /// Produce exact native instruction JSON, metadata and proposal hash.
 /// Inputs must come from the caller's independently pinned contract release and
 /// exact user intent. This pure codec does not authenticate a ledger projection.
+/// The payload is the callback's sole argument source: the trigger callback takes
+/// its arguments from the firing `ExecuteTrigger` event, so no argument record is
+/// accepted.
 ///
 /// # Errors
 ///
 /// Returns an error when the input exceeds 4 MiB or is not the exact input object,
-/// when any account, contract address, alias, code hash, argument record or payload
-/// is missing or noncanonical, or when the native multisig call cannot be built or
-/// rendered.
+/// when any account, contract address, alias, code hash or payload is missing or
+/// noncanonical, or when the native multisig call cannot be built or rendered.
 pub fn build_canonical_multisig_contract_call_json(
     input: &str,
     network_prefix: u16,
@@ -39,7 +40,6 @@ pub fn build_canonical_multisig_contract_call_json(
             "contract_alias",
             "entrypoint",
             "payload",
-            "arguments_hex",
             "code_hash_hex",
             "creation_time_ms",
         ],
@@ -79,7 +79,6 @@ pub fn build_canonical_multisig_contract_call_json(
         .and_then(json::Value::as_u64)
         .and_then(NonZeroU64::new)
         .ok_or_else(|| CodecError::failure("exact positive creation_time_ms required"))?;
-    let arguments = parse_arguments_hex(object.get("arguments_hex"))?;
     let payload = match object.get("payload") {
         Some(value @ json::Value::Object(_)) => Json::new(value.clone()),
         _ => {
@@ -92,7 +91,6 @@ pub fn build_canonical_multisig_contract_call_json(
         &alias,
         string("entrypoint")?,
         &payload,
-        arguments,
         &code_hash,
         attempt_created_at_ms,
     )
@@ -129,28 +127,6 @@ fn parse_code_hash_hex(code: &str) -> CodecResult<Hash> {
     Hash::from_str(&code.to_ascii_uppercase()).map_err(codec_error)
 }
 
-/// Admit bounded exact lower-case argument-record hexadecimal, or `null` for none.
-fn parse_arguments_hex(value: Option<&json::Value>) -> CodecResult<Option<ContractArgumentRecord>> {
-    match value {
-        Some(json::Value::Null) => Ok(None),
-        Some(json::Value::String(literal))
-            if literal.len() <= 2 * 1024 * 1024
-                && literal.len() % 2 == 0
-                && literal
-                    .bytes()
-                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) =>
-        {
-            Ok(Some(
-                ContractArgumentRecord::try_new(hex::decode(literal).map_err(codec_error)?)
-                    .map_err(codec_error)?,
-            ))
-        }
-        _ => Err(CodecError::failure(
-            "arguments_hex requires bounded exact native argument-record bytes or null",
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,7 +156,6 @@ mod tests {
             "contract_alias": (alias.to_string()),
             "entrypoint": "finalize_mint_request",
             "payload": {"proposal_id": "case-1"},
-            "arguments_hex": null,
             "code_hash_hex": (hex::encode(code_hash.as_ref())),
             "creation_time_ms": 1,
         });
@@ -194,7 +169,6 @@ mod tests {
             &alias,
             "finalize_mint_request",
             &payload,
-            None,
             &code_hash,
             NonZeroU64::new(1).unwrap(),
         )
@@ -260,23 +234,38 @@ mod tests {
     }
 
     #[test]
-    fn arguments_hex_admits_null_or_exact_lower_case_record_bytes() {
-        assert!(
-            parse_arguments_hex(Some(&json::Value::Null))
-                .expect("null arguments")
-                .is_none()
-        );
-        let record = parse_arguments_hex(Some(&json::Value::String("0a0b".to_owned())))
-            .expect("argument bytes")
-            .expect("argument record");
-        assert_eq!(record.into_bytes(), vec![0x0a, 0x0b]);
-        for invalid in [
-            None,
-            Some(json::Value::Bool(false)),
-            Some(json::Value::String("0A0B".to_owned())),
-            Some(json::Value::String("abc".to_owned())),
-        ] {
-            assert!(parse_arguments_hex(invalid.as_ref()).is_err());
+    fn fixed_argument_record_input_is_refused() {
+        let key = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519).expect("fixture key");
+        let account = AccountId::new(key.public_key().clone());
+        let network: NetworkId =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .expect("network");
+        let address = ContractAddress::derive(&network, &account, 7, DataSpaceId::new(9))
+            .expect("contract address");
+        let mut input = norito::json!({
+            "multisig_account_id": (account
+                .to_i105_for_discriminant(369)
+                .expect("account address")),
+            "contract_address": (address.to_string()),
+            "contract_alias": "reviewed_artifact::universal",
+            "entrypoint": "finalize_mint_request",
+            "payload": {"proposal_id": "case-1"},
+            "code_hash_hex": (hex::encode(Hash::new(b"reviewed-artifact").as_ref())),
+            "creation_time_ms": 1,
+        });
+        build_canonical_multisig_contract_call_json(&json::to_json(&input).unwrap(), 369)
+            .expect("payload-only input builds");
+        for record in [json::Value::Null, json::Value::String("0a0b".to_owned())] {
+            input
+                .as_object_mut()
+                .unwrap()
+                .insert("arguments_hex".into(), record);
+            assert!(
+                build_canonical_multisig_contract_call_json(&json::to_json(&input).unwrap(), 369)
+                    .is_err(),
+                "trigger callbacks take their arguments from the firing event"
+            );
         }
     }
 }

@@ -45,6 +45,29 @@ Codec constraints enforced by the reference implementation:
 
 For future math upgrades (non-normative), see `specs/norito_streaming_math_notes.md`.
 
+### Video chunk payload
+
+Each chunk starts with a 16-byte little-endian header. The frame index occupies
+bytes 0–3, presentation time occupies bytes 4–11, byte 12 carries flags,
+byte 13 is the quantizer, and bytes 14–15 give the padded luma block count.
+Bit 0 of the flags selects intra (0) or predicted (1). Bit 7 selects raw (0)
+or Zstandard (1) coding for the entire body following this header. Bits 1–6
+are reserved and must be zero.
+
+The raw body contains the luma RLE records followed, for 4:2:0, by two
+little-endian 32-bit lengths in bytes and the corresponding U and V records.
+The compressed body is exactly one dictionary-free Zstandard frame with a
+declared content size. Its decoded bytes follow the same plane layout. For
+each 8×8 block the decoder budgets at most 194 bytes (the DC delta, 63 AC
+records and the end marker), plus the two chroma lengths once per color frame.
+All plane data must be consumed. Each chunk can be unpacked independently.
+[RFC 8878, Zstandard frames](https://www.rfc-editor.org/rfc/rfc8878.html#section-3.1)
+
+The encoder tries the workspace CPU Zstandard implementation at level 1 when
+the body contains at least 256 bytes, and sets bit 7 only when compression
+reduces its length. Descriptor offsets, lengths, commitments and the nonce
+salt use the transmitted chunk, including its header.
+
 ## Key Management
 
 `streaming::StreamingSession` provides helpers for the control-plane handshake:
@@ -540,13 +563,13 @@ the decoded output against the hashes in the conformance bundle. CI jobs can inv
 
 ## Implementation Notes
 
-- The baseline encoder continues to compress luma-only frames, but RD bundles now stash deterministic 4:2:0 chroma sidecars (no neutral fills) so decoded Y4M outputs and PSNR-YUV calculations match the source. Full chroma compression/HDR variants and SIMD acceleration are planned for Milestone D8; keep production traffic on the baseline profile until those land.
-- A perceptual RDO schedule is available (`RdoMode::Perceptual`) for bundled entropy; it softens lambda at mid/high Q to bias toward SSIM-like structure preservation. The RD harness can drive the bundled encoder with explicit quantizers via `--quantizer` (repeatable for sweeps) or request a bitrate ladder with `--target-bitrate-mbps` plus the tiny-clip preset (`--tiny-clip-preset`) to keep 16–32 px fixtures from paying oversized headers. JSON outputs now enumerate every quantizer run and record bundled metrics alongside baseline values when `ENABLE_RANS_BUNDLES=1` is set.
+- The baseline encoder accepts luma with optional 4:2:0 chroma. Each plane uses the existing 8×8 transform and run-length block format. At the first AC quantization midpoint, the encoder chooses zero because both levels have equal transform error and zero saves one three-byte block record before frame compression. The optional luma rate-distortion optimizer spends its block budget on the levels with the greatest reduction in squared transform error. The softer `RdoMode::Perceptual` schedule allows a larger budget at some quantizers. The RD harness accepts repeated `--quantizer` values and measures decoded Y or YUV PSNR. [Quantization model and research references](norito_streaming_math_notes.md#encoder-decisions)
+- Each segment starts with an intra frame. At nonzero quantizers the encoder can also select an intra frame at a camera cut or slide change. It compares sampled spatial detail in the current Y, U and V planes with detail in the residual from the previous reconstruction. The frame type in the chunk header applies to all planes. With the in-loop filter enabled, the encoder and decoder use the same filtered luma for subsequent prediction.
 - Congestion-control feedback (`FeedbackHint`/`ReceiverReport`) is active in the
   session state machine; publishers clamp loss/parity fields, bind feedback to
   the first accepted stream id, and expose the bounded parity budget through
   manifest population and telemetry snapshots.
-- The Norito audio helper now defaults to the native low-delay codec (block-adaptive delta quantisation) and keeps libopus as an explicit fallback. Deployments that force libopus retain the 64 kbps mono / 96 kbps stereo presets, while ambisonics continues to leverage the deterministic codec until multistream support lands.
+- The default native audio encoder tries up to four step sizes per channel in the current PCM frame. It scores the samples reconstructed by the receiver's integer predictor and emits the lowest-error step in the existing packet header. Each delta occupies four bits. The search adds no lookahead beyond the frame. Deployments selecting libopus retain its 64 kbps mono and 96 kbps stereo presets.
 - Segment headers and manifests include an `audio_summary` (sample rate, frame samples, cadence, FEC level, layout). Validators enforce ±10 ms A/V sync using this summary when checking timestamps in the pipeline.
 - Decoder/RD harness: `cargo xtask streaming-entropy-bench` now emits decoded Y4M clips, PSNR, and Norito `SegmentBundle` artefacts (with optional chroma sidecars) when `--y4m-in/--y4m-out/--chunk-out` are supplied, and `cargo xtask streaming-decode --bundle <path> --y4m-out <path> [--psnr-ref <y4m>] [--psnr-mode y|yuv]` rehydrates bundles for RD tooling. The rANS comparison harness (`benchmarks/nsc/rans_compare.py`) records PSNR, SSIM, optional VMAF, bundled chunk sizes, bitrate ladder selections, and the `SVT_MIN_DIMENSION` guard in `report.json`, and now publishes `norito_summary`/`norito_per_clip_summary` blocks so dashboards can read per-clip baseline vs bundled metrics (with skip flags) without scraping runner logs.【xtask/src/streaming_bench.rs:1】【benchmarks/nsc/rans_compare.py:1】
 
@@ -581,9 +604,11 @@ bundled profile with `bundle_width >= 2`.
 Binaries ship bundled rANS tables for widths 2 and 3; wider values are rejected
 at config-parse time to avoid running against unpinned tables.
 
-Bundled telemetry now exposes RDO metadata (trellis-free DP with energy buckets
-`[0, 64, 256, 1024, 4096+]` and an optional int8 neural selector) plus per-context
-symbol histograms. Feed the resulting `bundled_telemetry.json` into
+Bundled telemetry reports luma block bits before and after AC selection, including
+the DC delta and the end marker in each block. These counts precede frame compression.
+Use descriptor lengths for the transmitted size. Telemetry also records the block energy
+histogram, the optional int8 selector's class histogram and per-context symbol
+counts. The separately recorded rANS stream has its own byte length. Feed the resulting `bundled_telemetry.json` into
 `cargo xtask streaming-context-remap --input <path> --top <n>` to produce deterministic
 remap tables when pruning low-volume contexts prior to enabling advanced entropy
 profiles on mixed clusters.
@@ -743,11 +768,9 @@ evidence MUST be satisfied.
     the matching hash MUST fail validation once the GPU harness lands.
 
 - **Deterministic microkernel requirements**
-  - **DP RDO:** GPU kernels consume the same fixed-point representation (`Q15`
-    coefficients, manifest-provided `dp_energy_table`, canonical `entropy_seed`) as the
-    scalar path. Warp reductions accumulate in deterministic integer order (no FP atomics
-    or nondeterministic shuffles). Inputs/outputs are captured in a `GpuDpVector`
-    fixture so the CPU reference (`BaselineBundler::dp_cost`) can replay the decision.
+  - An accelerated RDO selector must reproduce the scalar encoder's integer
+    token budget, gain ranking and raster-slot tie break. Compare the resulting
+    quantized levels and encoded block bytes with the scalar reference.
   - Regression tests `bundle_stream_recorder_counts_zero_runs_and_tokens` and
     `bundle_stream_recorder_flushes_zero_only_blocks`
     (`crates/norito/src/streaming.rs`) exercise the DP/BundledStats instrumentation directly, so we

@@ -100,10 +100,18 @@ fn five_kinds_select_installed_corners_and_keep_the_four_kind_profile() {
     for k in 0..MAX_KINDS {
         let mut r2 = SpikeRng::new(format!("fresh {k}").as_bytes());
         let cl = fresh(&five, k, &mut r2);
-        assert_eq!(five.eval(&cl.point), cl.value, "kind {k}'s corner selects it alone");
+        assert_eq!(
+            five.eval(&cl.point),
+            cl.value,
+            "kind {k}'s corner selects it alone"
+        );
         let corner = kind_corner(MAX_KINDS, k).unwrap();
         for (j, bit) in five.selector_coords().into_iter().zip(corner) {
-            assert_eq!(cl.point[j], Fp::from(bit), "kind {k} selector coordinate {j}");
+            assert_eq!(
+                cl.point[j],
+                Fp::from(bit),
+                "kind {k} selector coordinate {j}"
+            );
         }
         assert_eq!(corner_kind(MAX_KINDS, corner.map(Fp::from)), Ok(k));
         for (j, f) in five.fixed_coords(k).into_iter().enumerate() {
@@ -138,7 +146,10 @@ fn five_kinds_select_installed_corners_and_keep_the_four_kind_profile() {
     let (e4, e5) = (four.empty_claim(), five.empty_claim());
     let mut embedded = e4.point.clone();
     embedded.push(Fp::ZERO);
-    assert_eq!(e5.point, embedded, "the empty claim keeps its four-kind corner");
+    assert_eq!(
+        e5.point, embedded,
+        "the empty claim keeps its four-kind corner"
+    );
     assert_eq!((five.eval(&e5.point), e5.value), (Fp::ZERO, Fp::ZERO));
     // The reserved corners are not empty points of P (ArchiveSent's and a
     // two-bit kind's terms alias there), so fresh claims must be kept off
@@ -163,14 +174,23 @@ fn five_kinds_select_installed_corners_and_keep_the_four_kind_profile() {
         Err(SelectorError::Uninstalled),
         "the four-kind profile has no ArchiveSent corner"
     );
-    assert_eq!(kind_corner(4, ARCHIVE_SENT_KIND), Err(SelectorError::Uninstalled));
+    assert_eq!(
+        kind_corner(4, ARCHIVE_SENT_KIND),
+        Err(SelectorError::Uninstalled)
+    );
     assert_eq!(kind_corner(MAX_KINDS, 5), Err(SelectorError::Uninstalled));
     assert_eq!(kind_corner(MAX_KINDS, 8), Err(SelectorError::OutOfRange));
     assert_eq!(kind_corner(6, 0), Err(SelectorError::Profile));
     assert_eq!(corner_kind(1, [Fp::ZERO; 3]), Err(SelectorError::Profile));
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            four.fresh_point(ARCHIVE_SENT_KIND, Fp::ONE, &[], &[Fp::ZERO; 5], &[Fp::ZERO; 4])
+            four.fresh_point(
+                ARCHIVE_SENT_KIND,
+                Fp::ONE,
+                &[],
+                &[Fp::ZERO; 5],
+                &[Fp::ZERO; 4],
+            )
         }))
         .is_err(),
         "a four-kind polynomial cannot place an ArchiveSent claim"
@@ -188,7 +208,11 @@ fn five_kinds_select_installed_corners_and_keep_the_four_kind_profile() {
     assert_eq!(q.len(), five.degree() + 1);
     assert_eq!(q, restrict_pointwise(&five, &cl), "batched = pointwise");
     for (t, c) in cl.iter().enumerate() {
-        assert_eq!(horner(&q, Fp::from(t as u64)), c.value, "q passes claim {t}");
+        assert_eq!(
+            horner(&q, Fp::from(t as u64)),
+            c.value,
+            "q passes claim {t}"
+        );
     }
     let tau: Fp = rng.scalar();
     assert_eq!(
@@ -234,7 +258,12 @@ fn slot_fold(
         lookups: Vec::new(),
         widths: vec![255],
         rows: Vec::new(),
-        values: vec![vec![Fp::from(words[0]), Fp::from(words[1]), Fp::from(words[2]), Fp::ZERO]],
+        values: vec![vec![
+            Fp::from(words[0]),
+            Fp::from(words[1]),
+            Fp::from(words[2]),
+            Fp::ZERO,
+        ]],
     });
     w.io_arrays.push((io, WORDS_IO));
     let sel = poly.selector_coords();
@@ -242,7 +271,13 @@ fn slot_fold(
     let lins: Vec<_> = (0..sel.len()).map(word).collect();
     let mut rows: Vec<[crate::uniform::Lin<Fp>; 3]> = lins
         .iter()
-        .map(|l| [l.clone(), plus(&constant(vec![one]), &scaled(l, -one)), Vec::new()])
+        .map(|l| {
+            [
+                l.clone(),
+                plus(&constant(vec![one]), &scaled(l, -one)),
+                Vec::new(),
+            ]
+        })
         .collect();
     rows.extend(reserved_corner_rows(poly.kinds.len(), &lins));
     w.push(Array {
@@ -325,8 +360,13 @@ fn prove_and_decide(
     let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
     let mut rng = SpikeRng::new(b"archive sent slot proof");
     let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, inst, wit, &mut rng, c);
-    let verified = crate::spartan::verify_circuit(&c.shape, &gens, inst, &proof.to_bytes(), c).is_ok();
-    (verified, matrix_accumulator(poly, &proof.late), proof.late.clone())
+    let verified =
+        crate::spartan::verify_circuit(&c.shape, &gens, inst, &proof.to_bytes(), c).is_ok();
+    (
+        verified,
+        matrix_accumulator(poly, &proof.late),
+        proof.late.clone(),
+    )
 }
 
 #[test]
@@ -357,7 +397,10 @@ fn archive_sent_slot_words_fold_and_native_decision_select_only_installed_corner
     assert_eq!(output, fold_output(&genuine, &q, ch[1]));
     assert_eq!(five.eval(&output.point), output.value);
     let (verified, decided, late) = prove_and_decide(&c, &inst, &wit, &five);
-    assert!(verified && decided, "genuine ArchiveSent: proof verifies, native accepts");
+    assert!(
+        verified && decided,
+        "genuine ArchiveSent: proof verifies, native accepts"
+    );
     // Uninstalled: the signed four-kind decision has no ArchiveSent term.
     assert!(!matrix_accumulator(&four, &late));
     let program = c.program_digest();
@@ -372,7 +415,11 @@ fn archive_sent_slot_words_fold_and_native_decision_select_only_installed_corner
     assert_ne!(five.eval(&wrong[1].point), wrong[1].value);
     let q = bent(&five, &wrong);
     let (c, inst, wit, _) = slot_fold(&five, &wrong, &q, [0, 0, 0]);
-    assert_eq!(c.program_digest(), program, "one program for every kind word");
+    assert_eq!(
+        c.program_digest(),
+        program,
+        "one program for every kind word"
+    );
     assert!(holds(&c, &inst, &wit, &ch), "the fold itself holds");
     let (verified, decided, _) = prove_and_decide(&c, &inst, &wit, &five);
     assert!(verified && !decided, "wrong kind: native decision refuses");
@@ -387,7 +434,10 @@ fn archive_sent_slot_words_fold_and_native_decision_select_only_installed_corner
     let (c, inst, wit, _) = slot_fold(&five, &wrong, &q, [0, 0, 1]);
     assert!(holds(&c, &inst, &wit, &ch));
     let (verified, decided, _) = prove_and_decide(&c, &inst, &wit, &five);
-    assert!(verified && !decided, "Receive's value at ArchiveSent's corner is refused");
+    assert!(
+        verified && !decided,
+        "Receive's value at ArchiveSent's corner is refused"
+    );
 
     // Reserved corners: refused by the slot rows even when the claim is true
     // on P there (no prover witness exists).
@@ -400,7 +450,10 @@ fn archive_sent_slot_words_fold_and_native_decision_select_only_installed_corner
         let q = restrict(&five, &claims);
         let (c, inst, wit, _) = slot_fold(&five, &claims, &q, bits);
         assert_eq!(c.program_digest(), program);
-        assert!(!holds(&c, &inst, &wit, &ch), "reserved corner {bits:?} refused");
+        assert!(
+            !holds(&c, &inst, &wit, &ch),
+            "reserved corner {bits:?} refused"
+        );
     }
     // Out of range: a non-Boolean c2 word.
     let point = place([0, 0, 2]);
@@ -416,8 +469,7 @@ fn archive_sent_slot_words_fold_and_native_decision_select_only_installed_corner
         let mut r2 = SpikeRng::new(format!("installed slot {k}").as_bytes());
         let claims = with_slot(fresh(&five, k, &mut r2));
         let q = restrict(&five, &claims);
-        let (c, inst, wit, _) =
-            slot_fold(&five, &claims, &q, kind_corner(MAX_KINDS, k).unwrap());
+        let (c, inst, wit, _) = slot_fold(&five, &claims, &q, kind_corner(MAX_KINDS, k).unwrap());
         assert_eq!(c.program_digest(), program);
         assert!(holds(&c, &inst, &wit, &ch), "installed kind {k} holds");
     }

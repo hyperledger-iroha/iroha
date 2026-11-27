@@ -137,17 +137,63 @@ pub fn sign(d: &BigUint, z: &BigUint, k: &BigUint) -> Signature {
 
 /// Standard ECDSA verification: x(u1 G + u2 Q) mod n == r.
 pub fn verify(q: &Point, z: &BigUint, sig: &Signature) -> bool {
+    verified_point(q, z, &sig.r, &sig.s).is_some()
+}
+
+/// Return the ECDSA scalars `u1 = z/s`, `u2 = r/s` and the checked point
+/// `u1 G + u2 Q` for comparison with the circuit's independent comb walk.
+pub(crate) fn verified_point(
+    q: &Point,
+    z: &BigUint,
+    r: &BigUint,
+    s: &BigUint,
+) -> Option<(BigUint, BigUint, Point)> {
+    use ::p256::elliptic_curve::{
+        group::ff::PrimeField, ops::LinearCombination, point::AffineCoordinates,
+    };
+    use ::p256::{AffinePoint, FieldBytes, ProjectivePoint, Scalar};
+
     let n = n();
-    if sig.r.is_zero() || sig.s.is_zero() || sig.r >= n || sig.s >= n {
-        return false;
+    if r.is_zero() || s.is_zero() || r >= &n || s >= &n {
+        return None;
     }
-    let w = inv(&sig.s, &n);
+    let w = inv(s, &n);
     let u1 = z * &w % &n;
-    let u2 = &sig.r * &w % &n;
-    match add_any(mul(&generator(), &u1), mul(q, &u2)) {
-        None => false,
-        Some(rp) => &rp.x % &n == sig.r,
-    }
+    let u2 = r * &w % &n;
+    let field_bytes = |value: &BigUint| {
+        let bytes = value.to_bytes_be();
+        let mut word = FieldBytes::default();
+        let start = word.len().checked_sub(bytes.len())?;
+        word[start..].copy_from_slice(&bytes);
+        Some(word)
+    };
+    let key = field_bytes(&q.x)
+        .zip(field_bytes(&q.y))
+        .and_then(|(x, y)| AffinePoint::from_coordinates(&x, &y).into_option());
+    let point = if let Some(key) = key {
+        let scalar = |u: &BigUint| {
+            Scalar::from_repr(field_bytes(u).expect("reduced P-256 scalar fits 32 bytes"))
+                .into_option()
+                .expect("scalar below the group order")
+        };
+        let sum = ProjectivePoint::lincomb(&[
+            (ProjectivePoint::GENERATOR, scalar(&u1)),
+            (ProjectivePoint::from(key), scalar(&u2)),
+        ]);
+        if sum == ProjectivePoint::IDENTITY {
+            return None;
+        }
+        let sum = sum.to_affine();
+        Point {
+            x: BigUint::from_bytes_be(&sum.x()),
+            y: BigUint::from_bytes_be(&sum.y()),
+        }
+    } else {
+        // Protocol callers validate their keys. Direct arithmetic callers can
+        // supply raw coordinates, on which the original affine formulas operate.
+        add_any(mul(&generator(), &u1), mul(q, &u2))?
+    };
+    (&point.x % &n == *r).then_some((u1, u2, point))
 }
 
 /// Short (v, v') with v = v' u (mod n), both odd, v' != 0 (Lagrange-Gauss
@@ -298,5 +344,89 @@ mod tests {
         let u2 = &sig.r * inv(&sig.s, &n) % &n;
         let (v, vp) = half_scalars(&u2);
         assert!(v.bits() <= 130 && vp.bits() <= 130);
+    }
+
+    #[test]
+    fn verified_point_matches_affine_scalar_products() {
+        let n = n();
+        let d = scalar_below("verified key", &n);
+        let q = mul(&generator(), &d).unwrap();
+        let k = scalar_below("verified nonce", &n);
+        let nonce_point = mul(&generator(), &k).unwrap();
+        for z in [BigUint::zero(), &n + scalar_below("verified digest", &n)] {
+            let sig = sign(&d, &z, &k);
+            for (s, expected) in [
+                (sig.s.clone(), nonce_point.clone()),
+                (&n - &sig.s, neg(&nonce_point)),
+            ] {
+                let (u1, u2, checked) = verified_point(&q, &z, &sig.r, &s).unwrap();
+                let w = inv(&s, &n);
+                let scalars = (&z * &w % &n, &sig.r * &w % &n);
+                let affine = add_any(mul(&generator(), &scalars.0), mul(&q, &scalars.1));
+                assert_eq!((u1, u2), scalars);
+                assert_eq!(Some(&checked), affine.as_ref());
+                assert_eq!(checked, expected);
+            }
+        }
+        // A canonical coordinate can exceed the group order. Compare x modulo n.
+        let three = BigUint::from(3u32);
+        let q = Point {
+            x: &n + &three,
+            y: hex("484f0c0fda434ef0a808458914f328715d7a545e198ac7eee31dffe861b5d23f"),
+        };
+        assert!(on_curve(&q));
+        assert_eq!(
+            verified_point(&q, &BigUint::zero(), &three, &three),
+            Some((BigUint::zero(), BigUint::one(), q))
+        );
+    }
+
+    #[test]
+    fn verified_point_rejects_invalid_scalars_and_points() {
+        let n = n();
+        let g = generator();
+        let z = BigUint::from(9u32);
+        let sig = sign(&BigUint::one(), &z, &BigUint::from(7u32));
+        let rejects = |q: &Point, z: &BigUint, r: &BigUint, s: &BigUint| {
+            assert!(verified_point(q, z, r, s).is_none());
+            assert!(!verify(
+                q,
+                z,
+                &Signature {
+                    r: r.clone(),
+                    s: s.clone()
+                }
+            ));
+        };
+        for invalid in [BigUint::zero(), n.clone(), &n + 1u32] {
+            rejects(&g, &z, &invalid, &sig.s);
+            rejects(&g, &z, &sig.r, &invalid);
+        }
+        rejects(&g, &(&z + 1u32), &sig.r, &sig.s);
+        // u1 G + u2 Q = (n - 1)G + G is the identity.
+        rejects(&g, &(&n - 1u32), &BigUint::one(), &BigUint::one());
+
+        // Arbitrary coordinates can reach the arithmetic API directly.
+        // Match its affine reference on off-curve and oversized coordinates.
+        let w = inv(&sig.s, &n);
+        let u1 = &z * &w % &n;
+        let u2 = &sig.r * &w % &n;
+        for key in [
+            Point {
+                x: g.x.clone(),
+                y: &g.y + 1u32,
+            },
+            Point {
+                x: (&g.x << 256) + &g.x,
+                y: g.y.clone(),
+            },
+        ] {
+            let affine =
+                add_any(mul(&g, &u1), mul(&key, &u2)).filter(|point| &point.x % &n == sig.r);
+            assert_eq!(
+                verified_point(&key, &z, &sig.r, &sig.s).map(|v| v.2),
+                affine
+            );
+        }
     }
 }

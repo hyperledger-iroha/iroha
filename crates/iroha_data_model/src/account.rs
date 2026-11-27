@@ -22,9 +22,9 @@ use norito::codec::{Decode, Encode};
 use std::{format, str::FromStr, string::String, vec::Vec};
 pub mod address;
 pub mod admission;
+pub(crate) mod borrowed_decode;
 pub mod controller;
 pub mod curve;
-pub(crate) mod borrowed_decode;
 pub(crate) mod prepared_decode;
 pub use prepared_decode::{AccountLiteralAdmissionError, ChargedAccount};
 

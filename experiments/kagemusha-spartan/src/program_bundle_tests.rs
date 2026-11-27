@@ -230,8 +230,16 @@ fn successor_preflight_checks_each_pinned_tape_common_layout_and_claim_slots() {
     let frame = bundle.encode().unwrap();
     let [primary, secondary] =
         ProgramBundleV2::inspect_originals(&frame, &pins_p, &pins_s, dimensions).unwrap();
-    assert_eq!([primary.sumcheck_variables, secondary.sumcheck_variables], [3, 3]);
-    assert!(ProgramBundleV2::inspect_four_variable_retail_originals(&frame, &pins_p, &pins_s, dimensions).is_err());
+    assert_eq!(
+        [primary.sumcheck_variables, secondary.sumcheck_variables],
+        [3, 3]
+    );
+    assert!(
+        ProgramBundleV2::inspect_four_variable_retail_originals(
+            &frame, &pins_p, &pins_s, dimensions
+        )
+        .is_err()
+    );
     assert_eq!((primary.column_bits, primary.folded_claim_words), (13, 56));
     assert_eq!(
         (secondary.column_bits, secondary.folded_claim_words),
@@ -344,7 +352,9 @@ fn signed_installed_v1_bundle_roundtrips_through_shared_codec_and_keeps_all_eigh
     assert_eq!(installed.inner.programs.len(), 4);
     assert!(matches!(
         installed.require_archive_sent_program(),
-        Err(Error::AuthorityMismatch("signed generation has no ArchiveSent program"))
+        Err(Error::AuthorityMismatch(
+            "signed generation has no ArchiveSent program"
+        ))
     ));
     for (kind, pair) in installed.inner.programs.iter().enumerate() {
         assert_eq!(pair.primary.program_digest(), primary[kind]);
@@ -364,14 +374,25 @@ fn five_program_transport_qualification_refuses_large_payment_before_signing() {
     let secondary = s.map(|o| o.0);
     for oversized in [false, true] {
         let target = oversized.then_some(crate::uniform::Layout {
-            sx: 10, row_bits: 7, p1: 1, pl: 0, fixed: 1,
+            sx: 10,
+            row_bits: 7,
+            p1: 1,
+            pl: 0,
+            fixed: 1,
         });
-        let p = std::array::from_fn::<_, 5, _>(|i| original_at::<Fp,3>(true, i, 55, 13, true, target));
+        let p =
+            std::array::from_fn::<_, 5, _>(|i| original_at::<Fp, 3>(true, i, 55, 13, true, target));
         let pins_p = p.each_ref().map(|o| o.1);
-        let bundle = ProgramBundleV2 { version: 2, primary: p.map(|o| o.0), secondary: secondary.clone() };
+        let bundle = ProgramBundleV2 {
+            version: 2,
+            primary: p.map(|o| o.0),
+            secondary: secondary.clone(),
+        };
         let frame = bundle.encode().unwrap();
-        let geometry = ProgramBundleV2::inspect_originals(&frame, &pins_p, &pins_s, dimensions).unwrap();
-        let checked = ProgramBundleV2::inspect_retail_originals(&frame, &pins_p, &pins_s, dimensions);
+        let geometry =
+            ProgramBundleV2::inspect_originals(&frame, &pins_p, &pins_s, dimensions).unwrap();
+        let checked =
+            ProgramBundleV2::inspect_retail_originals(&frame, &pins_p, &pins_s, dimensions);
         if oversized {
             assert!(matches!(checked, Err(Error::Rejected(_))), "{checked:?}");
             if let Some(dir) = std::env::var_os("KAGEMUSHA_SPARTAN_TRANSPORT_FIXTURE_DIR") {
@@ -384,7 +405,10 @@ fn five_program_transport_qualification_refuses_large_payment_before_signing() {
         } else {
             let (qualified, sizes) = checked.unwrap();
             assert_eq!(geometry, qualified);
-            assert!(sizes.payment_peer > sizes.payment_envelope && sizes.payment_envelope > sizes.payment_pair);
+            assert!(
+                sizes.payment_peer > sizes.payment_envelope
+                    && sizes.payment_envelope > sizes.payment_pair
+            );
             assert!(sizes.receive_status_peer > 32 * 32 && sizes.later_send_status_peer > 32 * 32);
             eprintln!("admitted five-kind retail fixture: {sizes:?}");
         }

@@ -26,6 +26,13 @@ an incident.
 - **Rollback window:** First 2 hours after a DA configuration or binary change,
   or immediately when governance orders a halt. Any extended pause (>24 h)
   requires approval from Treasury + Governance.
+- **Receipt spool version:** Builds that write version-2 durable receipts
+  (`StoredDaReceiptV2`, `DaIngestSignedReceiptAssignmentV2`) refuse a retained
+  version-1 `da-receipt-*.norito` or `*.receipt.norito` frame with a typed
+  "retired version-1" error, and Torii does not start over it. Before rolling
+  such a build onto a node, list `torii.da_ingest.manifest_store_dir` and drain
+  or archive any version-1 receipt frames. Neither a rollback nor a roll forward
+  converts receipts between versions.
 - **Dependencies:** Torii build with DA handlers enabled, access to the
   retained tickets under `torii.da_ingest.manifest_store_dir`, rent/replication policy files,
   Alertmanager routes for `torii_da_*` metrics, and CLI/SDK helpers:

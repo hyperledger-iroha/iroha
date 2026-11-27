@@ -33,6 +33,7 @@
 //! output is word 1.
 
 pub mod grain;
+mod partial;
 
 use std::sync::OnceLock;
 
@@ -71,6 +72,8 @@ pub struct PoseidonParams<F> {
     round_constants: [[F; WIDTH]; ROUNDS],
     /// The MDS matrix, `state'[i] = sum_j mds[i][j] * state[j]`.
     mds: [[F; WIDTH]; WIDTH],
+    /// Derived from the public table when its passive-word basis is invertible.
+    partial: Option<Box<partial::PartialRounds<F>>>,
 }
 
 impl<F: PastaField> PoseidonParams<F> {
@@ -79,9 +82,13 @@ impl<F: PastaField> PoseidonParams<F> {
     /// The shapes are fixed by the types; the values are the caller's
     /// responsibility (use [`PoseidonField::rp57`] for the protocol tables).
     pub fn new(round_constants: [[F; WIDTH]; ROUNDS], mds: [[F; WIDTH]; WIDTH]) -> Self {
+        let half = FULL_ROUNDS / 2;
+        let partial =
+            partial::PartialRounds::new(&mds, &round_constants[half..half + PARTIAL_ROUNDS]);
         Self {
             round_constants,
             mds,
+            partial: partial.map(Box::new),
         }
     }
 
@@ -118,10 +125,7 @@ impl<F: PastaField> PoseidonParams<F> {
                 *v = words.next()??;
             }
         }
-        Some(Self {
-            round_constants,
-            mds,
-        })
+        Some(Self::new(round_constants, mds))
     }
 
     /// Serialises to the pinned table layout.
@@ -149,10 +153,7 @@ impl<F: PastaField> PoseidonParams<F> {
             grain::generate_constants::<F, WIDTH>(FULL_ROUNDS, PARTIAL_ROUNDS, SECURE_MDS);
         let round_constants = <[[F; WIDTH]; ROUNDS]>::try_from(rows)
             .unwrap_or_else(|rows| panic!("Grain produced {} rows, expected {ROUNDS}", rows.len()));
-        Self {
-            round_constants,
-            mds,
-        }
+        Self::new(round_constants, mds)
     }
 }
 
@@ -206,20 +207,31 @@ fn apply_mds<F: PastaField>(state: &mut [F; WIDTH], mds: &[[F; WIDTH]; WIDTH]) {
 
 /// The RP57 Pow5 permutation with explicit parameters.
 pub fn permute_with<F: PastaField>(state: &mut [F; WIDTH], params: &PoseidonParams<F>) {
-    let half_full = FULL_ROUNDS / 2;
-    for (round, rc) in params.round_constants.iter().enumerate() {
-        for (word, c) in state.iter_mut().zip(rc.iter()) {
-            *word += c;
-        }
-        let full = round < half_full || round >= half_full + PARTIAL_ROUNDS;
-        if full {
-            for word in state.iter_mut() {
-                *word = pow5(*word);
-            }
-        } else {
-            state[0] = pow5(state[0]);
+    let (first, rest) = params.round_constants.split_at(FULL_ROUNDS / 2);
+    let (partial, last) = rest.split_at(PARTIAL_ROUNDS);
+    let full_round = |state: &mut [F; WIDTH], constants: &[F; WIDTH]| {
+        for (word, c) in state.iter_mut().zip(constants) {
+            *word = pow5(*word + c);
         }
         apply_mds(state, &params.mds);
+    };
+    for rc in first {
+        full_round(state, rc);
+    }
+    if let Some(plan) = &params.partial {
+        plan.apply(state);
+    } else {
+        // Explicit custom matrices can have dependent rows in the derived basis.
+        for rc in partial {
+            for (word, c) in state.iter_mut().zip(rc) {
+                *word += c;
+            }
+            state[0] = pow5(state[0]);
+            apply_mds(state, &params.mds);
+        }
+    }
+    for rc in last {
+        full_round(state, rc);
     }
 }
 
@@ -314,6 +326,54 @@ pub fn hash_with_domain<F: PoseidonField>(domain: u64, inputs: &[F]) -> F {
 mod tests {
     use super::*;
     use ff::Field;
+
+    #[test]
+    fn partial_round_basis_matches_the_dense_permutation() {
+        fn check<F: PoseidonField>() {
+            let pinned = F::rp57();
+            let mut constants = *pinned.round_constants();
+            // Exercise custom offsets in both passive words at the boundaries.
+            constants[FULL_ROUNDS / 2][1] += F::from(5);
+            constants[FULL_ROUNDS / 2 + PARTIAL_ROUNDS - 1][2] -= F::from(7);
+            let z = F::ZERO;
+            let o = F::ONE;
+            let dependent = [[o, o, o], [z, o, z], [z, z, o]];
+            let singular_block = [[o, o, z], [z, z, o], [o, z, z]];
+            for (mds, invertible_basis) in [
+                (*pinned.mds(), true),
+                (dependent, false),
+                (singular_block, true),
+            ] {
+                let params = PoseidonParams::new(constants, mds);
+                assert_eq!(params.partial.is_some(), invertible_basis);
+                for initial in [
+                    [z; WIDTH],
+                    [o, -o, o],
+                    constants[0],
+                    constants[PARTIAL_ROUNDS],
+                ] {
+                    let mut dense = initial;
+                    for (round, rc) in constants.iter().enumerate() {
+                        for (i, (word, c)) in dense.iter_mut().zip(rc).enumerate() {
+                            *word += c;
+                            if i == 0
+                                || !(FULL_ROUNDS / 2..FULL_ROUNDS / 2 + PARTIAL_ROUNDS)
+                                    .contains(&round)
+                            {
+                                *word = pow5(*word);
+                            }
+                        }
+                        apply_mds(&mut dense, &mds);
+                    }
+                    let mut result = initial;
+                    permute_with(&mut result, &params);
+                    assert_eq!(result, dense);
+                }
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
 
     #[test]
     fn pinned_tables_parse_and_regenerate() {

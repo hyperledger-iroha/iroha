@@ -35,16 +35,21 @@ struct Candidate {
     intent: DaPinIntent,
 }
 
+/// The producer's pin-scope witnesses sign the digest of this exact record, including the
+/// receipt signature; the stored scope does not carry that digest.
 fn matches(record: &DaCommitmentRecord, intent: &DaPinIntent) -> bool {
     (record.lane_id, record.epoch, record.sequence)
         == (intent.lane_id, intent.epoch, intent.sequence)
         && record.manifest_hash == intent.manifest_hash
         && record.storage_ticket == intent.storage_ticket
-        && record.pin_scope_digest() == intent.pin_scope_authorization.scope.commitment_digest
+        && intent
+            .pin_scope_authorization
+            .has_valid_canonical_signatures(&record.pin_scope_digest())
 }
 
 /// Both sections have canonical order by unique lane, epoch and sequence. Every author and
-/// verifier compares the signed digest of the original record, including the receipt signature.
+/// verifier checks the producer's pin-scope witnesses against the digest of the paired
+/// original record, including the receipt signature.
 pub(crate) fn validate_pairs(
     records: Option<&DaCommitmentBundle>,
     pins: Option<&DaPinIntentBundle>,
@@ -245,7 +250,7 @@ impl State {
         let entries = self.reconcile_da_proposal_candidates(None)?;
         if entries.is_empty() {
             return Ok(());
-        };
+        }
         let index = *cursor % entries.len();
         *cursor = index + 1;
         let entry = &entries[index];
@@ -449,7 +454,8 @@ impl State {
                 &DaCommitmentBundle::new(vec![record.clone()]), view.nexus(), height).map_err(invalid)?;
             let quotas = crate::runtime::committed_policy::effective_nexus_quotas(
                 view.world.runtime_selection.get(), view.world.parameters.get());
-            ValidBlock::validate_da_proposal_pins(&DaPinIntentBundle::new(vec![intent.clone()]), height, &view, &quotas).map_err(invalid)?;
+            ValidBlock::validate_da_proposal_pins(&DaPinIntentBundle::new(vec![intent.clone()]),
+                Some(&DaCommitmentBundle::new(vec![record.clone()])), height, &view, &quotas).map_err(invalid)?;
             Ok(Some((candidate, submitted_here)))
         }).transpose();
         // Disk durability never holds ledger readers, including the exact-retry cleanup.
@@ -577,8 +583,16 @@ pub(crate) fn select(
             continue;
         }
         pins.push(candidate.intent.clone());
+        let paired = DaCommitmentBundle::new(
+            records
+                .iter()
+                .chain(std::iter::once(record))
+                .cloned()
+                .collect(),
+        );
         if ValidBlock::validate_da_proposal_pins(
             &DaPinIntentBundle::new(pins.clone()),
+            Some(&paired),
             height,
             view,
             &quotas,

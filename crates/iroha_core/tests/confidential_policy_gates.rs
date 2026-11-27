@@ -135,6 +135,17 @@ fn set_confidential_policy_mode(
     policy.mode = mode;
     asset_definition.set_confidential_policy(policy);
 }
+/// Run one block of a multi-block scenario in its own stack frame.
+///
+/// An unoptimized test function keeps a separate stack slot for every `StateBlock` it opens or
+/// moves into a commit, for the whole call. A scenario that opens three blocks in one function
+/// therefore holds six `StateBlock`s on the test thread while the authenticated genesis and each
+/// later block acquisition run below it, which exceeds the default test-thread stack. A frame per
+/// block bounds the scenario by one block; never inlining keeps that bound at every opt level.
+#[inline(never)]
+fn in_own_frame<R>(phase: impl FnOnce() -> R) -> R {
+    phase()
+}
 #[test]
 fn transparent_mint_rejected_for_shielded_only_policy() {
     // The authenticated genesis seeds the universal account, the explicit domain-owned
@@ -261,70 +272,77 @@ fn schedule_shielded_only_requires_window() {
 fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non_zero() {
     // The authenticated genesis registers the confidential asset state.
     let (state, header, owner, _recipient, asset_def_id) = init_state();
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
-    let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(
-            &mut stx,
-            &owner,
-            &InstructionBox::from(Mint::asset_quantity(10_u32, asset_id.clone())),
-        )
-        .expect("mint should succeed");
-    stx.apply();
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit setup block");
-    let header2 = ordinary_header(&state, 3);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
-    let notice = defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS;
-    let current_height = stx2.block_height();
-    let lead_time = delay.max(notice) + 3;
-    let effective_height = current_height + lead_time;
-    let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
-        asset_def_id.clone(),
-        ConfidentialPolicyMode::ShieldedOnly,
-        effective_height,
-        Hash::new(b"abort-shielded"),
-        Some(defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS),
-    );
-    schedule
-        .execute(&owner, &mut stx2)
-        .expect("schedule transition");
-    // Model a transition whose conversion window opened from TransparentOnly:
-    // the active mode is already Convertible, while the audit record retains
-    // the pre-window mode. Aborting finalization must never strand commitments
-    // by restoring that earlier transparent mode.
-    let mut policy = *stx2
-        .world
-        .asset_definition(&asset_def_id)
-        .expect("asset definition exists")
-        .confidential_policy();
-    let mut pending = policy
-        .pending_transition
-        .expect("scheduled transition is present");
-    pending.previous_mode = ConfidentialPolicyMode::TransparentOnly;
-    policy.pending_transition = Some(pending);
-    stx2.world
-        .asset_definition_mut(&asset_def_id)
-        .expect("asset definition exists")
-        .set_confidential_policy(policy);
-    stx2.apply();
-    block2
-        .commit_empty_block_for_testing()
-        .expect("commit scheduling block");
-    let header3 = ordinary_header(&state, effective_height);
-    let mut block3 = state.block(header3);
-    let stx3 = block3.transaction();
-    stx3.apply();
-    block3
-        .commit_world_overlay_for_testing()
-        .expect("commit transition block");
+    in_own_frame(|| {
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
+        let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
+        stx.world
+            .executor()
+            .clone()
+            .execute_instruction(
+                &mut stx,
+                &owner,
+                &InstructionBox::from(Mint::asset_quantity(10_u32, asset_id.clone())),
+            )
+            .expect("mint should succeed");
+        stx.apply();
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit setup block");
+    });
+    let effective_height = in_own_frame(|| {
+        let header2 = ordinary_header(&state, 3);
+        let mut block2 = state.block(header2);
+        let mut stx2 = block2.transaction();
+        let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
+        let notice = defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS;
+        let current_height = stx2.block_height();
+        let lead_time = delay.max(notice) + 3;
+        let effective_height = current_height + lead_time;
+        let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
+            asset_def_id.clone(),
+            ConfidentialPolicyMode::ShieldedOnly,
+            effective_height,
+            Hash::new(b"abort-shielded"),
+            Some(defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS),
+        );
+        schedule
+            .execute(&owner, &mut stx2)
+            .expect("schedule transition");
+        // Model a transition whose conversion window opened from TransparentOnly:
+        // the active mode is already Convertible, while the audit record retains
+        // the pre-window mode. Aborting finalization must never strand commitments
+        // by restoring that earlier transparent mode.
+        let mut policy = *stx2
+            .world
+            .asset_definition(&asset_def_id)
+            .expect("asset definition exists")
+            .confidential_policy();
+        let mut pending = policy
+            .pending_transition
+            .expect("scheduled transition is present");
+        pending.previous_mode = ConfidentialPolicyMode::TransparentOnly;
+        policy.pending_transition = Some(pending);
+        stx2.world
+            .asset_definition_mut(&asset_def_id)
+            .expect("asset definition exists")
+            .set_confidential_policy(policy);
+        stx2.apply();
+        block2
+            .commit_empty_block_for_testing()
+            .expect("commit scheduling block");
+        effective_height
+    });
+    in_own_frame(|| {
+        let header3 = ordinary_header(&state, effective_height);
+        let mut block3 = state.block(header3);
+        let stx3 = block3.transaction();
+        stx3.apply();
+        block3
+            .commit_world_overlay_for_testing()
+            .expect("commit transition block");
+    });
     let view = state.view();
     let def = view
         .world
@@ -344,42 +362,49 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
 #[test]
 fn policy_transition_reaches_shielded_only_on_schedule() {
     // The policy test configuration is installed before the genesis policies are signed.
-    let mut zk_cfg = certified_state(World::new()).installed_zk().clone();
+    let mut zk_cfg = in_own_frame(|| certified_state(World::new()).installed_zk().clone());
     zk_cfg.policy_transition_delay_blocks = 1;
     zk_cfg.policy_transition_window_blocks = 1;
     let (state, header, owner, _recipient, asset_def_id) =
         init_state_with(|config| config.zk = Some(zk_cfg));
     // The authenticated genesis registers the confidential asset state.
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
-    stx.apply();
-    block
-        .commit_empty_block_for_testing()
-        .expect("commit setup block");
-    let header2 = ordinary_header(&state, 3);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let effective_height = stx2.block_height() + 2;
-    let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
-        asset_def_id.clone(),
-        ConfidentialPolicyMode::ShieldedOnly,
-        effective_height,
-        Hash::new(b"auto-apply"),
-        Some(1),
-    );
-    schedule
-        .execute(&owner, &mut stx2)
-        .expect("schedule transition");
-    stx2.apply();
-    block2
-        .commit_empty_block_for_testing()
-        .expect("commit scheduling block");
-    let header_transition = ordinary_header(&state, effective_height);
-    let block_transition = state.block(header_transition);
-    block_transition
-        .commit_world_overlay_for_testing()
-        .expect("commit transition block");
+    in_own_frame(|| {
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
+        stx.apply();
+        block
+            .commit_empty_block_for_testing()
+            .expect("commit setup block");
+    });
+    let effective_height = in_own_frame(|| {
+        let header2 = ordinary_header(&state, 3);
+        let mut block2 = state.block(header2);
+        let mut stx2 = block2.transaction();
+        let effective_height = stx2.block_height() + 2;
+        let schedule = iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition::new(
+            asset_def_id.clone(),
+            ConfidentialPolicyMode::ShieldedOnly,
+            effective_height,
+            Hash::new(b"auto-apply"),
+            Some(1),
+        );
+        schedule
+            .execute(&owner, &mut stx2)
+            .expect("schedule transition");
+        stx2.apply();
+        block2
+            .commit_empty_block_for_testing()
+            .expect("commit scheduling block");
+        effective_height
+    });
+    in_own_frame(|| {
+        let header_transition = ordinary_header(&state, effective_height);
+        let block_transition = state.block(header_transition);
+        block_transition
+            .commit_world_overlay_for_testing()
+            .expect("commit transition block");
+    });
     let view = state.view();
     let def = view
         .world

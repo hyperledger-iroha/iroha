@@ -277,7 +277,10 @@ fn candidate_lean_receive_own_transition_geometry() {
     let blank = synthesize(&opened.without_witnesses(), 16, None).unwrap();
     assert_eq!(known.tables.fixed(), blank.tables.fixed());
     assert_eq!(known.tables.permutation(), blank.tables.permutation());
-    assert_eq!(known.tables.advice_assigned(), blank.tables.advice_assigned());
+    assert_eq!(
+        known.tables.advice_assigned(),
+        blank.tables.advice_assigned()
+    );
 
     // Change both host digest references to match the new private root. Only the
     // constraints tying the recomputed heads to the original statement can reject.

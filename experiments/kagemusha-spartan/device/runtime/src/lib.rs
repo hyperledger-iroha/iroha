@@ -246,7 +246,10 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
         && matches!(
             stage.as_str(),
-            "ordinary-receive" | "ordinary-recover" | "ordinary-verify-prepare" | "ordinary-prepare"
+            "ordinary-receive"
+                | "ordinary-recover"
+                | "ordinary-verify-prepare"
+                | "ordinary-prepare"
         )
     {
         let wallet = bootstrap.input.credential.body[66..98]
@@ -254,7 +257,12 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
             .expect("credential wallet");
         drop(verification);
         return host_tests::ordinary_receive::exercise(
-            root, &mut runtime, &slot.0, &wallet, &stage, measurements,
+            root,
+            &mut runtime,
+            &slot.0,
+            &wallet,
+            &stage,
+            measurements,
         );
     }
     #[cfg(test)]
@@ -277,14 +285,24 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
     }
     #[cfg(test)]
     if let Ok(stage) = std::env::var("KAGEMUSHA_SPARTAN_HOST_LAUNCH")
-        && matches!(stage.as_str(), "retained-archive-refusal-v4" | "archive-execute-v5" | "archive-recover-v5")
+        && matches!(
+            stage.as_str(),
+            "retained-archive-refusal-v4" | "archive-execute-v5" | "archive-recover-v5"
+        )
     {
         let stage = match stage.as_str() {
             "archive-execute-v5" => ArchiveStage::Execute,
             "archive-recover-v5" => ArchiveStage::Recover,
             _ => ArchiveStage::Unavailable,
         };
-        return verify_retained_archive(root, &mut runtime, &slot.0, &verification, stage, measurements);
+        return verify_retained_archive(
+            root,
+            &mut runtime,
+            &slot.0,
+            &verification,
+            stage,
+            measurements,
+        );
     }
     let archive_ready = root.join("archive-ready-after-receive.bin");
     if five_families && archive_ready.try_exists().map_err(fail)? {
@@ -293,12 +311,23 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
         if receive.status != 1 {
             return Err("ArchiveSent fixture requires the exact retained Receive".into());
         }
-        let stage = if root.join("archive-completion.norito").try_exists().map_err(fail)? {
+        let stage = if root
+            .join("archive-completion.norito")
+            .try_exists()
+            .map_err(fail)?
+        {
             ArchiveStage::Recover
         } else {
             ArchiveStage::Execute
         };
-        return verify_retained_archive(root, &mut runtime, &slot.0, &verification, stage, measurements);
+        return verify_retained_archive(
+            root,
+            &mut runtime,
+            &slot.0,
+            &verification,
+            stage,
+            measurements,
+        );
     }
     drop(verification);
     let operation = operation_id(&witness);
@@ -498,6 +527,8 @@ fn exercise_measured<P: KagemushaWalletPlatformV1 + 'static>(
             bytes.len()
         ));
     }
+    // B shares the installed programs. Release its last reference before A reopens custody.
+    drop(counterparty);
     // The measured Receive, in a launch that did not prove for B: retained
     // incoming bytes to a verified, durable output in A's platform custody.
     let receive_start = Instant::now();
@@ -762,8 +793,7 @@ impl<P: KagemushaWalletPlatformV1 + 'static> Owner<'_, P> {
     /// challenge signature and must select the same custody slot.
     fn open(&self) -> Result<(SessionAdapter, Arc<native::AuthenticatedParameters>)> {
         let (bundle, manifest, signature) = read_artifacts(self.artifacts)?;
-        let parameters =
-            install_device_parameters(self.artifacts, &bundle, &manifest, signature)?;
+        let parameters = install_device_parameters(self.artifacts, &bundle, &manifest, signature)?;
         let provider: NativeProviderV1<_, _> = advance::KagemushaWalletProviderV1::open(
             advance::KagemushaWalletStdFsV1::open(self.custody).map_err(fail)?,
             self.platform.clone(),
@@ -809,7 +839,10 @@ fn install_device_parameters(
     signature: [u8; 64],
 ) -> Result<native::AuthenticatedParameters> {
     let selected = if native::AuthenticatedParameters::is_five_manifest(manifest) {
-        Some(read_fixture_digest(&artifacts.join("world-manifest-digest.bin"), "fixture World manifest digest")?)
+        Some(read_fixture_digest(
+            &artifacts.join("world-manifest-digest.bin"),
+            "fixture World manifest digest",
+        )?)
     } else {
         None
     };
@@ -928,9 +961,7 @@ fn software_advance(
     })?;
     let capsule = prepared.capsule().clone();
     let completed = measurements.measure(operation, "finalize", || {
-        wallet
-            .finalize(engine, prepared, &receipt)
-            .map_err(fail)
+        wallet.finalize(engine, prepared, &receipt).map_err(fail)
     })?;
     Ok((capsule, completed))
 }
@@ -975,12 +1006,16 @@ fn verify_retained_archive(
         }
         let mut damaged = credited;
         *damaged.last_mut().ok_or("empty CreditStatus")? ^= 1;
-        if runtime.prepare(slot, &wallet_action(5, &[&send, &damaged])?, &[]).is_ok()
+        if runtime
+            .prepare(slot, &wallet_action(5, &[&send, &damaged])?, &[])
+            .is_ok()
             || before.bytes != runtime.output(slot, &[0; 32], 3)?.bytes
         {
             return Err("altered CreditStatus was admitted or moved the released head".into());
         }
-        let prepared = measurements.measure("ArchiveSent", "prepare", || runtime.prepare(slot, &command, &[]))?;
+        let prepared = measurements.measure("ArchiveSent", "prepare", || {
+            runtime.prepare(slot, &command, &[])
+        })?;
         let review = prepared.review;
         if review.len() != 291 || review[..3] != [1, 0, 5] || review[131..227] != [0; 96] {
             return Err("ArchiveSent must have zero monetary and destination review terms".into());
@@ -991,20 +1026,30 @@ fn verify_retained_archive(
             return Err("ArchiveSent review does not follow the released state".into());
         }
         let phase = if selected { "exact_retry" } else { "execute" };
-        let reply = measurements.measure("ArchiveSent", phase, || runtime.execute(prepared.token))?;
+        let reply =
+            measurements.measure("ArchiveSent", phase, || runtime.execute(prepared.token))?;
         runtime.discard(prepared.token)?;
         let after = runtime.output(slot, &[0; 32], 3)?;
         let retained = runtime.output(slot, &operation, 2)?;
-        if reply.status != 1 || retained.status != 1 || retained.bytes != reply.bytes
-            || after.status != 101 || after.bytes.len() != 196 || after.bytes[2] != 3
-            || after.bytes[68..100] != operation || after.bytes[100..132] != review[259..291]
+        if reply.status != 1
+            || retained.status != 1
+            || retained.bytes != reply.bytes
+            || after.status != 101
+            || after.bytes.len() != 196
+            || after.bytes[2] != 3
+            || after.bytes[68..100] != operation
+            || after.bytes[100..132] != review[259..291]
             || before.bytes[148..196] != after.bytes[148..196]
         {
-            return Err("ArchiveSent did not retain the reviewed successor and wallet value".into());
+            return Err(
+                "ArchiveSent did not retain the reviewed successor and wallet value".into(),
+            );
         }
         let wallet = review[35..67].try_into().expect("fixed review wallet");
         let completion = native::CompletionRecord::decode(&reply.bytes, &wallet).map_err(fail)?;
-        if completion.operation_id() != &operation || !completion.output_part(1).map_err(fail)?.is_empty() {
+        if completion.operation_id() != &operation
+            || !completion.output_part(1).map_err(fail)?.is_empty()
+        {
             return Err("ArchiveSent completion changed operation or produced a Payment".into());
         }
         if selected && after.bytes != before.bytes {
@@ -1012,7 +1057,9 @@ fn verify_retained_archive(
         }
         if recovered {
             if reply.bytes != std::fs::read(completion_path).map_err(fail)? {
-                return Err("cold ArchiveSent replay changed the selected state or exact completion".into());
+                return Err(
+                    "cold ArchiveSent replay changed the selected state or exact completion".into(),
+                );
             }
         } else {
             let sequence = |head: &[u8]| u128::from_le_bytes(head[132..148].try_into().unwrap());
@@ -1022,8 +1069,11 @@ fn verify_retained_archive(
             save_fixture_input(&completion_path, &reply.bytes)?;
         }
         runtime.close()?;
-        return Ok(format!("Verified ArchiveSent {phase}, {} exact completion bytes, sequence {}.",
-            reply.bytes.len(), u128::from_le_bytes(after.bytes[132..148].try_into().unwrap())));
+        return Ok(format!(
+            "Verified ArchiveSent {phase}, {} exact completion bytes, sequence {}.",
+            reply.bytes.len(),
+            u128::from_le_bytes(after.bytes[132..148].try_into().unwrap())
+        ));
     }
     for _ in 0..2 {
         runtime.require_invalid_prepare(slot, &command, &[])?;
@@ -1067,7 +1117,13 @@ trait Confirmation {
     }
 
     #[cfg(target_os = "android")]
-    fn confirm_android(&self, _owner: u64, _token: u64, _slot: &[u8; 32], _review: &[u8]) -> Result<()> {
+    fn confirm_android(
+        &self,
+        _owner: u64,
+        _token: u64,
+        _slot: &[u8; 32],
+        _review: &[u8],
+    ) -> Result<()> {
         Err("Android hardware confirmation adapter unavailable".into())
     }
 }
@@ -1078,28 +1134,37 @@ struct AndroidConfirmation {
 }
 #[cfg(target_os = "android")]
 impl Confirmation for AndroidConfirmation {
-    fn confirm_android(&self, owner: u64, token: u64, slot: &[u8; 32], review: &[u8]) -> Result<()> {
-        self.vm.attach_current_thread_for_scope(|env| {
-            let result = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
-                let slot = env.byte_array_from_slice(slot)?;
-                let review = env.byte_array_from_slice(review)?;
-                env.call_method(
-                    self.object.as_obj(),
-                    jni::jni_str!("confirm"),
-                    jni::jni_sig!("(JJ[B[B)V"),
-                    &[
-                        jni::objects::JValue::Long(owner as i64),
-                        jni::objects::JValue::Long(token as i64),
-                        jni::objects::JValue::Object(&slot),
-                        jni::objects::JValue::Object(&review),
-                    ],
-                )?.v()
-            });
-            if result.is_err() {
-                env.exception_clear();
-            }
-            result
-        }).map_err(|error| format!("Android protected Send confirmation refused: {error}"))
+    fn confirm_android(
+        &self,
+        owner: u64,
+        token: u64,
+        slot: &[u8; 32],
+        review: &[u8],
+    ) -> Result<()> {
+        self.vm
+            .attach_current_thread_for_scope(|env| {
+                let result = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
+                    let slot = env.byte_array_from_slice(slot)?;
+                    let review = env.byte_array_from_slice(review)?;
+                    env.call_method(
+                        self.object.as_obj(),
+                        jni::jni_str!("confirm"),
+                        jni::jni_sig!("(JJ[B[B)V"),
+                        &[
+                            jni::objects::JValue::Long(owner as i64),
+                            jni::objects::JValue::Long(token as i64),
+                            jni::objects::JValue::Object(&slot),
+                            jni::objects::JValue::Object(&review),
+                        ],
+                    )?
+                    .v()
+                });
+                if result.is_err() {
+                    env.exception_clear();
+                }
+                result
+            })
+            .map_err(|error| format!("Android protected Send confirmation refused: {error}"))
     }
 }
 
@@ -1201,7 +1266,9 @@ fn complete(
             let expected = u128::from(kind != 2);
             let actual = runtime.next_load_ordinal(&slot.0)?;
             if actual != expected {
-                return Err(format!("before {name}, expected Load ordinal {expected}, got {actual}"));
+                return Err(format!(
+                    "before {name}, expected Load ordinal {expected}, got {actual}"
+                ));
             }
         }
         if runtime.output(&slot.0, &operation, 4).is_ok() {
@@ -1272,7 +1339,10 @@ fn complete(
             }
             #[cfg(target_os = "android")]
             approval.confirm_android(
-                runtime.android_confirmation_handle(), prepared.token, &slot.0, &prepared.review,
+                runtime.android_confirmation_handle(),
+                prepared.token,
+                &slot.0,
+                &prepared.review,
             )?;
             #[cfg(not(any(target_os = "ios", target_os = "android")))]
             approval.confirm(&prepared.review)?;
@@ -1301,7 +1371,9 @@ fn complete(
         let expected = u128::from(kind != 1);
         let actual = runtime.next_load_ordinal(&slot.0)?;
         if actual != expected {
-            return Err(format!("after {name}, expected Load ordinal {expected}, got {actual}"));
+            return Err(format!(
+                "after {name}, expected Load ordinal {expected}, got {actual}"
+            ));
         }
         for part in 0..=2 {
             let output = runtime.output(&slot.0, &operation, part)?;

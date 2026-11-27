@@ -140,11 +140,14 @@ pub fn credential_signing_message_for_body(body: &[u8; credential::BODY_BYTES]) 
 impl Credential {
     /// Operation ID fixed by the enrollment, independent of fresh state blinding.
     pub fn bootstrap_operation_id(&self) -> [u8; 32] {
-        let limb = |offset| crate::certificate::fp(&BigUint::from_bytes_le(&self.body[offset..offset + 16]));
+        let limb = |offset| {
+            crate::certificate::fp(&BigUint::from_bytes_le(&self.body[offset..offset + 16]))
+        };
         iroha_pasta::poseidon::hash_with_domain(
             u64::from_le_bytes(*b"kgwopid1"),
             &[limb(66), limb(82), Fp::from(1), limb(448), limb(464)],
-        ).to_repr()
+        )
+        .to_repr()
     }
 
     /// Protocol signing message of this exact original, independent of its signature.
@@ -245,8 +248,14 @@ mod tests {
             root: chain.sender_context.root.root.clone(),
             table: Arc::new(generators.prefix(full_table_bases())),
         };
-        assert_eq!(issuer.credential_body_for_issuance(&fields).unwrap(), input.credential.body);
-        assert_eq!(input.credential.signing_message_bytes(), credential::message(&input.credential).to_repr());
+        assert_eq!(
+            issuer.credential_body_for_issuance(&fields).unwrap(),
+            input.credential.body
+        );
+        assert_eq!(
+            input.credential.signing_message_bytes(),
+            credential::message(&input.credential).to_repr()
+        );
         assert_eq!(
             issuer_body(&generators, &fields).unwrap(),
             input.credential.body

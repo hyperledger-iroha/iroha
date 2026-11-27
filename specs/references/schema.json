@@ -6976,7 +6976,7 @@
       },
       {
         "name": "request_content_hash",
-        "type": "BlobDigest"
+        "type": "Hash"
       },
       {
         "name": "signatures",

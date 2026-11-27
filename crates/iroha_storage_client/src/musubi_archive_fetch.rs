@@ -1308,9 +1308,9 @@ fn mint_stream_token_for_operation(
         } => {
             let auth = account_request_headers(account, key_pair, network_id, &url, &body)?;
             if paid.is_some() {
-                nonce = header_text(&auth, "x-iroha-nonce")
+                header_text(&auth, "x-iroha-nonce")
                     .ok_or_else(|| permanent("MUSUBI_ARCHIVE_ACCOUNT_SIGNING_FAILED"))?
-                    .to_owned();
+                    .clone_into(&mut nonce);
             }
             request.headers(auth)
         }

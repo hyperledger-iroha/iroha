@@ -145,11 +145,11 @@ pub enum RdoMode {
     /// Skip RDO and emit coefficients as-is.
     #[default]
     None,
-    /// Trellis-free DP optimizer with explicit energy buckets.
+    /// Allocate AC tokens by transform reconstruction gain under the rate schedule.
     DynamicProgramming,
-    /// DP optimizer guided by a small int8 neural predictor.
+    /// Scale the AC token budget using a small int8 neural predictor.
     Neural,
-    /// Perceptual lambda schedule tuned for SSIM-like behaviour.
+    /// Use the softer perceptual lambda schedule for the AC token budget.
     Perceptual,
 }
 impl RdoMode {
@@ -2654,9 +2654,9 @@ pub mod crypto {
 pub mod chunk {
     use super::{AudioCodecError, Hash, MerkleProof, saturating_usize_to_u32};
     use crate::streaming::codec::{
-        Chroma420Frame, EncodedSegment, FRAME_HEADER_LEN, FrameDimensions, FrameType, SegmentError,
-        decode_block_rle, dequantize_coeffs, inverse_dct, predictor_block, verify_segment,
-        write_reconstructed_block,
+        Chroma420Frame, EncodedSegment, FRAME_HEADER_LEN, FRAME_ZSTD, FrameDimensions, FrameType,
+        SegmentError, decode_block_rle, decompress_frame_body, dequantize_coeffs, inverse_dct,
+        predictor_block, verify_segment, write_reconstructed_block,
     };
     use thiserror::Error;
     const LEAF_DOMAIN: &[u8] = b"nsc_ct_leaf";
@@ -3002,6 +3002,12 @@ pub mod chunk {
         AudioSequenceOverflow,
         #[error("audio timestamp overflow at index {0}")]
         AudioTimestampOverflow(u32),
+        #[error("failed to compress video frame payload")]
+        FrameCompressionFailed,
+        #[error("invalid or oversized Zstandard video frame payload")]
+        InvalidCompressedFrame,
+        #[error("extra bytes after video plane payload")]
+        TrailingPlaneData,
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BaselineDecoder {
@@ -3073,7 +3079,8 @@ pub mod chunk {
                         },
                     ));
                 }
-                let frame_type = FrameType::from_byte(chunk[12])?;
+                let flags = chunk[12];
+                let frame_type = FrameType::from_byte(flags)?;
                 let quantizer = chunk[13];
                 let block_count = read_frame_header_u16_le(chunk, 14)?;
                 if block_count as usize != expected_blocks {
@@ -3082,7 +3089,18 @@ pub mod chunk {
                         found: block_count as u32,
                     }));
                 }
-                let mut offset = FRAME_HEADER_LEN;
+                let compressed_body;
+                let body = if flags & FRAME_ZSTD != 0 {
+                    compressed_body = decompress_frame_body(
+                        &chunk[FRAME_HEADER_LEN..],
+                        expected_blocks,
+                        chroma_dims.align_to_block().block_count(),
+                    )?;
+                    compressed_body.as_slice()
+                } else {
+                    &chunk[FRAME_HEADER_LEN..]
+                };
+                let mut offset = 0;
                 let mut reconstructed = vec![0u8; aligned_dims.pixel_count()];
                 let mut prev_dc = 0i16;
                 if frame_type.reset_dc() {
@@ -3090,7 +3108,7 @@ pub mod chunk {
                 }
                 for block_idx in 0..expected_blocks {
                     let coeffs =
-                        decode_block_rle(chunk, &mut offset, &mut prev_dc, block_idx as u32)?;
+                        decode_block_rle(body, &mut offset, &mut prev_dc, block_idx as u32)?;
                     let dequant = dequantize_coeffs(&coeffs, quantizer);
                     let spatial = inverse_dct(&dequant);
                     let predictor = predictor_block(
@@ -3111,21 +3129,21 @@ pub mod chunk {
                 super::codec::apply_neural_filter(&mut reconstructed, aligned_dims);
                 let cropped =
                     crate::streaming::codec::crop_frame_luma(&reconstructed, dims, aligned_dims);
-                let chroma = if chunk.len() > offset {
+                let chroma = if body.len() > offset {
                     crate::streaming::codec::ensure_chroma_even_dimensions(dims)?;
-                    if chunk.len().saturating_sub(offset) < 8 {
+                    if body.len().saturating_sub(offset) < 8 {
                         return Err(CodecError::ChromaPayloadTruncated(
                             ChromaPayloadTruncatedInfo,
                         ));
                     }
-                    let u_len = read_chroma_len(chunk, offset)?;
+                    let u_len = read_chroma_len(body, offset)?;
                     let v_len_offset =
                         offset
                             .checked_add(4)
                             .ok_or(CodecError::ChromaPayloadTruncated(
                                 ChromaPayloadTruncatedInfo,
                             ))?;
-                    let v_len = read_chroma_len(chunk, v_len_offset)?;
+                    let v_len = read_chroma_len(body, v_len_offset)?;
                     let chroma_start =
                         offset
                             .checked_add(8)
@@ -3141,20 +3159,23 @@ pub mod chunk {
                             .ok_or(CodecError::ChromaPayloadTruncated(
                                 ChromaPayloadTruncatedInfo,
                             ))?;
-                    if v_end > chunk.len() {
+                    if v_end > body.len() {
                         return Err(CodecError::ChromaPayloadTruncated(
                             ChromaPayloadTruncatedInfo,
                         ));
                     }
+                    if v_end != body.len() {
+                        return Err(CodecError::TrailingPlaneData);
+                    }
                     let (u_plane, reconstructed_u) = decode_chroma_plane(
-                        &chunk[chroma_start..u_end],
+                        &body[chroma_start..u_end],
                         frame_type,
                         quantizer,
                         chroma_dims,
                         previous_chroma_u.as_deref(),
                     )?;
                     let (v_plane, reconstructed_v) = decode_chroma_plane(
-                        &chunk[u_end..v_end],
+                        &body[u_end..v_end],
                         frame_type,
                         quantizer,
                         chroma_dims,
@@ -3234,6 +3255,9 @@ pub mod chunk {
             let spatial = inverse_dct(&dequant);
             let predictor = predictor_block(previous, aligned, block_idx, frame_type);
             write_reconstructed_block(&mut reconstructed, &spatial, &predictor, aligned, block_idx);
+        }
+        if offset != payload.len() {
+            return Err(CodecError::TrailingPlaneData);
         }
         let cropped = crate::streaming::codec::crop_frame_luma(&reconstructed, dimensions, aligned);
         Ok((cropped, reconstructed))

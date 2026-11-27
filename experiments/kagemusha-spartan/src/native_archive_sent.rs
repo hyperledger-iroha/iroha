@@ -24,8 +24,8 @@
 //! A four-kind installation returns its typed refusal before selection.
 use super::*;
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1,
-    KagemushaWalletIndexedRemoveV1, kagemusha_wallet_poseidon_bytes_v1,
+    KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1, KagemushaWalletIndexedRemoveV1,
+    kagemusha_wallet_poseidon_bytes_v1,
 };
 
 #[path = "archive_relation.rs"]
@@ -242,7 +242,14 @@ impl NativeEngine {
         maps: &mut dyn SpartanWalletMaps,
         parameters: &AuthenticatedParameters,
     ) -> Result<ExactOperationWitness> {
-        self.require_minimum_memory(parameters, if parameters.inner.programs.len() == 5 {full::ARCHIVE_SENT} else {full::SEND})?;
+        self.require_minimum_memory(
+            parameters,
+            if parameters.inner.programs.len() == 5 {
+                full::ARCHIVE_SENT
+            } else {
+                full::SEND
+            },
+        )?;
         let (before, rest) = checked_source(prepared, head, parameters)?;
         let c = head.credential();
         let evidence = self.archive_evidence(
@@ -254,7 +261,8 @@ impl NativeEngine {
             parameters,
         )?;
         let key = evidence.credit.to_repr();
-        let core_removal = maps.remove(SpartanWalletMap::Pending, before[PENDING].to_repr(), key)?;
+        let core_removal =
+            maps.remove(SpartanWalletMap::Pending, before[PENDING].to_repr(), key)?;
         let adjusted_removal = maps.remove(
             SpartanWalletMap::Pending,
             head.profile[bc::LINEAGE_IO + bc::PENDING_ROOT].to_repr(),
@@ -299,7 +307,8 @@ impl NativeEngine {
         head: &VerifiedWalletHead,
         parameters: &AuthenticatedParameters,
     ) -> Result<()> {
-        self.checked_archive(witness, head, parameters, false).map(drop)
+        self.checked_archive(witness, head, parameters, false)
+            .map(drop)
     }
 
     fn checked_archive(
@@ -416,8 +425,7 @@ impl PreparedArchive {
         &self,
         step: &ArchiveSentWitness,
         head: &VerifiedWalletHead,
-        gens: &full::PairGens,
-        slots: &[full::TracedPair],
+        recursive: &full::RecursiveInputs<'_>,
         folds: &full::GeneratorFolds,
     ) -> Result<full::Wiring<Fp>> {
         let before = relation::State {
@@ -468,8 +476,9 @@ impl PreparedArchive {
                 receipt: &step.receipt,
             },
         };
-        let (w, _) =
-            full::p_archive_operation(&relation, gens, slots, folds).map_err(Error::Malformed)?;
+        let (w, _) = recursive
+            .primary(full::OperationWitness::ArchiveSent(&relation), folds)
+            .map_err(Error::Malformed)?;
         if relation.derived.into_inner() != Some([Fp::ONE; 4]) {
             return Err(Error::AuthorityMismatch(
                 "ArchiveSent receiver evidence decision",
@@ -540,13 +549,20 @@ mod tests {
         else {
             panic!("ArchiveSent kind survives the frame");
         };
-        assert_eq!((a1, a2, a3, a4), (b1, b2, b3, b4), "originals byte for byte");
+        assert_eq!(
+            (a1, a2, a3, a4),
+            (b1, b2, b3, b4),
+            "originals byte for byte"
+        );
         let cloned = witness.clone();
         let ExactOperationWitness::ArchiveSent { send_capsule, .. } = &cloned else {
             unreachable!()
         };
         assert!(Arc::ptr_eq(a1, send_capsule));
-        assert!(!Arc::ptr_eq(a1, b1), "decoding owns its own private capsule");
+        assert!(
+            !Arc::ptr_eq(a1, b1),
+            "decoding owns its own private capsule"
+        );
         drop(cloned);
         assert_eq!(a1.as_slice(), b1.as_slice());
         assert_eq!(a.core_removal, b.core_removal);
@@ -568,9 +584,13 @@ mod tests {
             super::super::super::kind(&witness, 4),
             Err(Error::AuthorityMismatch(m)) if m == ARCHIVE_SENT_UNSIGNED
         ));
-        assert_eq!(super::super::super::kind(&witness, 5).unwrap(), full::ARCHIVE_SENT);
+        assert_eq!(
+            super::super::super::kind(&witness, 5).unwrap(),
+            full::ARCHIVE_SENT
+        );
         // No other kind changes its program.
-        let send = ExactOperationWitness::Send(Box::new(crate::send::tests::fixture(0, false).input));
+        let send =
+            ExactOperationWitness::Send(Box::new(crate::send::tests::fixture(0, false).input));
         assert_eq!(super::super::super::kind(&send, 4).unwrap(), full::SEND);
     }
 
@@ -578,12 +598,22 @@ mod tests {
     fn credited_digest_binds_credit_payment_and_the_status_digest() {
         let original = [7u8; 32];
         let base = credited_digest(Fp::from(11), Fp::from(13), original).unwrap();
-        assert_ne!(credited_digest(Fp::from(12), Fp::from(13), original).unwrap(), base);
-        assert_ne!(credited_digest(Fp::from(11), Fp::from(14), original).unwrap(), base);
+        assert_ne!(
+            credited_digest(Fp::from(12), Fp::from(13), original).unwrap(),
+            base
+        );
+        assert_ne!(
+            credited_digest(Fp::from(11), Fp::from(14), original).unwrap(),
+            base
+        );
         for i in [0, 15, 31] {
             let mut changed = original.clone();
             changed[i] ^= 1;
-            assert_ne!(credited_digest(Fp::from(11), Fp::from(13), changed).unwrap(), base, "{i}");
+            assert_ne!(
+                credited_digest(Fp::from(11), Fp::from(13), changed).unwrap(),
+                base,
+                "{i}"
+            );
         }
         // The wallet wire's operation identity for the ArchiveSent effect input `credited`.
         let mut credential = crate::send::tests::fixture(0, false).input.credential;

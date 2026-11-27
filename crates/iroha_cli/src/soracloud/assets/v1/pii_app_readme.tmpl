@@ -59,6 +59,7 @@ iroha soracloud service deploy \
 ```bash
 npm run build
 iroha app sorafs toolkit pack ./frontend/dist \
+  --pin-retention-epoch "$SORAFS_RETENTION_EPOCH" --pin-min-replicas 3 \
   --manifest-out ../sorafs/pii_frontend_manifest.to \
   --car-out ../sorafs/pii_frontend_payload.car \
   --json-out ../sorafs/pii_frontend_pack_report.json

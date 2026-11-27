@@ -3049,8 +3049,8 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     use httpmock::prelude::*;
     use iroha_crypto::Signature;
     use iroha_data_model::da::prelude::{
-        BlobDigest, DaIngestReceipt, DaIngestRequest, DaPinScopeV1, DaProofScheme, DaRentQuote,
-        DaStripeLayout, StorageTicketId,
+        BlobDigest, DaIngestReceipt, DaIngestRequest, DaPinScopeProposalV1, DaPinScopeV1,
+        DaProofScheme, DaRentQuote, DaStripeLayout, StorageTicketId,
     };
     use iroha_data_model::sorafs::pin_registry::ManifestDigest;
     use torii_mock_support::{TempDir, write_client_config};
@@ -3149,14 +3149,16 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
             .expect("receipt transcript"),
     )
     .expect("sign receipt");
-    let scope = DaPinScopeV1::new(
-        &request.authorization(),
-        receipt.storage_ticket,
-        ManifestDigest::new(manifest),
+    let scope = DaPinScopeProposalV1::new(
+        DaPinScopeV1::new(
+            &request.authorization(),
+            receipt.storage_ticket,
+            ManifestDigest::new(manifest),
+            None,
+        ),
         receipt
             .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
             .pin_scope_digest(),
-        None,
     );
     let producer = KeyPair::from_private_key(ALICE_PRIVATE_KEY.parse().expect("producer key"))
         .expect("producer");
@@ -3166,7 +3168,10 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         .expect("expected scope witness");
     let mock_phase = |body: &DaIngestRequest, status: &str, duplicate: bool| {
         let response = norito::json!({
-            "status": status, "duplicate": duplicate, "receipt": receipt, "pin_scope": scope
+            "status": status,
+            "duplicate": duplicate,
+            "receipt": receipt,
+            "pin_scope": scope
         });
         server.mock(|when, then| {
             when.method(POST)

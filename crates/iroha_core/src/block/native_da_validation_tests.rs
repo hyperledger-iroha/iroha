@@ -715,17 +715,21 @@ fn native_da_proposal_queue_authors_verified_pairs_with_ordinary_work_and_retrie
         vec![intent.clone()]
     );
 
-    // Recompute a consistent block header over the substituted record. The independently
-    // verified producer scope, rather than the proposal header, rejects its altered contents.
+    // Recompute a consistent block header over the substituted record. The producer's scope
+    // witnesses sign the original record's digest, so they no longer verify against it; the
+    // independently verified producer scope, rather than the proposal header, rejects it.
     let mut forged = proposal.clone();
     forged.set_da_commitments(Some(DaCommitmentBundle::new(vec![changed])));
     let (_, error) = fixture.validate(forged).unpack(|_| {}).err().unwrap();
-    assert!(matches!(
-        *error,
-        BlockValidationError::DaPinIntentBundle(
-            DaPinIntentValidationError::CommitmentScopeMismatch
-        )
-    ));
+    assert!(
+        matches!(
+            *error,
+            BlockValidationError::DaPinIntentBundle(
+                DaPinIntentValidationError::InvalidPinScopeSignatures { .. }
+            )
+        ),
+        "{error:?}"
+    );
     let mut unpaired = proposal.clone();
     unpaired.set_da_commitments(None);
     let (_, error) = fixture.validate(unpaired).unpack(|_| {}).err().unwrap();
@@ -869,7 +873,7 @@ fn native_da_relay_rejects_stale_cursors_and_reclaims_retired_epochs() {
     rotate(&mut fixture, 2_021, 2, Some(1));
     assert_eq!(
         crate::da::proposal_queue::pending_after_sweep(&state),
-        vec![five.clone(), six]
+        vec![five.clone(), six.clone()]
     );
     rotate(&mut fixture, 2_035, 3, Some(2));
     assert!(crate::da::proposal_queue::pending_after_sweep(&state).is_empty());

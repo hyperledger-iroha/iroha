@@ -23,3 +23,28 @@ qualification, payload, signature and finalized transaction evidence together.
 Ordinary authenticated transactions then configure reserve, provider credit and
 capacity. `sorafs_cli deploy` consumes the verified prepared package. Only a finalized
 publication with verified public browser retrieval establishes a working gateway URL.
+
+Publication uploads one assigned provider at a time, waiting for that provider's
+exact order/revision completion before sending the next source. Progress is
+refreshed before each upload, so a provider that completed in the background, for
+example by native replication from a provider that already completed, is not
+uploaded again. When the assignment refuses a header or chunk (403 or 409), the
+publisher rereads that provider's progress for up to a minute, because a provider
+can be a block ahead of `--torii-url`, and fails only if its completion does not
+appear. Progress reads retry a short run of lost connections and gateway timeouts;
+Torii's own refusals stay final. These reads are scheduling signals; the final
+challenged native proof still must authenticate completion of all replicas. The
+publisher needs only the providers' public source endpoints, never access to their
+storage.
+
+The client deadline, from registration through the challenged completion proof,
+defaults to 600 s. Raise it with `--client-deadline-secs=N` (60 to 86400) for
+multi-gigabyte packages: staging a 3 GB, 24,259-chunk package to three providers in
+turn at about 15 chunks/s takes well over an hour, so allow several hours. A pending
+order's on-chain ingest deadline still ends the wait.
+
+With `--stage-providers=N` the publisher stops staging once N assigned providers have
+completed, wherever they fall in assignment order; each remaining assignment then
+replicates natively from a completed provider while the publisher waits for its
+authenticated completion. Native replication can be slower than staging, so allow a
+correspondingly longer client deadline.

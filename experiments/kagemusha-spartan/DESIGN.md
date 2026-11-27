@@ -374,6 +374,10 @@ linked with S-send) is refused.
 - its point: the kind's corner, its r, its α and β, its `r_x` and `r_y` (padded);
 - its value: the value its verifier checks.
 
+The wallet prover reads the three weighted matrix values from the scalar verifier's witness and sums them for the
+fresh claim. The fold independently checks that sum against its restriction polynomial at the fresh claim's node.
+A one-proof step reuses the same scalar evaluation for both fresh slots.
+
 **The fold.** A step folds four claims (two incoming accumulators and two fresh claims) into its own accumulator.
 
 1. Take the cubic curve γ through the four points at t = 0..3.
@@ -391,15 +395,24 @@ is before Fiat-Shamir, grinding and composition losses. Declared challenge degre
 import has to verify them or rely on authenticated compiler output (TODO G5).
 
 **Native decision.** An accumulated claim is checked by running each kind's matrix program once at its point: about
-0.2 ms per uniform kind on the Mac.
+0.2 ms per uniform kind on the Mac. A kind whose selector times padding is zero at the point adds zero and is not run.
 
 **The prover's native q.**
 
 - q needs P at the curve's points. Each kind's program runs only at its own degree + 1 points, in groups of four
   points per instruction over all cores; equispaced extension fills in the rest.
+- One-proof Load and Send steps have claim points `[A, B, A, B]`. Their cubic is
+  `γ(t) = A + (B − A) h(t)`, where `h = L₁ + L₃` in the four-node Lagrange basis.
+  The prover first computes `R(u) = P(A + (B − A)u)` on the line. A matrix program of line degree
+  `d` takes `d + 1` samples there. Composing with `h` recovers every coefficient of the original
+  `q(t) = R(h(t))`. The two-proof Receive uses the cubic through its four input points.
 - Every batched q equals the pointwise q.
-- Every fold evaluates every kind on its own degree-sized grid, so the largest program dominates. P-boot's program is
-  4.7 times P-recv's.
+- A fold evaluates every kind whose selector times padding is nonzero somewhere on its curve, each on its own
+  degree-sized grid, so the largest such program dominates; a kind zero at every point adds nothing and is not run.
+  With five kinds ArchiveSent's selector is `c2`. Every fresh claim of the other kinds has `c2 = 0`, and so does every
+  accumulator folded only from them, so a history without ArchiveSent never runs ArchiveSent's program. In the 968f
+  bundle that program is the largest: 3,049,142 of P's 7,545,038 instructions. The skip depends only on the public
+  claim points; a published accumulator already shows its `c2`.
 - Mac medians of seven interleaved rounds:
 
   | Run | P-recv | S-recv | P-send | S-send |
@@ -407,7 +420,35 @@ import has to verify them or rely on authenticated compiler output (TODO G5).
   | 11-10 fixed point, two kinds, 16 threads | 12.9 ms (73.8 ms one point at a time) | 9.3 ms (37.7) | | |
   | 11-12 checkpoint, three kinds with exact Bootstrap, 4 threads | 196.6 ms (657.9) | 32.2 ms (88.4) | 179.9 ms (672.2) | 48.9 ms (82.1) |
 
-  That is about 229 ms of native q per Receive pair on four Mac threads. Four kinds and the phone are unmeasured.
+  That is about 229 ms of native q per Receive pair on four Mac threads.
+- Five kinds, 968f bundle (`native_q_on_the_installed_bundle`, M4 Max, six threads, load average about 300, process
+  CPU): P's five programs hold 7,545,038 instructions and run at 157 points each, about 16 ns of CPU per instruction
+  and point on one thread. The arithmetic dominates: P-Bootstrap's 8,398-register program costs the same per
+  instruction as P-recv's 44,188-register one, and operand prefetch or cache-line-aligned registers changed it by
+  under 6%. P's `restrict` took 20.6 s CPU for random claims and 12.1 s for claims with `c2 = 0`; S's took 1.46 s
+  and 0.95 s. In back-to-back `two_wallet_round_trip_from_bundle` runs, the skip cut the primary wiring's CPU by
+  71% for Load and the first Send (their claims also keep `c1 = 1`, so Receive and Send vanish too) and by 30-41%
+  for the later Send and both Receives. Finalize CPU fell 9-23% per operation. The phone is unmeasured.
+- The installed evaluator classifies public scale coefficients once per program. A coefficient whose magnitude fits
+  in a `u64` uses a one-word Pasta product. Larger coefficients use a full field product. On the 968f bundle,
+  the sum of median CPU times across all ten programs fell from 2.144 s to 2.017 s (6.0%) for 16 points per program.
+  The primary Receive program took 0.500 s versus 0.529 s with full products. The benchmark used four lanes on one
+  M4 Max worker, alternated execution order across four paired samples, and checked each result against scalar evaluation.
+- On the unmasked 968f bundle, a one-proof Load or Send follows the line `A + (B − A) h(t)`.
+  This line restriction relies on the whole curve. A quartic mask adds `t(t−1)(t−2)(t−3) s`, which
+  vanishes at all four claim nodes but changes the intermediate evaluations. A masked prover must restrict
+  the matrix polynomial along its masked curve even when it repeats the same two claims.
+  On the signed 968f bundle, the one-proof fold evaluated each active primary matrix program at 53 points
+  instead of 157. On six M4 Max workers, primary and secondary restriction together used 1.33 s of process CPU
+  for a first Load, down from 3.79 s, and 3.80 s for a later Send, down from 10.93 s. Each number is the mean
+  of two runs with alternating order on the same public points. The benchmark compared all 187 primary and
+  175 secondary coefficients in each pair.
+  Four signed two-wallet runs (baseline, candidate, candidate, baseline) all completed the seven operations.
+  The primary circuit wiring for Load and both Sends averaged 21.08 s of CPU on the baseline and 11.03 s on
+  the candidate. The full round trip averaged 408.56 s and 436.26 s of process CPU respectively on the loaded Mac.
+  A final pair ran after the other local tests finished. The baseline and candidate used 19.92 s and 10.11 s for
+  the same wiring, 394.44 s and 387.99 s for the whole process, and 172.80 s and 219.03 s of elapsed time.
+  The wiring improvement held across all three comparisons. Section 10.5 measures overall latency with independent wallets.
 
 ### 7.4 Generator claims
 
@@ -690,6 +731,88 @@ the IPA and the inner sumcheck.
 
 None of these has been timed on a phone.
 
+### 10.5 Signed two-wallet round trip
+
+`native::device_fixture::tests::two_wallet_round_trip_from_bundle` times both signed parameter installations,
+two Bootstraps, a Load of 100, and two transfers of 10, one in each direction. Each wallet owns its engine and
+installation. Each recipient verifies the sender's exact Payment bytes with an empty entry for that Payment
+before proving its Receive. The timer includes signing with software fixture keys and ends when A completes its
+final Receive. The test checks final balances of 100 and 0, both credit roots, zero Burn and the QR size of each
+Payment. Physical-device signing, transport and durable storage require separate measurements.
+
+On an M4 Max with six Rayon workers, all 16 fresh release processes using the signed 968f bundle completed
+the seven operations and independently verified both 10,231-byte Payments. Both baselines ran the identical
+two-owner fixture. The baseline ran first in pairs 1 and 4 of the initial comparison and in pairs 2 and 3 of
+the shipping comparison. Stage profiling was disabled for all eight pairs.
+
+| Comparison | Pairs | Mean elapsed, baseline → optimized | Mean process CPU, baseline → optimized |
+|---|---:|---:|---:|
+| Initial parent `f058094475` | 4 | 54.875 → 52.858 s | 189.481 → 174.661 s |
+| Shipping parent `8f377e8f60` | 4 | 56.976 → 56.302 s | 202.440 → 193.732 s |
+| Both | 8 | 55.926 → 54.580 s | 195.960 → 184.196 s |
+
+Across the eight pairs, mean elapsed time fell 2.4% and mean CPU fell 6.0%. The optimized code finished sooner
+in four pairs and used less CPU in six. A breakdown of the recorded operation boundaries shows where the elapsed
+savings occurred. From the start of the first Send through completion of the final Receive, mean time fell from
+38.582 to 35.180 s against the shipping parent and from 38.425 to 34.359 s across both comparisons. This interval
+includes both recipient verifications and excludes setup, funding and construction of the first Request.
+The primary proof was the largest finalization stage in both separately instrumented profiles.
+
+The linked verifier returns the public inputs it checked on both curves so the engine can decide the inherited
+generator claims directly. A Send reuses that successful verification for its outgoing Payment only when its
+installed programs, projected inputs, link word and both proof encodings match. Receive computes its two matrix
+values and incoming verdicts once for both circuits. Generator folding uses four independent prefix products
+per batch inversion.
+
+For a predecessor with checked source blocks, the prover obtains the first four IPA challenges from the usual
+L/R messages before reducing the generator basis. Each output is a sum of 16 generators whose weights are the
+subset products of those challenges. A single GLV Straus multiplication shares doublings across the 15 weighted
+terms. At `9116d8e860`, a verified two-parent Receive still derived later L/R messages from its intermediate
+bases. At 262,144 input generators, four paired six-worker comparisons on the M4 Max measured
+42% less CPU for the four Pallas folds and 44% less for Vesta. Every output point matched the sequential folds.
+
+The native RP57 Poseidon permutation also uses a cheaper representation for its 57 partial rounds. Write the
+MDS matrix in blocks `[m a; v B]`. For passive state `Y`, the coordinates `p = aY` and `q = aBY` give
+`aB²Y = tr(B)q − det(B)p` by Cayley–Hamilton. This reduces the linear layer from nine field multiplications to
+five per partial round, with one basis conversion at each end. The public parameters determine the transformed
+constants. Custom matrices with dependent basis rows use the dense calculation. In eight paired batches of
+16,384 complete permutations, process CPU fell 24% on each Pasta field. The pinned hash vectors agree on both.
+
+Four fresh-process pairs compared these two arithmetic changes together at `9116d8e860` with their parent
+`ac3aced67b` on the unmasked 968f bundle. The baseline ran first in pairs one and four. Mean full elapsed
+time rose from 60.142 to 62.120 s, and mean process CPU rose from 210.095 to 211.122 s. The first Send
+through final Receive averaged 39.849 and 39.621 s respectively. In a separate instrumented candidate run,
+primary proving accounted for 81.1 CPU-seconds, including 44.9 in the opening. Generator-claim folds took
+40.0 CPU-seconds across the seven operations.
+
+Four more pairs compared the integrated arithmetic commit `39d6b21d92` with its shipping parent `3efd797b23`
+on the same build lane. Mean elapsed fell from 220.449 to 205.936 s and mean process CPU from 378.343 to
+311.549 s. The integrated commit finished sooner in three pairs. Its runs ranged from 71.410 to 574.175 s
+as host load and swap varied, so these measurements do not establish a repeatable wall-time gain.
+
+The wallet verifier can also retain the partial sums it checks. Split the IPA challenge vector into a four-word
+prefix and a suffix. For each contiguous generator block `G_j`, compute `B_j = ⟨s(suffix), G_j⟩` and require
+`Σ_j s(prefix)[j] B_j` to equal the claimed generator. The wallet retains 16 points per claim, about 4 KiB
+of points for the own and inherited claims on both curves. A successor matches the claim, proof, wallet owner
+and installation before consuming the blocks. A verified Receive can then compute its leading L/R messages
+from all four sources. Once the fold matches the incoming Send's own and inherited claims on both curves,
+the witness reuses those four generator verdicts. It evaluates both matrices and parses the incoming bytes
+independently. The verifier and recursive trace also evaluate the folded opening weight directly from
+its public slot factors. The prover still materializes the column weights needed for the individual L/R sums.
+
+Four fresh-process pairs compared the retained blocks and factored openings at `67caea8965` with their
+parent `39d6b21d92`. Average CPU fell from 309.736 to 277.983 s (10.25%). Average elapsed rose from
+111.037 to 121.082 s (9.05%). The first two pairs averaged 141.005 to 124.045 s. After a host restart,
+the last two averaged 81.069 to 118.121 s. Each pair ran entirely within one host session, and each
+recipient independently verified its incoming Payment in all eight runs.
+
+Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
+
+```sh
+RAYON_NUM_THREADS=6 cargo test --locked --offline --release --lib \
+  native::device_fixture::tests::two_wallet_round_trip_from_bundle -- --exact --ignored --nocapture
+```
+
 ## 11. Security
 
 **Assumptions:**
@@ -765,13 +888,15 @@ budgets and the cryptographic terms added (SOUNDNESS.md §7-§8).
 - an independent soundness review of SOUNDNESS.md (G3; [research/REPORT-b04a57-soundness.md](research/REPORT-b04a57-soundness.md)
   is the checklist), and the open items in SOUNDNESS.md §9 and §11 (imported degree declarations, generator-profile
   binding, LogUp phase invariants, a frozen candidate equal to HEAD);
-- side channels: private commitments use constant-time secret MSMs without tables, and the inner sumcheck's
+- side channels: by the owner's 2026-11-24 decision (TODO G8) private commitments (witness rows, round values, the
+  IPA L/R vectors and the generator-claim folds) use variable-time secret Pippenger MSMs without tables, so their
+  timing and memory accesses depend on the private values; proof bytes are unchanged. The inner sumcheck's
   support reads only public structure (rows the build never wrote, the io, the public `M(r_x, ·)`), never a
   private zero. LogUp multiplicity counting and link-table recount use data-oblivious lookup schedules.
   The installed prover's row hooks take rows by position; only the non-uniform benchmark and test circuits'
   default hooks compare rows by value. The build's copy and absent-instance checks use constant-time field
   equality and branch only on a malformed witness, whose refusal still stops at the first failing slot. Witness
-  construction has value-dependent paths, and the constant-time kernels still need physical measurements (TODO G8);
+  construction has value-dependent paths;
 - the deterministic `SpikeRng` is for tests only.
 
 ## 12. Status

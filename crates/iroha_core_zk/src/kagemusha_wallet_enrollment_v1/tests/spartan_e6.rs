@@ -25,7 +25,11 @@ fn enrolled_e6(
     let requested = RequestV1::decode(&request(&f, &mut owner)).unwrap();
     let result = issuer_result(&f, &requested);
     let fields = result
-        .verify_for(&f.config.scheme, &f.config.enrollment_certificate, &requested)
+        .verify_for(
+            &f.config.scheme,
+            &f.config.enrollment_certificate,
+            &requested,
+        )
         .unwrap()
         .body;
     (f, requested, result, fields)
@@ -354,9 +358,7 @@ fn durable_e6_winner_stays_readable_under_a_retained_output_only_source() {
             KagemushaWalletCopyV1, kagemusha_wallet_completion_dir_v1,
             kagemusha_wallet_completion_name_v1,
         },
-        test_support::{
-            TestOwnerV1, advance_request, bootstrapped_device, next_capsule, released,
-        },
+        test_support::{TestOwnerV1, advance_request, bootstrapped_device, next_capsule, released},
     };
     const WINNER: &[u8] = b"exact selected enrollment winner";
 
@@ -718,7 +720,11 @@ fn installed_spartan_profile_admits_only_the_exact_real_e6_and_replays_its_accou
     if let IssuerEvidenceV1::Android { certificates } = &mut evidence.evidence {
         certificates[0][0] ^= 1;
     }
-    assert!(owner.accept_credential(&evidence.encode().unwrap()).is_err());
+    assert!(
+        owner
+            .accept_credential(&evidence.encode().unwrap())
+            .is_err()
+    );
     let foreign = foreign_enrollment_certificate(&f);
     let only_foreign = ResultV1 {
         certificates: certificate_set(vec![foreign]),
@@ -766,12 +772,8 @@ fn installed_spartan_profile_admits_only_the_exact_real_e6_and_replays_its_accou
             mismatch,
         );
     }
-    let mut runtime = FutureRuntime::from_installed(
-        open(),
-        Arc::clone(&parameters),
-        f.config.scheme,
-        (),
-    );
+    let mut runtime =
+        FutureRuntime::from_installed(open(), Arc::clone(&parameters), f.config.scheme, ());
     // Substitutions are refused and retain nothing.
     assert!(
         runtime

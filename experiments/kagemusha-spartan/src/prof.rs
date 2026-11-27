@@ -80,10 +80,51 @@ pub fn resident_and_footprint() -> (u64, u64) {
     (rss, rss)
 }
 
-/// Returns the allocator's free pages to the system (macOS), so that a
+/// CPU seconds of this process so far (user and system, every thread). Under a
+/// loaded host a kernel's CPU time moves far less than its wall time.
+#[cfg(unix)]
+pub fn process_cpu_seconds() -> f64 {
+    #[cfg(target_vendor = "apple")]
+    type Usec = i32;
+    #[cfg(not(target_vendor = "apple"))]
+    type Usec = i64;
+    #[repr(C)]
+    struct TimeVal {
+        sec: i64,
+        usec: Usec,
+    }
+    #[repr(C)]
+    struct RUsage {
+        user: TimeVal,
+        system: TimeVal,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+    }
+    let mut usage = std::mem::MaybeUninit::<RUsage>::zeroed();
+    // SAFETY: getrusage(RUSAGE_SELF) writes one complete struct rusage.
+    if unsafe { getrusage(0, usage.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    // SAFETY: zero-initialized and then fully written by getrusage.
+    let usage = unsafe { usage.assume_init() };
+    let seconds = |t: &TimeVal| t.sec as f64 + t.usec as f64 * 1e-6;
+    seconds(&usage.user) + seconds(&usage.system)
+}
+
+/// CPU seconds of this process: unavailable here, 0.
+#[cfg(not(unix))]
+pub fn process_cpu_seconds() -> f64 {
+    0.0
+}
+
+/// Returns the allocator's free pages to the system (macOS and iOS), so that a
 /// measurement's starting resident set holds live memory only and a phase's
-/// peak shows its own allocations rather than reused free pages.
-#[cfg(target_os = "macos")]
+/// peak shows its own allocations rather than reused free pages. The native
+/// engine also calls it between proving stages: freed witness and table
+/// pages otherwise stay resident until the kernel reclaims them.
+#[cfg(target_vendor = "apple")]
 pub fn release_free_memory() {
     unsafe extern "C" {
         fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
@@ -94,7 +135,7 @@ pub fn release_free_memory() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(target_vendor = "apple"))]
 pub fn release_free_memory() {}
 
 /// Bytes the allocator holds for live allocations now (macOS; 0 elsewhere).
@@ -143,10 +184,14 @@ pub struct MemTrace {
     /// The allocator's live bytes at the start and their largest sample
     /// (every few milliseconds).
     heap: (u64, std::sync::Arc<std::sync::atomic::AtomicU64>),
+    /// The largest live-bytes sample since the last mark.
+    heap_phase: std::sync::Arc<std::sync::atomic::AtomicU64>,
     sampler: Option<std::thread::JoinHandle<()>>,
     start: (u64, u64),
     clock: Instant,
-    phases: Mutex<Vec<(&'static str, u64, u64, f64)>>,
+    /// Per phase: name, peak resident set, peak footprint, end time and
+    /// peak live heap bytes.
+    phases: Mutex<Vec<(&'static str, u64, u64, f64, u64)>>,
 }
 
 impl MemTrace {
@@ -168,11 +213,15 @@ impl MemTrace {
         let heap_start = heap_in_use();
         let heap = std::sync::Arc::new(AtomicU64::new(heap_start));
         let heap_peak = heap.clone();
+        let heap_phase = std::sync::Arc::new(AtomicU64::new(heap_start));
+        let phase_peak = heap_phase.clone();
         let sampler = std::thread::spawn(move || {
             let mut tick = 0u32;
             while !shared.2.load(Ordering::Relaxed) {
                 if tick % 4 == 0 {
-                    heap_peak.fetch_max(heap_in_use(), Ordering::Relaxed);
+                    let live = heap_in_use();
+                    heap_peak.fetch_max(live, Ordering::Relaxed);
+                    phase_peak.fetch_max(live, Ordering::Relaxed);
                 }
                 tick = tick.wrapping_add(1);
                 let (rss, footprint) = resident_and_footprint();
@@ -187,6 +236,7 @@ impl MemTrace {
             state,
             floor,
             heap: (heap_start, heap),
+            heap_phase,
             sampler: Some(sampler),
             start,
             clock: Instant::now(),
@@ -205,10 +255,13 @@ impl MemTrace {
             .swap(footprint, Ordering::Relaxed)
             .max(footprint);
         let t = self.clock.elapsed().as_secs_f64();
+        let live = heap_in_use();
+        let heap_peak = self.heap_phase.swap(live, Ordering::Relaxed).max(live);
+        self.heap.1.fetch_max(heap_peak, Ordering::Relaxed);
         self.phases
             .lock()
             .unwrap()
-            .push((name, peak, peak_footprint, t));
+            .push((name, peak, peak_footprint, t, heap_peak));
     }
 
     /// One line: start, overall peaks, and each phase's peak resident set /
@@ -230,7 +283,12 @@ impl MemTrace {
         let peak_footprint = phases.iter().map(|p| p.2).max().unwrap_or(self.start.1);
         let list = phases
             .iter()
-            .map(|(n, p, f, t)| format!("{n} {:.0}/{:.0}@{t:.2}s", mb(*p), mb(*f)))
+            .map(|(n, p, f, t, _)| format!("{n} {:.0}/{:.0}@{t:.2}s", mb(*p), mb(*f)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let heap_list = phases
+            .iter()
+            .map(|(n, _, _, _, h)| format!("{n} {:.0}", mb(*h)))
             .collect::<Vec<_>>()
             .join(", ");
         let floor = (
@@ -238,7 +296,7 @@ impl MemTrace {
             self.floor.1.load(Ordering::Relaxed),
         );
         format!(
-            "{prefix} {label}: start rss {:.0} MB footprint {:.0} MB; peak rss {:.0} MB (+{:.0}), footprint {:.0} MB (+{:.0}); floor rss {:.0} footprint {:.0} (peak over floor rss +{:.0} footprint +{:.0}); heap in use start {:.0} MB peak +{:.0}; total {:.3} s; phase peaks rss/footprint MB: {list}",
+            "{prefix} {label}: start rss {:.0} MB footprint {:.0} MB; peak rss {:.0} MB (+{:.0}), footprint {:.0} MB (+{:.0}); floor rss {:.0} footprint {:.0} (peak over floor rss +{:.0} footprint +{:.0}); heap in use start {:.0} MB peak +{:.0}; total {:.3} s; phase peaks rss/footprint MB: {list}; phase heap peaks MB: {heap_list}",
             mb(self.start.0),
             mb(self.start.1),
             mb(peak),

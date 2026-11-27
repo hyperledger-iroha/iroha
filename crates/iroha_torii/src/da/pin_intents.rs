@@ -365,7 +365,7 @@ mod tests {
             sequence,
             payload_hash: BlobDigest::new([0xD7; 32]),
             payload_bytes: 1,
-            request_content_hash: BlobDigest::new([0xD8; 32]),
+            request_content_hash: Hash::prehashed([0xD8; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -387,11 +387,11 @@ mod tests {
             ManifestDigest::new(
                 [u8::try_from(sequence).expect("fixture sequence fits in a digest byte"); 32],
             ),
-            Default::default(),
             None,
         );
-        let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-            .expect("sign deterministic DA query pin scope");
+        let scope_authorization =
+            DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &key_pair)
+                .expect("sign deterministic DA query pin scope");
         DaPinIntent::new(authorization, scope_authorization)
     }
     fn store_with_records() -> DaPinStore {

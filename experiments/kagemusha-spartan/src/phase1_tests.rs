@@ -268,18 +268,32 @@ fn check_phased<C: PastaCurve>() {
         &c,
     );
     let fixed_r = |_: &[u8; 32]| r;
-    assert_eq!(
-        verify_linked_circuit(
-            &shape,
-            &gens,
-            &instance,
-            &secondary.to_bytes(),
-            &Link::Second { d, rlc: &fixed_r },
-            &c
-        )
-        .unwrap(),
-        rho
-    );
+    let fixed = fixed_for(&shape, &gens, &c, &instance.io);
+    let key = fixed_commitments(&shape, &gens, &c);
+    let check_verified_io = |proof: &Proof<C>, link: &Link, expected_word| {
+        let bytes = proof.to_bytes();
+        let verify = |key: Option<&[Aff<C>]>| {
+            verify_linked_circuit_with_io(&shape, &gens, &instance, &bytes, link, &c, key)
+        };
+        let verified = verify(Some(&key)).unwrap();
+        let uncached = verify(None).unwrap();
+        assert_eq!((uncached.word, &uncached.io), (verified.word, &verified.io));
+        let mut wrong_key = key.clone();
+        wrong_key[0] = (C::from(wrong_key[0]) + C::generator()).to_affine();
+        assert!(verify(Some(&wrong_key)).is_err());
+        wrong_key.push(gens.g[0]);
+        assert!(verify(Some(&wrong_key)).is_err());
+        assert_eq!(verified.word, expected_word);
+        let trace =
+            crate::verifier::trace_circuit(&shape, &gens, &instance, proof, &[], link, &c, &fixed);
+        assert!(trace.accepts);
+        assert_eq!(
+            verified.io,
+            trace.circuit.unwrap().io_full,
+            "all early, link and late inputs"
+        );
+    };
+    check_verified_io(&secondary, &Link::Second { d, rlc: &fixed_r }, rho);
     let mut wrong_d = d;
     wrong_d[0] ^= 1;
     assert!(
@@ -325,10 +339,7 @@ fn check_phased<C: PastaCurve>() {
         bytes,
         "fixed/link/lookup proof replays exactly after all plans are cached"
     );
-    assert_eq!(
-        verify_linked_circuit(&shape, &gens, &instance, &bytes, &link, &c).unwrap(),
-        d
-    );
+    check_verified_io(&proof, &link, d);
     let mut wrong_rho = rho;
     wrong_rho[20] ^= 1; // Above the limb used by the relation: transcript binding must reject it.
     assert!(

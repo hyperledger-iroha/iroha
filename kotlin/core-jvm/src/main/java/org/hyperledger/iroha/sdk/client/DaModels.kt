@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 /** Typed first-release models for Torii DA commitment and pin-intent proofs. */
 object DaModels {
@@ -359,22 +360,32 @@ object DaModels {
             requireU64(epoch, "authorization.epoch")
             requireU64(sequence, "authorization.sequence")
             requireU64(payloadBytes, "authorization.payload_bytes")
+            // The content commitment is an Iroha hash, whose final bit is always set.
+            require(requestContentHash.bytes()[31].toInt() and 1 == 1) {
+                "authorization.request_content_hash must be an Iroha hash with its final bit set"
+            }
             requireOrderedWitnesses(signatures)
         }
 
         internal fun toJsonValue(): Map<String, Any?> = linkedMapOf(
             "network_id" to networkId.literal, "owner" to owner, "lane_id" to laneId,
             "epoch" to epoch, "sequence" to sequence, "payload_hash" to payloadHash.toJsonValue(),
-            "payload_bytes" to payloadBytes, "request_content_hash" to requestContentHash.toJsonValue(),
+            "payload_bytes" to payloadBytes,
+            "request_content_hash" to HashLiteral.canonicalize(requestContentHash.bytes()),
             "signatures" to signatures.map(Witness::toJsonValue),
         )
     }
 
-    /** Exact ticket, manifest, commitment and alias approved by the producer. */
+    /**
+     * Exact ticket, manifest and alias approved by the producer, as stored in a pin intent.
+     *
+     * The producer's witnesses also sign the digest of the paired commitment record, which the
+     * stored scope does not carry.
+     */
     data class PinScope(
         val networkId: NetworkId, val owner: String, val requestAuthorizationDigest: Digest32,
         val laneId: Long, val epoch: BigInteger, val sequence: BigInteger, val storageTicket: Digest32,
-        val manifestHash: Digest32, val commitmentDigest: Digest32, val alias: String?,
+        val manifestHash: Digest32, val alias: String?,
     ) {
         init {
             requireCanonicalI105Address(owner, "scope.owner")
@@ -387,7 +398,7 @@ object DaModels {
         internal fun toJsonValue(): Map<String, Any?> = linkedMapOf(
             "network_id" to networkId.literal, "owner" to owner, "lane_id" to laneId,
             "epoch" to epoch, "sequence" to sequence, "storage_ticket" to storageTicket.toJsonValue(),
-            "manifest_hash" to manifestHash.toJsonValue(), "commitment_digest" to commitmentDigest.toJsonValue(),
+            "manifest_hash" to manifestHash.toJsonValue(),
             "request_authorization_digest" to requestAuthorizationDigest.toJsonValue(), "alias" to alias,
         )
     }
@@ -855,7 +866,9 @@ internal object DaJson {
             sequence = u64(auth["sequence"], "$field.sequence"),
             payloadHash = DaModels.Digest32.fromJson(auth["payload_hash"], "$field.payload_hash"),
             payloadBytes = u64(auth["payload_bytes"], "$field.payload_bytes"),
-            requestContentHash = DaModels.Digest32.fromJson(auth["request_content_hash"], "$field.request_content_hash"),
+            requestContentHash = DaModels.Digest32.fromBytes(
+                HashLiteral.decode(string(auth["request_content_hash"], "$field.request_content_hash")),
+            ),
             signatures = parseWitnesses(auth["signatures"], "$field.signatures"),
         )
     }
@@ -865,7 +878,7 @@ internal object DaJson {
         val name = "$field.scope"
         val scope = exactObject(auth["scope"], name, setOf(
             "network_id", "owner", "request_authorization_digest", "lane_id", "epoch",
-            "sequence", "storage_ticket", "manifest_hash", "commitment_digest", "alias",
+            "sequence", "storage_ticket", "manifest_hash", "alias",
         ))
         val parsed = DaModels.PinScope(
             networkId = NetworkId.parse(string(scope["network_id"], "$name.network_id")),
@@ -876,7 +889,6 @@ internal object DaJson {
             sequence = u64(scope["sequence"], "$name.sequence"),
             storageTicket = DaModels.Digest32.fromJson(scope["storage_ticket"], "$name.storage_ticket"),
             manifestHash = DaModels.Digest32.fromJson(scope["manifest_hash"], "$name.manifest_hash"),
-            commitmentDigest = DaModels.Digest32.fromJson(scope["commitment_digest"], "$name.commitment_digest"),
             alias = scope["alias"]?.let { string(it, "$name.alias") },
         )
         return DaModels.PinScopeAuthorization(parsed, parseWitnesses(auth["signatures"], "$field.signatures"))

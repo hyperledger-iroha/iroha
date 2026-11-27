@@ -149,8 +149,12 @@ fn restore_requires_exact_independently_selected_global_root() {
     let mut restored_local = base.restore_trusted_local_epoch(&checkpoint).unwrap();
     let commit = certificate(&fixture, &chain[3]);
     assert_eq!(restored_local.verify(&commit).unwrap().height(), 4);
-    assert!(SumeragiCommitVerifierV1::new(&root(&foreign)).unwrap()
-        .restore_trusted_local_epoch(&checkpoint).is_err());
+    assert!(
+        SumeragiCommitVerifierV1::new(&root(&foreign))
+            .unwrap()
+            .restore_trusted_local_epoch(&checkpoint)
+            .is_err()
+    );
     assert!(
         SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint(&checkpoint, &root(&foreign))
             .is_err()

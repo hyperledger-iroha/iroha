@@ -204,7 +204,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         use crate::kagemusha_wallet_advance_v1::KagemushaWalletLookupV1 as Lookup;
 
         self.require_account(slot, None)?;
-        self.parameters.require_archive_sent_program().map_err(provider_error)?;
+        self.parameters
+            .require_archive_sent_program()
+            .map_err(provider_error)?;
         let wallet = self.authorized_wallet_id(slot)?;
         let selected_send = match self.provider.lookup(slot, sent_operation)? {
             Lookup::Retained(row) => row.capsule_digest,
@@ -554,11 +556,20 @@ mod tests {
             (&[7][..], &[8, 9][..])
         );
         let mut longest = Vec::new();
-        append(&mut longest, &[1; KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1]);
-        append(&mut longest, &[2; KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1]);
+        append(
+            &mut longest,
+            &[1; KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1],
+        );
+        append(
+            &mut longest,
+            &[2; KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1],
+        );
         assert!(time_anchor_inputs(WalletInputs(&longest)).is_ok());
         let mut oversized = Vec::new();
-        append(&mut oversized, &[1; KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1 + 1]);
+        append(
+            &mut oversized,
+            &[1; KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1 + 1],
+        );
         append(&mut oversized, &[2]);
         let mut trailing = wire.to_vec();
         append(&mut trailing, &[3]);

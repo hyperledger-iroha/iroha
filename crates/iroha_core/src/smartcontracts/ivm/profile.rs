@@ -321,7 +321,10 @@ mod tests {
         for id in IvmProfileId::IMPLEMENTED {
             let profile = ResolvedIvmProfile::of_id(id);
             if id == IvmProfileId::C10_GENERIC_CARRIER {
-                assert!(!published.contains(&profile.definition_id()), "unfinished carrier vertical is not advertised");
+                assert!(
+                    !published.contains(&profile.definition_id()),
+                    "unfinished carrier vertical is not advertised"
+                );
                 continue;
             }
             assert!(

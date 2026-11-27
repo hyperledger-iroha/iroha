@@ -199,7 +199,7 @@ fn test_pin_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAu
         sequence,
         payload_hash: BlobDigest::new([0xDF; 32]),
         payload_bytes: 1,
-        request_content_hash: BlobDigest::new([0xE0; 32]),
+        request_content_hash: Hash::prehashed([0xE0; 32]),
         signatures: Vec::new(),
     };
     authorization.signatures.push(DaIngestSignatureV1 {
@@ -219,15 +219,10 @@ pub(super) fn test_pin_intent(
     let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
         .expect("valid deterministic block pin-intent key");
     let authorization = test_pin_authorization(lane, epoch, sequence);
-    let scope = DaPinScopeV1::new(
-        &authorization,
-        storage_ticket,
-        manifest_hash,
-        Default::default(),
-        None,
-    );
-    let scope_authorization = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
-        .expect("sign deterministic block pin scope");
+    let scope = DaPinScopeV1::new(&authorization, storage_ticket, manifest_hash, None);
+    let scope_authorization =
+        DaPinScopeAuthorizationV1::try_sign(scope, &BlobDigest::default(), &key_pair)
+            .expect("sign deterministic block pin scope");
     DaPinIntent::new(authorization, scope_authorization)
 }
 pub(super) fn sample_da_bundle() -> DaCommitmentBundle {

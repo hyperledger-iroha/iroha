@@ -152,7 +152,8 @@ function encodeRole(value) {
   return u32(value);
 }
 
-function encodeWalletSignature(signature) {
+/** The maintained desktop wallet's compact encrypted layout: one algorithm byte and packed bytes. */
+function encodeCompactWalletSignature(signature) {
   return encodeStruct([Buffer.from([signature.algorithm]), encodeBytes(signature.signature)]);
 }
 
@@ -161,7 +162,10 @@ function elementFramed(bytes) {
   return Buffer.concat(Array.from(Buffer.from(bytes), (byte) => Buffer.concat([u64(1), Buffer.from([byte])])));
 }
 
-/** Plain-frame `WalletSignatureV1`: u32 algorithm + u64 count + element-framed bytes. */
+/**
+ * Canonical `WalletSignatureV1`, as Torii's Rust codec writes it in plain approvals and in
+ * encrypted sign results: u32 algorithm + u64 count + element-framed bytes.
+ */
 function encodeRelayWalletSignature(signature) {
   return encodeStruct([
     u32(signature.algorithm),
@@ -269,13 +273,13 @@ function approvalPreimage(preview, walletPublicKey, accountId, relayToken) {
   ]);
 }
 
-function encodeApproveControlWithSignature(walletPublicKey, accountId, signature) {
+function encodeApproveControlWithSignature(walletPublicKey, accountId, signature, encodeSignature = encodeRelayWalletSignature) {
   const body = encodeStruct([
     elementFramed(walletPublicKey),
     encodeString(accountId),
     Buffer.from([0]),
     Buffer.from([0]),
-    encodeRelayWalletSignature({
+    encodeSignature({
       algorithm: 0,
       signature,
     }),
@@ -416,11 +420,11 @@ function nonce(seq) {
   return Buffer.concat([Buffer.alloc(4), u64(seq)]);
 }
 
-function encodeSignResultOk(preview, keys, seq, signature, algorithm = 0) {
+function encodeSignResultOk(preview, keys, seq, signature, algorithm = 0, encodeSignature = encodeRelayWalletSignature) {
   const payload = Buffer.concat([
     u32(3),
     lenPrefixed(
-      encodeWalletSignature({
+      encodeSignature({
         algorithm,
         signature,
       }),
@@ -1149,6 +1153,53 @@ test("createConnectAppSession handles approval and sign success", async () => {
   assert.deepEqual(Buffer.from(detached), signature);
 });
 
+test("the compact encrypted signature layout is excluded from plaintext approval", async () => {
+  RecordingWebSocket.instances.length = 0;
+  const preview = makePreview(), account = makeNativeInspectionFixtureAccount();
+  const session = createConnectAppSession({
+    baseUrl: "https://connect.test.invalid", preview, webSocketImpl: RecordingWebSocket,
+    session: { sid: preview.sidBase64Url, token_app: "token-app", token_relay: "relay-token" },
+  });
+  const socket = RecordingWebSocket.instances.at(-1);
+  socket.open();
+  const walletPublicKey = x25519.getPublicKey(new Uint8Array(32).fill(0x55));
+  const signature = ed25519.sign(approvalPreimage(preview, walletPublicKey, account.accountId, "relay-token"), account.privateKey);
+  const approval = session.waitForApproval();
+  socket.receive(encodeControlFrame({ sidBytes: preview.sidBytes, dir: 1, seq: 1,
+    control: encodeApproveControlWithSignature(walletPublicKey, account.accountId, signature, encodeCompactWalletSignature) }));
+  await assert.rejects(approval, /approve\.sig_wallet\.algorithm must be a 4-byte discriminant/u);
+});
+
+test("Connect rejects encrypted sign results with noncanonical framing", async () => {
+  const signature = (account) => ed25519.sign(Buffer.from([0xaa]), account.privateKey);
+  const signResult = (value) => Buffer.concat([u32(3), lenPrefixed(encodeRelayWalletSignature({ algorithm: 0, signature: value }))]);
+  const cases = [
+    [/Connect envelope payload exceeded available bytes/u,
+      (seq, account) => Buffer.concat([frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([u64(seq), signResult(signature(account))])), Buffer.of(0)])],
+    [/envelope\.seq must contain eight bytes/u,
+      (seq, account) => frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([Buffer.concat([u64(seq), Buffer.of(0)]), signResult(signature(account))]))],
+    [/sign_result_ok length mismatch/u,
+      (seq, account) => frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([u64(seq), Buffer.concat([signResult(signature(account)), Buffer.of(0)])]))],
+    [/payload\.signature Ed25519 signature must be 64 bytes/u,
+      (seq, account) => frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([u64(seq), signResult(signature(account).subarray(1))]))],
+  ];
+  for (const [expected, envelope] of cases) {
+    const { account, keys, preview, session, socket } = await createApprovedTestSession({ nativeInspection: true });
+    const pending = session.signTransaction(Buffer.from([0xaa]));
+    await Promise.resolve();
+    const seq = decodeAppSignRequest(preview, keys, socket.sent[1]).seq;
+    const ciphertext = Buffer.from(chacha20poly1305(keys.walletKey, nonce(seq), aad(preview, 1, seq)).encrypt(envelope(seq, account)));
+    const cipherStruct = encodeStruct([encodeDir(1), encodeBytes(ciphertext)]);
+    socket.receive(encodeFrame({ sidBytes: preview.sidBytes, dir: 1, seq, kind: Buffer.concat([u32(1), u64(cipherStruct.length), cipherStruct]) }));
+    await assert.rejects(pending, expected);
+  }
+  const { preview, session, socket } = await createApprovedTestSession({ nativeInspection: true });
+  const pending = session.signTransaction(Buffer.from([0xaa]));
+  await Promise.resolve();
+  socket.receive(encodeStruct([elementFramed(preview.sidBytes), encodeDir(1), Buffer.concat([u64(2), Buffer.of(0)]), Buffer.concat([u32(1), u64(0)])]));
+  await assert.rejects(pending, /frame\.seq must contain eight bytes/u);
+});
+
 test("Connect encrypts a complete execution payload as one bounded-size wire message", async () => {
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview(), account = makeAccount(), relayToken = "relay-token";
@@ -1181,6 +1232,10 @@ test("Connect capacity preflight rejects default or contradictory large-transact
   const length = 4 * 1024 * 1024;
   const status = { enabled: true, policy: { frame_max_bytes: length + 4096, session_buffer_max_bytes: 8 * 1024 * 1024 } };
   assert.equal(validateConnectTransactionTransportStatus(status, length).frameBytes, length + 472);
+  for (const field of ["frame_max_bytes", "session_buffer_max_bytes"]) {
+    assert.throws(() => validateConnectTransactionTransportStatus({ ...status, policy: { ...status.policy, [field]: length + 471 } }, length), /execution-qualified/);
+    assert.equal(validateConnectTransactionTransportStatus({ ...status, policy: { ...status.policy, [field]: length + 472 } }, length).frameBytes, length + 472);
+  }
   for (const value of [null, { ...status, enabled: false }, { enabled: true, policy: { frame_max_bytes: 64_000, session_buffer_max_bytes: 262_144 } }, { ...status, policy: { ...status.policy, session_buffer_max_bytes: 1 } }]) assert.throws(() => validateConnectTransactionTransportStatus(value, length), /execution-qualified/);
   assert.throws(() => validateConnectTransactionTransportStatus(status, Number.MAX_SAFE_INTEGER), /length/);
 });

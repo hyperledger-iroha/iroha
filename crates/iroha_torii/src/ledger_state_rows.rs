@@ -86,10 +86,10 @@ fn forbidden() -> Error {
 
 fn with_reader<T>(
     app: &SharedAppState,
+    owner: &crate::history_producer::HistoryProducerOwner,
     account: &AccountId,
     check: impl FnOnce(&WorldView<'_>, bool) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    let owner = crate::history_producer::HistoryProducerOwner::authentication_read(app)?;
     owner.scope(|| {
         app.state
             .try_with_authorization_view(owner.allocation_context(), |view| {
@@ -306,9 +306,13 @@ pub async fn handler(
                 .map_err(|_| conversion_error("invalid State key".into()))
         })
         .collect::<Result<_, _>>()?;
-    let authority = std::sync::Arc::new(with_reader(&app, &verified.account, |world, global| {
-        ReadAuthority::select(world, &verified.account, global, &keys, grants)
-    })?);
+    // Each check opens a fresh view under the same admitted authorization budget.
+    let authority = std::sync::Arc::new(with_reader(
+        &app,
+        &auth,
+        &verified.account,
+        |world, global| ReadAuthority::select(world, &verified.account, global, &keys, grants),
+    )?);
     let source_authority = authority.clone();
     let source_selection_charge = selection_charge.clone();
     let state = app.state.clone();
@@ -361,7 +365,7 @@ pub async fn handler(
             Ok(response)
         })
         .await?;
-    with_reader(&app, &verified.account, |world, global| {
+    with_reader(&app, &auth, &verified.account, |world, global| {
         authority.recheck(world, &verified.account, global)
     })?;
     let mut response = proof_response_with_exact_egress_bounded(
@@ -374,7 +378,7 @@ pub async fn handler(
         maximum,
     )
     .await?;
-    with_reader(&app, &verified.account, |world, global| {
+    with_reader(&app, &auth, &verified.account, |world, global| {
         authority.recheck(world, &verified.account, global)
     })?;
     response.headers_mut().insert(
@@ -498,8 +502,10 @@ mod tests {
             .iter()
             .map(|row| (row.table.clone(), hex::decode(&row.key_hex).unwrap()))
             .collect();
+        let auth =
+            crate::history_producer::HistoryProducerOwner::authentication_read(&app).unwrap();
         let select = |account: &AccountId, count: usize| {
-            with_reader(&app, account, |world, global| {
+            with_reader(&app, &auth, account, |world, global| {
                 ReadAuthority::select(
                     world,
                     account,

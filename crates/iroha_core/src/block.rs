@@ -5594,6 +5594,7 @@ pub(crate) mod valid {
             };
             Self::validate_da_proposal_pins(
                 bundle,
+                block.da_commitments(),
                 block.header().height().get(),
                 state,
                 &state.nexus_quotas_for_validation(replacement),
@@ -5601,9 +5602,13 @@ pub(crate) mod valid {
         }
 
         /// Check the pin section against the parent, including producer authority and quota.
+        ///
+        /// `commitments` is the same proposal's commitment section: every pin-scope witness
+        /// signs its paired record's digest.
         #[expect(clippy::result_large_err, reason = "preserve typed validation errors")]
         pub(crate) fn validate_da_proposal_pins(
             bundle: &DaPinIntentBundle,
+            commitments: Option<&iroha_data_model::da::commitment::DaCommitmentBundle>,
             height: u64,
             state: &impl StateReadOnly,
             quotas: &iroha_data_model::nexus_quota_policy::NexusQuotaPolicyV1,
@@ -5617,6 +5622,7 @@ pub(crate) mod valid {
             )?;
             crate::da::validate_pin_intent_authorizations(
                 bundle,
+                commitments,
                 *state.network_id(),
                 |account| {
                     world

@@ -82,10 +82,17 @@ pub fn install_selected(
         .map_err(|e| Error::Rejected(e.to_string()))?;
     let parameters = match selected {
         Some(digest) => AuthenticatedParameters::install_governed(
-            bundle, manifest, signature, digest, &scheme(), finality,
+            bundle,
+            manifest,
+            signature,
+            digest,
+            &scheme(),
+            finality,
         )?,
         None if AuthenticatedParameters::is_five_manifest(manifest) => {
-            return Err(Error::AuthorityMismatch("missing fixture World manifest selection"));
+            return Err(Error::AuthorityMismatch(
+                "missing fixture World manifest selection",
+            ));
         }
         None => AuthenticatedParameters::install(bundle, manifest, signature, &scheme(), finality)?,
     };
@@ -97,6 +104,32 @@ pub fn install_selected(
         ..parameters
     };
     Ok(parameters)
+}
+
+/// Install the signed fixture with the World selection required by its manifest.
+#[cfg(test)]
+pub(crate) fn install_test_bundle(path: &std::path::Path) -> Result<AuthenticatedParameters> {
+    let read = |name: &str| {
+        std::fs::read(path.join(name)).map_err(|error| Error::Rejected(format!("{name}: {error}")))
+    };
+    let manifest = read("parameter-manifest.norito")?;
+    let signature = read("parameter-signature.bin")?
+        .try_into()
+        .map_err(|_| Error::Malformed("test parameter signature"))?;
+    let world = if AuthenticatedParameters::is_five_manifest(&manifest) {
+        let bytes: [u8; 32] = read("world-manifest-digest.bin")?
+            .try_into()
+            .map_err(|_| Error::Malformed("fixture World manifest digest"))?;
+        Some(bytes)
+    } else {
+        None
+    };
+    install_selected(
+        &read("program-bundle.norito")?,
+        &manifest,
+        signature,
+        world.as_ref(),
+    )
 }
 
 /// Re-issue an authenticated device bundle whose root-signed manifest is in
@@ -539,21 +572,20 @@ mod tests {
                     (time(&dense), time(&prefix))
                 };
                 assert_eq!(reference.0, actual.0);
-                eprintln!("signed fixed rows {} kind={kind} rows={count} cols={} active={active} prefix_lengths={lengths:?} prefix_first={prefix_first} dense_us={} prefix_us={}",
-                    shape.label, shape.cols(), reference.1, actual.1);
+                eprintln!(
+                    "signed fixed rows {} kind={kind} rows={count} cols={} active={active} prefix_lengths={lengths:?} prefix_first={prefix_first} dense_us={} prefix_us={}",
+                    shape.label,
+                    shape.cols(),
+                    reference.1,
+                    actual.1
+                );
             }
         }
 
         let path = std::path::PathBuf::from(
             std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
         );
-        let read = |name: &str| std::fs::read(path.join(name)).unwrap();
-        let parameters = install(
-            &read("program-bundle.norito"),
-            &read("parameter-manifest.norito"),
-            read("parameter-signature.bin").try_into().unwrap(),
-        )
-        .unwrap();
+        let parameters = install_test_bundle(&path).unwrap();
         for (k, program) in parameters.inner.programs.iter().enumerate() {
             check(&program.primary, &parameters.inner.generators.p, k);
             check(&program.secondary, &parameters.inner.generators.s, k);
@@ -874,8 +906,10 @@ mod tests {
         let held = software
             .verify_staged_completion(&peer_received, &record, &counterparty.parameters)
             .unwrap();
-        let origin = SendOrigin::after_receive(&peer_received.witness, held.head().profile()).unwrap();
-        let back = send10_with_request(&origin, outgoing.payer(), incoming.request().clone()).unwrap();
+        let origin =
+            SendOrigin::after_receive(&peer_received.witness, held.head().profile()).unwrap();
+        let back =
+            send10_with_request(&origin, outgoing.payer(), incoming.request().clone()).unwrap();
         let peer_send = software
             .prepare(&back, held.head(), &counterparty.parameters)
             .unwrap();
@@ -896,10 +930,14 @@ mod tests {
             ))
         ));
         let receipt = counterparty.sign(&selected).unwrap();
-        let peer_review = software.resume(selected.capsule(), &counterparty.parameters).unwrap();
+        let peer_review = software
+            .resume(selected.capsule(), &counterparty.parameters)
+            .unwrap();
         assert!(matches!(
             device.finalize(peer_review, &receipt, &params),
-            Err(Error::AuthorityMismatch("protected Send review confirmation unavailable"))
+            Err(Error::AuthorityMismatch(
+                "protected Send review confirmation unavailable"
+            ))
         ));
         let completed = counterparty
             .finalize(&software, selected, &receipt)
@@ -911,13 +949,10 @@ mod tests {
         assert_eq!(payment.request().body, incoming.request().body);
     }
 
-    /// Two wallets through the real engine under the authenticated program
-    /// bundle of a complete compiler run: A Bootstrap, A Load100, B Bootstrap,
-    /// B-signed Request, A Send10 to B, B Receive; then back: A-signed
-    /// Request, B Send10 to A, A Receive after its own Send. The device runner
-    /// runs this flow with A in platform custody. Here wallet A is issued
-    /// through the `bootstrap` entry a device uses, with a software key
-    /// standing in for its hardware boundary.
+    /// Two software-signed wallets independently install the same authenticated
+    /// program bundle. A loads 100, sends 10 to B, and receives the 10 back.
+    /// Each recipient first sees the released Payment through its own verifier.
+    /// The total starts before both installations and ends after A's final Receive.
     #[test]
     #[ignore = "requires the authenticated full-backend-chain/native-device bundle"]
     fn two_wallet_round_trip_from_bundle() {
@@ -930,23 +965,40 @@ mod tests {
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("output/full-backend-chain/native-device")
                 });
-            let read = |name: &str| {
-                std::fs::read(path.join(name)).map_err(|e| Error::Rejected(e.to_string()))
+            struct Wallet {
+                engine: NativeEngine,
+                parameters: AuthenticatedParameters,
+            }
+            let install = || -> Result<Wallet> {
+                Ok(Wallet {
+                    engine: NativeEngine::default(),
+                    parameters: install_test_bundle(&path)?,
+                })
             };
-            let signature: [u8; 64] = read("parameter-signature.bin")?
-                .try_into()
-                .map_err(|_| Error::Malformed("test parameter signature"))?;
-            let parameters = install(
-                &read("program-bundle.norito")?,
-                &read("parameter-manifest.norito")?,
-                signature,
-            )?;
+            let wallet_a = install()?;
+            let install_a = started.elapsed();
+            let begun = Instant::now();
+            let wallet_b = install()?;
+            let install_b = begun.elapsed();
             eprintln!(
                 "two-wallet timing install: {:.3}s",
                 started.elapsed().as_secs_f64()
             );
-            let engine = NativeEngine::default();
-            let advance = |label: &str,
+            eprintln!(
+                "two-wallet parameter installations: A={:.3}s B={:.3}s",
+                install_a.as_secs_f64(),
+                install_b.as_secs_f64()
+            );
+            assert!(!Arc::ptr_eq(
+                &wallet_a.parameters.installation,
+                &wallet_b.parameters.installation
+            ));
+            assert_eq!(
+                wallet_a.parameters.manifest_digest(),
+                wallet_b.parameters.manifest_digest()
+            );
+            let advance = |wallet: &Wallet,
+                           label: &str,
                            sign: &dyn Fn(&PreparedOperation) -> Result<HardwareAdvanceReceipt>,
                            head: &VerifiedWalletHead,
                            witness: &ExactOperationWitness|
@@ -960,17 +1012,36 @@ mod tests {
                 };
                 let from = unix_ms();
                 let begun = Instant::now();
-                let prepared = engine.prepare(witness, head, &parameters)?;
+                let prepared = wallet.engine.prepare(witness, head, &wallet.parameters)?;
                 let prepare = begun.elapsed().as_secs_f64();
                 let receipt = sign(&prepared)?;
                 let begun = Instant::now();
-                let completed = engine.finalize(prepared, &receipt, &parameters)?;
+                let completed = wallet
+                    .engine
+                    .finalize(prepared, &receipt, &wallet.parameters)?;
                 eprintln!(
                     "two-wallet timing {label}: prepare={prepare:.3}s finalize={:.3}s unix_ms={from}..{}",
                     begun.elapsed().as_secs_f64(),
                     unix_ms()
                 );
                 Ok(completed)
+            };
+
+            let verify_incoming = |wallet: &Wallet, label: &str, bytes: &[u8]| -> Result<_> {
+                assert!(
+                    !wallet
+                        .engine
+                        .has_accepted_payment(bytes, &wallet.parameters),
+                    "{label} must independently verify its incoming Payment"
+                );
+                let begun = Instant::now();
+                let payment = wallet.engine.verify_payment(bytes, &wallet.parameters)?;
+                eprintln!(
+                    "two-wallet timing {label} verifies Payment: {:.3}s",
+                    begun.elapsed().as_secs_f64()
+                );
+                assert_eq!(payment.exact_bytes(), bytes);
+                Ok(payment)
             };
 
             // Wallet A, issued as on a device from an enrollment challenge and
@@ -988,29 +1059,29 @@ mod tests {
                 enrollment_policy: [0xa4; 32],
                 issuer_nonce: [0xa5; 32],
             };
-            let a_bootstrap = bootstrap(&parameters, &challenge, &device_key(&a_key.q))?;
+            let a_bootstrap = bootstrap(&wallet_a.parameters, &challenge, &device_key(&a_key.q))?;
             let ExactOperationWitness::Bootstrap(a_input) = &a_bootstrap else {
                 unreachable!()
             };
-            let a_origin = engine.enrollment_origin(
+            let a_origin = wallet_a.engine.enrollment_origin(
                 a_input,
                 enrollment_marker(&challenge, &device_key(&a_key.q))?,
-                &parameters,
+                &wallet_a.parameters,
             )?;
-            let a_enrolled = advance("A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
+            let a_enrolled = advance(&wallet_a, "A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
             let a_load = load100(&a_bootstrap)?;
-            let a_loaded = advance("A Load100", &a_sign, a_enrolled.head(), &a_load)?;
+            let a_loaded = advance(&wallet_a, "A Load100", &a_sign, a_enrolled.head(), &a_load)?;
 
             // Wallet B, the software counterparty under A's scheme and asset.
-            let b = Counterparty::new(&parameters, a_bootstrap.credential())?;
+            let b = Counterparty::new(&wallet_b.parameters, a_bootstrap.credential())?;
             let b_sign = |prepared: &PreparedOperation| b.sign(prepared);
-            let b_origin = b.origin(&engine, &parameters)?;
-            let b_enrolled = advance("B Bootstrap", &b_sign, &b_origin, b.bootstrap())?;
+            let b_origin = b.origin(&wallet_b.engine, &wallet_b.parameters)?;
+            let b_enrolled = advance(&wallet_b, "B Bootstrap", &b_sign, &b_origin, b.bootstrap())?;
 
             // B makes the Request; A pays it.
             let request = request_to(&a_load, b.credential())?;
             let send = send10_to(&a_load, b.credential(), b.sign_request(&request)?)?;
-            let sent = advance("A Send10 to B", &a_sign, a_loaded.head(), &send)?;
+            let sent = advance(&wallet_a, "A Send10 to B", &a_sign, a_loaded.head(), &send)?;
             let bytes = sent.completion().output_part(1)?;
             eprintln!(
                 "two-wallet complete Payment: {} B, blake3 {}",
@@ -1025,19 +1096,14 @@ mod tests {
             }
 
             // B verifies the exact Payment bytes and receives them.
-            let begun = Instant::now();
-            let payment = engine.verify_payment(&bytes, &parameters)?;
-            eprintln!(
-                "two-wallet timing B verifies Payment: {:.3}s",
-                begun.elapsed().as_secs_f64()
-            );
+            let payment = verify_incoming(&wallet_b, "B", &bytes)?;
             let receive = receive_from(
                 b.bootstrap(),
                 b.bootstrap(),
                 b_enrolled.head().profile(),
                 &payment,
             )?;
-            let received = advance("B Receive", &b_sign, b_enrolled.head(), &receive)?;
+            let received = advance(&wallet_b, "B Receive", &b_sign, b_enrolled.head(), &receive)?;
 
             // Back: A makes the Request, B pays it from what it received, and
             // A receives after its own Send.
@@ -1056,7 +1122,7 @@ mod tests {
                 "two-wallet fixture wallet A Request",
             );
             let back = send10_from(&b_origin, a_bootstrap.credential(), a_request_signature)?;
-            let b_sent = advance("B Send10 to A", &b_sign, received.head(), &back)?;
+            let b_sent = advance(&wallet_b, "B Send10 to A", &b_sign, received.head(), &back)?;
             let back_bytes = b_sent.completion().output_part(1)?;
             eprintln!(
                 "two-wallet complete return Payment: {} B, blake3 {}",
@@ -1070,15 +1136,10 @@ mod tests {
                 )
                 .map_err(|e| Error::Rejected(e.to_string()))?;
             }
-            let begun = Instant::now();
-            let back_payment = engine.verify_payment(&back_bytes, &parameters)?;
-            eprintln!(
-                "two-wallet timing A verifies Payment: {:.3}s",
-                begun.elapsed().as_secs_f64()
-            );
+            let back_payment = verify_incoming(&wallet_a, "A", &back_bytes)?;
             let a_receive =
                 receive_from(&a_bootstrap, &send, sent.head().profile(), &back_payment)?;
-            let a_received = advance("A Receive", &a_sign, sent.head(), &a_receive)?;
+            let a_received = advance(&wallet_a, "A Receive", &a_sign, sent.head(), &a_receive)?;
             eprintln!(
                 "two-wallet timing total: {:.3}s",
                 started.elapsed().as_secs_f64()
@@ -1181,6 +1242,398 @@ mod tests {
                     crate::payment_wire::QR_BUDGET
                 );
             }
+            Ok(())
+        }
+        run().unwrap();
+    }
+
+    /// Native q on the installed bundle: the batched matrix evaluations that
+    /// `deferral::restrict` runs when an operation folds four claims, on both
+    /// curves, at random public points. Per kind it prints the program's size,
+    /// instruction profile and live registers, the process CPU per
+    /// instruction and point on one thread at each lane width, and the time of
+    /// its `kind_degree + 1` evaluations on the pool. Paired runs compare word
+    /// multiplication with full field multiplication at the same points. It
+    /// also measures four-claim folds with and without ArchiveSent and compares
+    /// both restriction algorithms on the repeated points of one-proof steps.
+    #[test]
+    #[ignore = "requires KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS, an authenticated five-family bundle"]
+    fn native_q_on_the_installed_bundle() {
+        use crate::deferral::{Claim, MatPoly};
+        use crate::prof::process_cpu_seconds;
+        use crate::uniform::UniformCircuit;
+        fn timed<T>(f: impl FnOnce() -> T) -> (T, f64, f64) {
+            let (wall, cpu) = (std::time::Instant::now(), process_cpu_seconds());
+            let out = f();
+            (
+                out,
+                wall.elapsed().as_secs_f64(),
+                process_cpu_seconds() - cpu,
+            )
+        }
+        fn side<F: crate::fs::Scalar>(
+            name: &str,
+            poly: &MatPoly<F>,
+            programs: &[&UniformCircuit<F>],
+        ) {
+            let one = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("a one-thread pool");
+            let mut rng = crate::fs::SpikeRng::new(b"native q on the installed bundle");
+            let (mut pool_cpu, mut pool_wall) = (0.0, 0.0);
+            for (k, (kind, c)) in poly.kinds.iter().zip(programs).enumerate() {
+                assert_eq!(
+                    (kind.sx, kind.sz),
+                    (c.shape.sx, c.shape.sz()),
+                    "kind {k} is its program"
+                );
+                let ((muls, scales, ops), (registers, slots)) =
+                    (c.plan_stats(), c.plan_registers());
+                let m = poly.kind_degree(k, 3) + 1;
+                let points: Vec<(Vec<F>, Vec<F>, Vec<F>)> = (0..m)
+                    .map(|_| {
+                        (
+                            (0..2).map(|_| rng.scalar()).collect(),
+                            (0..kind.sx).map(|_| rng.scalar()).collect(),
+                            (0..kind.sz).map(|_| rng.scalar()).collect(),
+                        )
+                    })
+                    .collect();
+                let refs: Vec<(&[F], &[F], &[F])> = points
+                    .iter()
+                    .map(|(ch, rx, ry)| (&ch[..], &rx[..], &ry[..]))
+                    .collect();
+                let many = kind.eval_many.as_ref().expect("a uniform kind");
+                let probe = &refs[..16.min(m)];
+                let reference: Vec<(F, F, F)> = probe
+                    .iter()
+                    .map(|(ch, rx, ry)| (kind.eval)(ch, rx, ry))
+                    .collect();
+                println!(
+                    "native q {name} kind {k}: sx {} sz {} deg {:?}; {ops} instructions ({muls} products, {scales} by constants), {registers} registers for {slots} slots ({} MiB per lane); {m} points",
+                    kind.sx,
+                    kind.sz,
+                    kind.deg,
+                    (registers * std::mem::size_of::<F>()) >> 20,
+                );
+                let (scale_classes, rest) = c.plan_op_profile();
+                println!(
+                    "  by constants below 2^16 / 2^32 / 2^64 / other powers of two / other (or negated): {scale_classes:?}; adds, subs, constant loads, squares: {rest:?}; rewrites (const products, scale of scale, sum of equal scales, unit scales, product of a scale): {:?}",
+                    c.plan_rewrite_profile()
+                );
+                // One thread over the first 16 points: CPU per instruction
+                // and point at each lane width. Then the pool over every
+                // point at the default width.
+                for lanes in [4, 8, 16] {
+                    crate::uniform::set_q_lanes(lanes);
+                    let (a, wall1, cpu1) = timed(|| one.install(|| many(probe)));
+                    assert!(
+                        a == reference,
+                        "kind {k}: batched lanes equal scalar evaluations"
+                    );
+                    println!(
+                        "  {lanes:>2} lanes, one thread, {} points: {wall1:.3} s wall {cpu1:.3} s CPU, {:.2} ns CPU per instruction and point",
+                        probe.len(),
+                        cpu1 * 1e9 / (ops * probe.len()) as f64,
+                    );
+                }
+                // Compare the installed evaluator against full field products on
+                // exactly the same program, lane width, worker and points. Alternate
+                // execution order to reduce bias from load and clock changes.
+                crate::uniform::set_q_lanes(4);
+                let mut samples = [[0.0; 4]; 2];
+                for round in 0..4 {
+                    for variant in [round % 2, 1 - round % 2] {
+                        let (values, _, cpu) = timed(|| {
+                            one.install(|| match variant {
+                                0 => c.evals_many(probe),
+                                _ => many(probe),
+                            })
+                        });
+                        assert_eq!(values, reference);
+                        samples[variant][round] = cpu;
+                    }
+                }
+                let [full, word] = samples.map(|mut cpu| {
+                    cpu.sort_by(f64::total_cmp);
+                    (cpu[1] + cpu[2]) / 2.0
+                });
+                println!(
+                    "  4 lanes, median of four CPU samples: full products {full:.4} s, word products {word:.4} s"
+                );
+                crate::uniform::set_q_lanes(0);
+                let (b, wall, cpu) = timed(|| many(&refs));
+                assert!(
+                    b[..probe.len()] == reference[..],
+                    "kind {k}: the pool equals the scalar evaluations"
+                );
+                println!(
+                    "  pool of {}, {m} points: {wall:.3} s wall {cpu:.3} s CPU",
+                    rayon::current_num_threads(),
+                );
+                pool_cpu += cpu;
+                pool_wall += wall;
+            }
+            // Random claims select every kind; claims that keep c2 zero (a
+            // history without ArchiveSent: every fresh claim of the other
+            // kinds and every accumulator folded from them) do not select
+            // ArchiveSent anywhere on the curve.
+            let n = poly.n();
+            let c2 = poly.c2_at();
+            for archive in [true, false] {
+                let claims: [Claim<F>; 4] = std::array::from_fn(|_| {
+                    let mut point: Vec<F> = (0..n).map(|_| rng.scalar()).collect();
+                    if let (false, Some(j)) = (archive, c2) {
+                        point[j] = F::ZERO;
+                    }
+                    Claim {
+                        point,
+                        value: F::ZERO,
+                    }
+                });
+                let (q, wall, cpu) = timed(|| crate::deferral::restrict(poly, &claims));
+                println!(
+                    "native q {name}, {} claims: degree {} ({} coefficients); restrict on the pool {wall:.3} s wall {cpu:.3} s CPU; every kind on the pool: {pool_cpu:.3} s CPU, {pool_wall:.3} s wall",
+                    if archive { "random" } else { "c2 = 0" },
+                    poly.degree(),
+                    q.len()
+                );
+            }
+            for (step, k) in [
+                ("first Load", crate::full::BOOTSTRAP),
+                ("later Send", crate::full::RECEIVE),
+            ] {
+                let inherited = if k == crate::full::BOOTSTRAP {
+                    poly.empty_claim()
+                } else {
+                    let mut point: Vec<F> = (0..n).map(|_| rng.scalar()).collect();
+                    point[c2.expect("five installed kinds")] = F::ZERO;
+                    Claim {
+                        point,
+                        value: F::ZERO,
+                    }
+                };
+                let kind = &poly.kinds[k];
+                let rx: Vec<_> = (0..kind.sx).map(|_| rng.scalar()).collect();
+                let ry: Vec<_> = (0..kind.sz).map(|_| rng.scalar()).collect();
+                let challenges = [rng.scalar(), rng.scalar()];
+                let fresh = Claim {
+                    point: poly.fresh_point(k, rng.scalar(), &challenges, &rx, &ry),
+                    value: F::ZERO,
+                };
+                let claims = [inherited.clone(), fresh.clone(), inherited, fresh];
+                let mut samples = [[0.0; 2]; 2];
+                for round in 0..2 {
+                    let mut outputs = Vec::new();
+                    for variant in [round, 1 - round] {
+                        let (q, _, cpu) = timed(|| match variant {
+                            0 => crate::deferral::restrict(poly, &claims),
+                            _ => crate::deferral::restrict_repeated_pair(
+                                poly,
+                                &claims[0].point,
+                                &claims[1].point,
+                            ),
+                        });
+                        samples[variant][round] = cpu;
+                        outputs.push(q);
+                    }
+                    assert_eq!(outputs[0], outputs[1], "{name} {step}: all q coefficients");
+                }
+                let [cubic, line] = samples.map(|[a, b]| (a + b) / 2.0);
+                println!(
+                    "native q {name}, one-proof {step}: mean CPU across two alternating runs, generic cubic {cubic:.3} s, repeated pair {line:.3} s"
+                );
+            }
+        }
+        let path = std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS")
+            .map(std::path::PathBuf::from)
+            .expect("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS names the bundle directory");
+        let parameters = install_test_bundle(&path).unwrap();
+        let set = &parameters.inner;
+        let primary: Vec<&UniformCircuit<Fp>> = set.programs.iter().map(|p| &*p.primary).collect();
+        let secondary: Vec<&UniformCircuit<crate::verifier::Fq>> =
+            set.programs.iter().map(|p| &*p.secondary).collect();
+        side("P", &set.generators.defer_p, &primary);
+        side("S", &set.generators.defer_s, &secondary);
+    }
+
+    /// The canonical provider's dispatch order for every operation of an
+    /// ordinary Send and its Receive: reconstruct the selected capsule,
+    /// finalize it, then check the completion it staged. That check gets the
+    /// head finalization verified. Another owner verifies the output itself,
+    /// and so does a cold recovery from the retained capsule and completion.
+    #[test]
+    #[ignore = "requires the authenticated five-family native-device bundle; proves five operations"]
+    fn staged_completion_reuses_the_finalized_output_for_send_and_receive() {
+        fn run() -> Result<()> {
+            use std::time::Instant;
+            let path = std::path::PathBuf::from(
+                std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap(),
+            );
+            let parameters = install_test_bundle(&path)?;
+            let engine = NativeEngine::default();
+            let same = |a: &VerifiedWalletHead, b: &VerifiedWalletHead| {
+                a.profile == b.profile
+                    && a.pair[..] == b.pair[..]
+                    && a.custody_digest == b.custody_digest
+            };
+            let advance = |label: &str,
+                           sign: &dyn Fn(&PreparedOperation) -> Result<HardwareAdvanceReceipt>,
+                           head: &VerifiedWalletHead,
+                           witness: &ExactOperationWitness|
+             -> Result<CompletedOperation> {
+                let refused = |what: &str| Error::Rejected(format!("{label}: {what}"));
+                let mut prepared = engine.prepare(witness, head, &parameters)?;
+                if matches!(witness, ExactOperationWitness::Receive { .. }) {
+                    engine::check_signed_receive_inputs(&engine, &mut prepared, &parameters)?;
+                }
+                let receipt = sign(&prepared)?;
+                let capsule = prepared.capsule().clone();
+                drop(prepared);
+
+                let begun = Instant::now();
+                let prepared = engine.resume(&capsule, &parameters)?;
+                let resume = begun.elapsed().as_secs_f64();
+                let begun = Instant::now();
+                let (prepared, completed) =
+                    engine.finalize_selected(prepared, &receipt, &parameters)?;
+                let finalize = begun.elapsed().as_secs_f64();
+                // The record as it is read back from storage.
+                let record =
+                    CompletionRecord::decode(&completed.completion().encode()?, capsule.wallet())?;
+                let begun = Instant::now();
+                let staged = engine.verify_staged_completion(&prepared, &record, &parameters)?;
+                let same_owner = begun.elapsed().as_secs_f64();
+                if !Arc::ptr_eq(&completed.head.pair, &staged.head.pair)
+                    || !same(&completed.head, &staged.head)
+                    || staged.completion().encode()? != completed.completion().encode()?
+                {
+                    return Err(refused("the staged check did not get the finalized head"));
+                }
+
+                // A second owner reconstructs the same capsule; its staged
+                // check verifies the output in full. So does a cold recovery.
+                let second = NativeEngine::default();
+                let reconstructed = second.resume(&capsule, &parameters)?;
+                let begun = Instant::now();
+                let independent =
+                    second.verify_staged_completion(&reconstructed, &record, &parameters)?;
+                let other_owner = begun.elapsed().as_secs_f64();
+                let begun = Instant::now();
+                let recovered =
+                    NativeEngine::default().verify_completion(&capsule, &record, &parameters)?;
+                let recovery = begun.elapsed().as_secs_f64();
+                for other in [&independent, &recovered] {
+                    if Arc::ptr_eq(&completed.head.pair, &other.head.pair)
+                        || !same(&completed.head, &other.head)
+                    {
+                        return Err(refused("another owner did not verify the output itself"));
+                    }
+                }
+
+                // The owner that holds the output refuses an altered one,
+                // inside a released Payment too, and still holds the original.
+                let payment = record.output_part(1)?;
+                let length = record.frame.output.len();
+                let mut places = vec![length / 3, length - 1];
+                if !payment.is_empty() {
+                    let at = record
+                        .frame
+                        .output
+                        .windows(payment.len())
+                        .position(|window| window == payment.as_slice())
+                        .ok_or(Error::Malformed("released Payment in the output"))?;
+                    places.push(at + payment.len() / 2);
+                }
+                for at in places {
+                    let mut altered = record.clone();
+                    altered.frame.output[at] ^= 1;
+                    if engine
+                        .verify_staged_completion(&prepared, &altered, &parameters)
+                        .is_ok()
+                    {
+                        return Err(refused("an altered output passed the staged check"));
+                    }
+                }
+                let again = engine.verify_staged_completion(&prepared, &record, &parameters)?;
+                if !Arc::ptr_eq(&completed.head.pair, &again.head.pair) {
+                    return Err(refused("a refusal displaced the held output"));
+                }
+                eprintln!(
+                    "output reuse {label}: resume={resume:.3}s finalize={finalize:.3}s \
+                     staged_same_owner={same_owner:.3}s staged_other_owner={other_owner:.3}s \
+                     cold_recovery={recovery:.3}s output_bytes={length} payment_bytes={}",
+                    payment.len()
+                );
+                Ok(completed)
+            };
+
+            // Wallet A, issued as on a device, then loaded.
+            let a_key = crate::full::WalletKey::labelled("two-wallet fixture wallet A");
+            let a_sign = |prepared: &PreparedOperation| {
+                sign_selected(prepared, &a_key.d, "two-wallet fixture wallet A receipt")
+            };
+            let challenge = KagemushaWalletEnrollmentChallengeV1 {
+                version: 1,
+                scheme_id: scheme().scheme_id(),
+                asset_digest: [0xa1; 32],
+                account_digest: [0xa2; 32],
+                app_policy: [0xa3; 32],
+                enrollment_policy: [0xa4; 32],
+                issuer_nonce: [0xa5; 32],
+            };
+            let a_bootstrap = bootstrap(&parameters, &challenge, &device_key(&a_key.q))?;
+            let ExactOperationWitness::Bootstrap(a_input) = &a_bootstrap else {
+                unreachable!()
+            };
+            let a_origin = engine.enrollment_origin(
+                a_input,
+                enrollment_marker(&challenge, &device_key(&a_key.q))?,
+                &parameters,
+            )?;
+            let a_enrolled = advance("A Bootstrap", &a_sign, &a_origin, &a_bootstrap)?;
+            let a_load = load100(&a_bootstrap)?;
+            let a_loaded = advance("A Load100", &a_sign, a_enrolled.head(), &a_load)?;
+
+            // Wallet B, the software counterparty under A's scheme and asset.
+            let b = Counterparty::new(&parameters, a_bootstrap.credential())?;
+            let b_sign = |prepared: &PreparedOperation| b.sign(prepared);
+            let b_origin = b.origin(&engine, &parameters)?;
+            let b_enrolled = advance("B Bootstrap", &b_sign, &b_origin, b.bootstrap())?;
+
+            // B makes the Request; A pays it; B verifies the exact Payment and receives it.
+            let request = request_to(&a_load, b.credential())?;
+            let send = send10_to(&a_load, b.credential(), b.sign_request(&request)?)?;
+            let sent = advance("A Send10 to B", &a_sign, a_loaded.head(), &send)?;
+            let bytes = sent.completion().output_part(1)?;
+            let payment = engine.verify_payment(&bytes, &parameters)?;
+            let receive = receive_from(
+                b.bootstrap(),
+                b.bootstrap(),
+                b_enrolled.head().profile(),
+                &payment,
+            )?;
+            let received = advance("B Receive", &b_sign, b_enrolled.head(), &receive)?;
+
+            let ExactOperationWitness::Send(sent_step) = &send else {
+                unreachable!()
+            };
+            let ExactOperationWitness::Receive {
+                step: received_step,
+                ..
+            } = &receive
+            else {
+                unreachable!()
+            };
+            assert_eq!(sent_step.after_core[9], Fp::from(90), "A keeps 90");
+            assert_eq!(received_step.after_core[9], Fp::from(10), "B holds 10");
+            assert!(!bytes.is_empty(), "Send releases a Payment");
+            assert!(
+                received.completion().output_part(1)?.is_empty(),
+                "Receive emits no Payment"
+            );
+            require_credited(b_enrolled.head().profile(), received.head().profile())?;
             Ok(())
         }
         run().unwrap();
@@ -1609,6 +2062,7 @@ impl Counterparty {
                 manifest_digest: parameters.manifest_digest,
                 confirmation: ConfirmationScope::FixtureSend,
                 inner: Arc::clone(&parameters.inner),
+                verified_head: Default::default(),
             },
             key,
             bootstrap,
@@ -1695,7 +2149,9 @@ impl Counterparty {
             || prepared.capsule().payment_key() != &own.body[130..195]
             || prepared.manifest_digest != self.parameters.manifest_digest
         {
-            return Err(Error::AuthorityMismatch("software fixture counterparty preparation"));
+            return Err(Error::AuthorityMismatch(
+                "software fixture counterparty preparation",
+            ));
         }
         Ok(())
     }

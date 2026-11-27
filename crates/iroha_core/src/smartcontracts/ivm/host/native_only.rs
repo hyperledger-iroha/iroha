@@ -72,7 +72,7 @@ mod tests {
         });
         assert!(!called.get());
         assert!(!absent.is_present());
-        assert!(std::panic::catch_unwind(|| **&absent).is_err());
+        assert!(std::panic::catch_unwind(|| *absent).is_err());
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 *absent.require_mut() = 11;

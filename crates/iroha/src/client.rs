@@ -144,7 +144,7 @@ use iroha_data_model::{
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
     da::{
-        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeProposalV1},
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
@@ -5537,7 +5537,7 @@ pub struct DaIngestSubmitResult {
     /// Parsed ingest receipt, when the server returns one.
     pub receipt: Option<DaIngestReceipt>,
     /// Exact durable pin scope returned for producer authorization, when present.
-    pub pin_scope: Option<DaPinScopeV1>,
+    pub pin_scope: Option<DaPinScopeProposalV1>,
     /// Rendered JSON form of the receipt for logging/persistence.
     pub receipt_json: Option<String>,
     /// Optional PDP commitment advertised via the `sora-pdp-commitment` header.
@@ -5566,7 +5566,7 @@ struct DaIngestResponsePayload {
     status: String,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
 }
 /// Aggregated portfolio totals returned by the UAID portfolio endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18508,7 +18508,7 @@ impl Client {
     pub fn authorize_da_pin_scope(
         &self,
         request: &DaIngestRequest,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
         receipt: &DaIngestReceipt,
         operator: &PublicKey,
     ) -> Result<DaIngestRequest> {
@@ -18536,7 +18536,7 @@ impl Client {
     pub fn authorize_and_retry_da_ingest(
         &self,
         request: &DaIngestRequest,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
         receipt: &DaIngestReceipt,
         operator: &PublicKey,
     ) -> Result<DaIngestSubmitResult> {
@@ -18667,7 +18667,7 @@ impl Client {
     fn authorize_and_retry_da_ingest_with_request(
         &self,
         request: &DaIngestRequest,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
         receipt: &DaIngestReceipt,
         operator: &PublicKey,
     ) -> Result<(DaIngestSubmitResult, DaIngestRequest)> {
@@ -18686,7 +18686,7 @@ impl Client {
     }
     fn validate_da_ingest_scoped_response<'a>(
         request: &DaIngestRequest,
-        expected_scope: &DaPinScopeV1,
+        expected_scope: &DaPinScopeProposalV1,
         result: &'a DaIngestSubmitResult,
     ) -> Result<&'a DaIngestReceipt> {
         if result.status != "accepted" && result.status != "pending_pin_authorization" {
@@ -24214,7 +24214,7 @@ mod tests {
         CONTRACT_CODE_ARTIFACT_MAX_BYTES, CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES,
         CanonicalRequestWitnessV1, CapabilityProbeError, ChainId, Client, ClientBuilder,
         ContractCodeBytesResponse, ContractManifestResponse, DATA_MODEL_VERSION, DaIngestParams,
-        DaIngestReceipt, DaIngestRequest, DaIngestResponsePayload, DaPinScopeV1,
+        DaIngestReceipt, DaIngestRequest, DaIngestResponsePayload, DaPinScopeProposalV1,
         DataModelCompatibility, DataModelCompatibilityError, DefaultHttpTransport,
         DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1, ErrorEnvelope,
         Executable, FEE_QUOTE_RESPONSE_MAX_BYTES, FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES,
@@ -30995,41 +30995,43 @@ mod tests {
             .expect("signed request");
         let endpoint = base_url().join("v1/da/ingest").unwrap();
         let mut actions = Vec::new();
-        let result = data_availability::submit_ingest_phase(&endpoint, &request, |url, body| {
-            assert_eq!(url.path(), "/v1/da/ingest/parts");
-            let message: DaUploadRequest = norito::json::from_slice(&body)?;
-            assert_eq!(
-                message.upload.wire_hash,
-                BlobDigest::from_hash(blake3::hash(&request.payload))
-            );
-            match message.action {
-                DaUploadAction::Begin => {
-                    actions.push("begin");
-                    Ok((br#"{"next_part":1}"#.to_vec(), ()))
+        let result =
+            super::data_availability::submit_ingest_phase(&endpoint, &request, |url, body| {
+                assert_eq!(url.path(), "/v1/da/ingest/parts");
+                let message: DaUploadRequest = norito::json::from_slice(&body)?;
+                assert_eq!(
+                    message.upload.wire_hash,
+                    BlobDigest::from_hash(blake3::hash(&request.payload))
+                );
+                match message.action {
+                    DaUploadAction::Begin => {
+                        actions.push("begin");
+                        Ok((br#"{"next_part":1}"#.to_vec(), ()))
+                    }
+                    DaUploadAction::Put(part) => {
+                        assert_eq!(part.index, 1);
+                        assert_eq!(part.bytes_b64, "qw==");
+                        actions.push("put");
+                        Ok((br#"{"next_part":2}"#.to_vec(), ()))
+                    }
+                    DaUploadAction::Finish(mut meta) => {
+                        assert!(meta.payload.is_empty());
+                        meta.payload.clone_from(&request.payload);
+                        assert_eq!(*meta, request);
+                        actions.push("finish");
+                        Ok((b"receipt".to_vec(), ()))
+                    }
+                    DaUploadAction::Release => panic!("client released its pending authorization"),
                 }
-                DaUploadAction::Put(part) => {
-                    assert_eq!(part.index, 1);
-                    assert_eq!(part.bytes_b64, "qw==");
-                    actions.push("put");
-                    Ok((br#"{"next_part":2}"#.to_vec(), ()))
-                }
-                DaUploadAction::Finish(mut meta) => {
-                    assert!(meta.payload.is_empty());
-                    meta.payload.clone_from(&request.payload);
-                    assert_eq!(*meta, request);
-                    actions.push("finish");
-                    Ok((b"receipt".to_vec(), ()))
-                }
-                DaUploadAction::Release => panic!("client released its pending authorization"),
-            }
-        })
-        .unwrap();
+            })
+            .unwrap();
         assert_eq!(result.0, b"receipt");
         assert_eq!(actions, ["begin", "put", "finish"]);
         for reported in [0, 3] {
-            let result = data_availability::submit_ingest_phase(&endpoint, &request, |_, _| {
-                Ok((format!(r#"{{"next_part":{reported}}}"#).into_bytes(), ()))
-            });
+            let result =
+                super::data_availability::submit_ingest_phase(&endpoint, &request, |_, _| {
+                    Ok((format!(r#"{{"next_part":{reported}}}"#).into_bytes(), ()))
+                });
             assert!(result.is_err());
         }
     }
@@ -31058,13 +31060,15 @@ mod tests {
                 .expect("nonzero DA receipt signature fixture"),
         }
     }
-    fn sample_pin_scope(request: &DaIngestRequest) -> DaPinScopeV1 {
-        let mut scope = DaPinScopeV1::new(
-            &request.authorization(),
-            StorageTicketId::new([0x66; 32]),
-            ManifestDigest::new([0x77; 32]),
-            Default::default(),
-            None,
+    fn sample_pin_scope(request: &DaIngestRequest) -> DaPinScopeProposalV1 {
+        let mut scope = DaPinScopeProposalV1::new(
+            iroha_data_model::da::ingest::DaPinScopeV1::new(
+                &request.authorization(),
+                StorageTicketId::new([0x66; 32]),
+                ManifestDigest::new([0x77; 32]),
+                None,
+            ),
+            BlobDigest::default(),
         );
         scope.commitment_digest = sample_ingest_receipt_for_scope(request, &scope)
             .commitment_record(
@@ -31076,7 +31080,7 @@ mod tests {
     }
     fn sample_ingest_receipt_for_scope(
         request: &DaIngestRequest,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
     ) -> DaIngestReceipt {
         let mut receipt = DaIngestReceipt {
             client_blob_id: request.client_blob_id,
@@ -31738,7 +31742,7 @@ mod tests {
     }
     fn da_ingest_pin_authorization_responses(
         receipt: &DaIngestReceipt,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
         commitment_b64: &str,
     ) -> (HttpResponse<Vec<u8>>, HttpResponse<Vec<u8>>) {
         let pending_payload = DaIngestResponsePayload {

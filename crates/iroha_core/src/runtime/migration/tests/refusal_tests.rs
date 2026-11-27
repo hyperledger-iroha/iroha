@@ -13,7 +13,7 @@ use crate::runtime::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::BinaryHeap,
 };
 
 thread_local! {
@@ -36,7 +36,8 @@ fn with_probe_refusal<T>(action: impl FnOnce() -> T) -> T {
 }
 
 fn probe() -> MigrationResult<()> {
-    let values = HashMap::from([(3_u64, 7_u64), (1, 9)]);
+    // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+    let values = BinaryHeap::from([(3_u64, 7_u64), (1, 9)]);
     let result = norito::with_decode_limits_scope(
         norito::DecodeLimits::new(
             usize::MAX,

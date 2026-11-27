@@ -119,18 +119,31 @@ fn apple_kernel_revoked_search_and_readless_selected_directory_are_rejected() {
 fn apple_kernel_search_ancestor_replacement_and_alias_are_rejected() {
     let mut fixture = fixture();
     let directory = Directory::open_exact(&fixture.leaf).unwrap();
+    // A sibling under the same root shares every ancestor above the search-only one.
+    let sibling = fixture.root.join("sibling");
+    fs::create_dir(&sibling).unwrap();
+    fs::set_permissions(&sibling, fs::Permissions::from_mode(0o700)).unwrap();
+    let unaffected = Directory::open_exact(&sibling).unwrap();
     let retired = fixture.root.join("retired");
     fixture.restore.0.push(retired.clone());
+    // Hosted Darwin refuses renaming the search-only directory. Grant owner
+    // write only for the move, then return the moved original to search-only.
+    // The fixture root stays in place, so revalidation reaches this ancestor.
+    fs::set_permissions(&fixture.search, fs::Permissions::from_mode(0o700)).unwrap();
     fs::rename(&fixture.search, &retired).unwrap();
+    fs::set_permissions(&retired, fs::Permissions::from_mode(0o100)).unwrap();
     fs::create_dir(&fixture.search).unwrap();
     fs::create_dir(&fixture.leaf).unwrap();
     fs::set_permissions(&fixture.leaf, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&fixture.search, fs::Permissions::from_mode(0o100)).unwrap();
+    // Every ancestor above the replaced directory still matches.
+    unaffected.revalidate().unwrap();
     assert!(directory.revalidate().is_err());
     fs::set_permissions(&fixture.search, fs::Permissions::from_mode(0o700)).unwrap();
     fs::remove_dir(&fixture.leaf).unwrap();
     fs::remove_dir(&fixture.search).unwrap();
     symlink(&retired, &fixture.search).unwrap();
+    unaffected.revalidate().unwrap();
     assert!(directory.revalidate().is_err());
     assert!(Directory::open_exact(&fixture.leaf).is_err());
 }

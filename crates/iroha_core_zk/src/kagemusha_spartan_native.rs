@@ -39,9 +39,9 @@ mod local_blacklist;
 mod open_request;
 mod settlement;
 pub use settlement::UnloadSettlement;
-mod transfer_maps;
-mod transfer_actions;
 mod balance;
+mod transfer_actions;
+mod transfer_maps;
 mod wallet_actions;
 
 type TimePair = (
@@ -306,18 +306,28 @@ impl<'a, E: Engine> TransitionOwner<'a, E> {
     /// Bind the provider's transition owner to already authenticated parameters.
     #[must_use]
     pub fn new(engine: &'a E, parameters: &'a AuthenticatedParameters) -> Self {
-        Self { engine, parameters, prepared: std::cell::RefCell::new(None) }
+        Self {
+            engine,
+            parameters,
+            prepared: std::cell::RefCell::new(None),
+        }
     }
 
     // One provider dispatch can reconcile one pending capsule and then process
     // a different candidate. The complete capsule and this owner's immutable
     // parameters determine whether its private static witness can be reused.
-    fn take_prepared(&self, capsule: &RecoveryCapsule) -> Result<native::PreparedOperation, ProviderError> {
+    fn take_prepared(
+        &self,
+        capsule: &RecoveryCapsule,
+    ) -> Result<native::PreparedOperation, ProviderError> {
         if let Some(prepared) = self.prepared.take()
-            && prepared.capsule() == capsule {
+            && prepared.capsule() == capsule
+        {
             return Ok(prepared);
         }
-        self.engine.resume(capsule, self.parameters).map_err(provider_error)
+        self.engine
+            .resume(capsule, self.parameters)
+            .map_err(provider_error)
     }
 }
 impl<E: Engine> KagemushaWalletTransitionOwnerV1<RecoveryCapsule, CompletionRecord>
@@ -326,19 +336,30 @@ impl<E: Engine> KagemushaWalletTransitionOwnerV1<RecoveryCapsule, CompletionReco
     fn before_selection(&self, capsule: &RecoveryCapsule) -> Result<(), ProviderError> {
         let prepared = match self.prepared.take() {
             Some(prepared) if prepared.capsule() == capsule => {
-                self.engine.recheck_selection(&prepared, self.parameters).map_err(provider_error)?;
+                self.engine
+                    .recheck_selection(&prepared, self.parameters)
+                    .map_err(provider_error)?;
                 prepared
             }
-            _ => self.engine.prepare_selection(capsule, self.parameters).map_err(provider_error)?,
+            _ => self
+                .engine
+                .prepare_selection(capsule, self.parameters)
+                .map_err(provider_error)?,
         };
         self.prepared.replace(Some(prepared));
         Ok(())
     }
-    fn require_selected(&self, capsule: &RecoveryCapsule, marker: &crate::kagemusha_wallet_advance_v1::KagemushaWalletMarkerRecordV1) -> Result<(), ProviderError> {
+    fn require_selected(
+        &self,
+        capsule: &RecoveryCapsule,
+        marker: &crate::kagemusha_wallet_advance_v1::KagemushaWalletMarkerRecordV1,
+    ) -> Result<(), ProviderError> {
         capsule.require_marker(marker.marker())?;
         if matches!(capsule.kind(), 3 | 6) {
             let prepared = self.take_prepared(capsule)?;
-            self.engine.require_selected_debit(&prepared, marker.archive_checkpoint(), self.parameters).map_err(provider_error)?;
+            self.engine
+                .require_selected_debit(&prepared, marker.archive_checkpoint(), self.parameters)
+                .map_err(provider_error)?;
             self.prepared.replace(Some(prepared));
         }
         Ok(())
@@ -366,13 +387,16 @@ impl<E: Engine> KagemushaWalletTransitionOwnerV1<RecoveryCapsule, CompletionReco
         if let Some(prepared) = self.prepared.take()
             && prepared.capsule() == capsule
         {
-            self.engine.verify_staged_completion(&prepared, record, self.parameters)
+            self.engine
+                .verify_staged_completion(&prepared, record, self.parameters)
                 .map_err(provider_error)?;
             self.prepared.replace(Some(prepared));
             return Ok(());
         }
-        self.engine.verify_completion(capsule, record, self.parameters)
-            .map(drop).map_err(provider_error)
+        self.engine
+            .verify_completion(capsule, record, self.parameters)
+            .map(drop)
+            .map_err(provider_error)
     }
     fn assemble(
         &self,
@@ -586,8 +610,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             wallet,
             witness.policy_counterparties(),
         )?;
-        let engine = self.engine_for_epoch(slot, wallet, witness.load_epoch_selector().map_err(provider_error)?)?;
-        engine.prepare(witness, &head, &self.parameters)
+        let engine = self.engine_for_epoch(
+            slot,
+            wallet,
+            witness.load_epoch_selector().map_err(provider_error)?,
+        )?;
+        engine
+            .prepare(witness, &head, &self.parameters)
             .map_err(provider_error)
     }
 
@@ -610,7 +639,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         };
         let capsule = prepared.capsule().clone();
         self.require_account(slot, Some(prepared.credential()))?;
-        self.check_fresh_transfer_advance(slot,&prepared)?;
+        self.check_fresh_transfer_advance(slot, &prepared)?;
         let _debit_window = self.debit_window(slot, Some(&capsule))?;
         let engine = self.engine_for_capsule(slot, &capsule)?;
         // A0 completes the incumbent with its own protected Load committee.
@@ -619,7 +648,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
         let incumbent = TransitionOwner::new(&incumbent_engine, &self.parameters);
         let owner = TransitionOwner::new(&engine, &self.parameters);
         let counterparties = prepared.policy_counterparties();
-        owner.prepared.replace(engine.retain_reconstruction(prepared, &self.parameters));
+        owner
+            .prepared
+            .replace(engine.retain_reconstruction(prepared, &self.parameters));
         let expected = if let Some(marker_digest) = capsule.enrollment_marker() {
             KagemushaWalletExpectedHeadV1::Enrollment { marker_digest }
         } else {
@@ -646,17 +677,21 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             capsule,
             growth_bytes: 0,
         };
-        let result =
-            self.provider
-                .advance_with_local_policy(slot, &incumbent, &owner, &request, |provider| {
-                    local_blacklist::check_accounts(
-                        provider,
-                        slot,
-                        *self.parameters.manifest_digest(),
-                        *request.capsule.wallet(),
-                        counterparties,
-                    )
-                })?;
+        let result = self.provider.advance_with_local_policy(
+            slot,
+            &incumbent,
+            &owner,
+            &request,
+            |provider| {
+                local_blacklist::check_accounts(
+                    provider,
+                    slot,
+                    *self.parameters.manifest_digest(),
+                    *request.capsule.wallet(),
+                    counterparties,
+                )
+            },
+        )?;
         if !matches!(
             result,
             crate::kagemusha_wallet_advance_v1::KagemushaWalletAdvanceOutcomeV1::Pending { .. }
@@ -672,15 +707,23 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
     ///
     /// # Errors
     /// Refuses malformed recovery or incomplete cryptographic authority.
-    pub fn resume(&mut self, capsule: &RecoveryCapsule) -> native::Result<native::PreparedOperation> {
-        let slot = self.admitted_wallet_slot(capsule.wallet())
+    pub fn resume(
+        &mut self,
+        capsule: &RecoveryCapsule,
+    ) -> native::Result<native::PreparedOperation> {
+        let slot = self
+            .admitted_wallet_slot(capsule.wallet())
             .map_err(|_| native::Error::Unavailable("future account authorization required"))?;
         let epoch = capsule.load_epoch_selector()?;
-        let engine = self.engine_for_epoch(&slot, *capsule.wallet(), epoch).map_err(|error| match error {
-            ProviderError::NoMemory | ProviderError::DecodeResource(_) => native::Error::ResourceLimit,
-            ProviderError::Invalid { field } => native::Error::AuthorityMismatch(field),
-            _ => native::Error::Unavailable("future Load epoch unavailable"),
-        })?;
+        let engine = self
+            .engine_for_epoch(&slot, *capsule.wallet(), epoch)
+            .map_err(|error| match error {
+                ProviderError::NoMemory | ProviderError::DecodeResource(_) => {
+                    native::Error::ResourceLimit
+                }
+                ProviderError::Invalid { field } => native::Error::AuthorityMismatch(field),
+                _ => native::Error::Unavailable("future Load epoch unavailable"),
+            })?;
         engine.resume(capsule, &self.parameters)
     }
 

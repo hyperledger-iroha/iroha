@@ -37,7 +37,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
                 field: "future time policy scheme",
             });
         }
-        let prepared = self.engine_for_capsule(slot, &capsule)?
+        let prepared = self
+            .engine_for_capsule(slot, &capsule)?
             .resume(&capsule, &self.parameters)
             .map_err(provider_error)?;
         self.require_account(slot, Some(prepared.credential()))?;

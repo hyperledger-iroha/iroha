@@ -2,17 +2,17 @@
 
 use crate::air::{BetaPowers, CompiledAir};
 use crate::circuit::Circuit;
-use crate::field::{Fp, Fp4, GENERATOR};
+use crate::field::{Fp, Fp4, GENERATOR, batch_inverse_ext};
 use crate::fri;
 use crate::merkle::{Digest, hash_leaf, verify_batch};
 use crate::ntt::{Domain, barycentric_weights, evaluate_with_weights};
 use crate::params::Params;
 use crate::proof::{Proof, Statement};
 use crate::prover::{
-    DeepLayout, basis, encode_multiplicities, from_components, initial_transcript, table_inverses,
-    table_sum,
+    DeepLayout, basis, encode_multiplicities, from_components, initial_transcript, logup_challenges,
 };
 use crate::trace;
+use rayon::prelude::*;
 
 /// Verification failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -23,8 +23,8 @@ pub enum VerifyError {
     /// Proof vectors have the wrong lengths.
     #[error("malformed proof")]
     Shape,
-    /// The out-of-domain point is invalid.
-    #[error("invalid out-of-domain sample")]
+    /// A sampled point is a pole of a lookup sum or of the out-of-domain checks.
+    #[error("invalid field sample")]
     Sample,
     /// The constraint identity fails at the out-of-domain point.
     #[error("composition check failed")]
@@ -41,9 +41,9 @@ pub enum VerifyError {
     /// The parameters cannot be used with this circuit.
     #[error(transparent)]
     Parameters(#[from] crate::params::ParamsError),
-    /// The range-table multiplicities are not the exact lookup counts (each count at most the total
-    /// and summing to `rows * lookups`).
-    #[error("noncanonical range-table multiplicities")]
+    /// The table multiplicities are not the exact lookup counts: each argument's counts (range values,
+    /// then fixed-table rows) are each at most that argument's total and sum to `rows * lookups` of it.
+    #[error("noncanonical table multiplicities")]
     Multiplicities,
 }
 
@@ -56,6 +56,47 @@ fn row_digests(rows: &[Vec<Fp>], indices: &[usize]) -> Vec<(usize, Digest)> {
             (*index, hash_leaf(&bytes))
         })
         .collect()
+}
+
+/// Sums canonical multiplicities in wire order, inverting only the occupied rows.
+/// Both challenges must be off their entire table, including rows with zero multiplicity.
+fn sparse_table_sum(
+    circuit: &Circuit,
+    counts: &[u64],
+    beta: Fp4,
+    beta_tables: Fp4,
+) -> Result<Fp4, VerifyError> {
+    if counts.len() != circuit.table_len() {
+        return Err(VerifyError::Shape);
+    }
+    let (range_counts, mut remaining) = counts.split_at(1usize << circuit.range_bits);
+    let mut denominators = Vec::new();
+    for (value, &count) in range_counts.iter().enumerate() {
+        if count != 0 {
+            denominators.push(beta - Fp4::from_base(Fp::new(value as u64)));
+        }
+    }
+    for (table, fixed) in circuit.tables.iter().enumerate() {
+        let (table_counts, rest) = remaining.split_at(fixed.values.len());
+        remaining = rest;
+        for (key, &count) in table_counts.iter().enumerate() {
+            if count != 0 {
+                let packed = circuit.fixed_table_entry(table, key);
+                denominators.push(beta_tables - Fp4::from_base(Fp::new(packed)));
+            }
+        }
+    }
+
+    denominators
+        .par_chunks_mut(1024)
+        .for_each(batch_inverse_ext);
+    Ok(counts
+        .iter()
+        .filter(|count| **count != 0)
+        .zip(denominators)
+        .fold(Fp4::ZERO, |sum, (&count, inverse)| {
+            sum + inverse.mul_base(Fp::new(count))
+        }))
 }
 
 /// Verifies a proof.
@@ -113,7 +154,7 @@ pub fn verify(
     let blowup = 1usize << params.log_blowup;
     let log_lde = log_n + params.log_blowup;
     let shift = Fp::new(GENERATOR);
-    let has_lookups = !circuit.lookups.is_empty();
+    let has_lookups = circuit.has_lookups();
     let next_columns = circuit.next_columns();
     let aux_ext = air.aux_columns();
     let shape = air.shape();
@@ -134,31 +175,32 @@ pub fn verify(
         || (has_lookups && !width_ok(&proof.aux_rows, 4 * aux_ext))
         || (!has_lookups && (!proof.aux_rows.is_empty() || !proof.aux_siblings.is_empty()))
         || !width_ok(&proof.quotient_rows, 4 * chunks)
-        || proof.multiplicities.len()
-            != if has_lookups {
-                1usize << circuit.range_bits
-            } else {
-                0
-            }
+        || proof.multiplicities.len() != circuit.table_len()
     {
         return Err(VerifyError::Shape);
     }
 
-    // Multiplicities are exact integer counts: each at most the total and summing to every lookup
-    // of every row. `Params::check` keeps that total below the characteristic, so the field sums
-    // below equal the integer sums.
+    // Multiplicities are exact integer counts, per argument: the range values' counts sum to every
+    // range lookup of every row and the fixed-table rows' counts to every table lookup, each count at
+    // most its argument's total. `Params::check` keeps the totals below the characteristic, so the field
+    // sums below equal the integer sums.
     if has_lookups {
-        let expected = u128::from(crate::params::lookup_occurrences(circuit)?);
-        let mut sum = 0u128;
-        for count in &proof.multiplicities {
-            let count = u128::from(*count);
-            if count > expected {
+        let (range_total, table_total) = crate::params::lookup_occurrences_by_argument(circuit)?;
+        let (range_counts, table_counts) =
+            proof.multiplicities.split_at(1usize << circuit.range_bits);
+        for (counts, expected) in [(range_counts, range_total), (table_counts, table_total)] {
+            let expected = u128::from(expected);
+            let mut sum = 0u128;
+            for count in counts {
+                let count = u128::from(*count);
+                if count > expected {
+                    return Err(VerifyError::Multiplicities);
+                }
+                sum += count;
+            }
+            if sum != expected {
                 return Err(VerifyError::Multiplicities);
             }
-            sum += count;
-        }
-        if sum != expected {
-            return Err(VerifyError::Multiplicities);
         }
     }
     let mut transcript = initial_transcript(circuit, params, statement, &public);
@@ -169,16 +211,14 @@ pub fn verify(
             &encode_multiplicities(&proof.multiplicities),
         );
     }
-    let (beta, table_per_row) = if has_lookups {
-        let beta = transcript.challenge_fp4(b"logup-beta");
+    let (beta, beta_tables, table_per_row) = if has_lookups {
+        let (beta, beta_tables) =
+            logup_challenges(&mut transcript, circuit).ok_or(VerifyError::Sample)?;
         let n_inverse = Fp::new(n as u64).inverse().expect("n != 0");
-        let total = table_sum(
-            &proof.multiplicities,
-            &table_inverses(beta, circuit.range_bits),
-        );
-        (beta, total.mul_base(n_inverse))
+        let total = sparse_table_sum(circuit, &proof.multiplicities, beta, beta_tables)?;
+        (beta, beta_tables, total.mul_base(n_inverse))
     } else {
-        (Fp4::ZERO, Fp4::ZERO)
+        (Fp4::ZERO, Fp4::ZERO, Fp4::ZERO)
     };
     if let Some(root) = &proof.aux_root {
         transcript.absorb_digest(b"aux-root", root);
@@ -228,8 +268,13 @@ pub fn verify(
     let zerofier_inverse = (zn - Fp4::ONE).inverse().ok_or(VerifyError::Sample)?;
     let expected_low = (every + transition * (z - last_point)) * zerofier_inverse;
     let expected_high = if has_lookups {
-        air.combine_helpers(&row, &proof.ood_aux, &BetaPowers::new(beta), &alphas)
-            * zerofier_inverse
+        air.combine_helpers(
+            &row,
+            &proof.ood_aux,
+            &BetaPowers::new(beta),
+            &BetaPowers::new(beta_tables),
+            &alphas,
+        ) * zerofier_inverse
     } else {
         Fp4::ZERO
     };
@@ -366,4 +411,108 @@ pub fn verify(
         return Err(VerifyError::Fri);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::Builder;
+    use crate::prover::{all_table_inverses, table_sum};
+
+    fn lookup_circuit() -> Circuit {
+        let mut builder = Builder::new("sparse sum", 8);
+        builder.set_range_bits(11);
+        let key = builder.public("key", 0, 1);
+        for (name, values) in [("first", &[-9, 2, 7][..]), ("second", &[13, -7][..])] {
+            let table = builder.fixed_table(name, values);
+            builder.lookup_table(table, &key, name);
+        }
+        builder.finish()
+    }
+
+    #[test]
+    fn sparse_and_dense_sums_agree_for_both_arguments() {
+        let circuit = lookup_circuit();
+        let beta = Fp4([Fp::ONE, Fp::ONE, Fp::ZERO, Fp::ZERO]);
+        let beta_tables = Fp4([Fp::ONE, Fp::ZERO, Fp::ONE, Fp::ZERO]);
+        let mut sparse = vec![0; circuit.table_len()];
+        let range = 1usize << circuit.range_bits;
+        sparse[0] = 1;
+        sparse[range - 1] = crate::field::MODULUS - 1;
+        sparse[range] = 9;
+        sparse[range + 4] = 13;
+        let full: Vec<_> = (1..=circuit.table_len() as u64).collect();
+        let empty = vec![0; circuit.table_len()];
+
+        for (range_point, table_point) in [(beta, beta_tables), (beta_tables, beta)] {
+            let inverses = all_table_inverses(range_point, table_point, &circuit);
+            for counts in [&sparse, &full, &empty] {
+                assert_eq!(
+                    sparse_table_sum(&circuit, counts, range_point, table_point),
+                    Ok(table_sum(counts, &inverses))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_challenges_exclude_every_pole_independently_of_counts() {
+        use crate::prover::checked_logup_challenges;
+
+        let circuit = lookup_circuit();
+        let range = 1u64 << circuit.range_bits;
+        let table_entry = circuit.fixed_table_entry(1, 1);
+        let off_range = Fp4::from_base(Fp::new(range));
+        // This digit is in the packed key's slot, but is not a row of either fixed table.
+        let off_table = Fp4::from_base(Fp::new(table_entry + 1));
+        for endpoint in [0, range - 1] {
+            assert!(
+                checked_logup_challenges(&circuit, Fp4::from_base(Fp::new(endpoint)), off_table)
+                    .is_none()
+            );
+        }
+        for packed in circuit.fixed_table_values() {
+            assert!(
+                checked_logup_challenges(&circuit, off_range, Fp4::from_base(Fp::new(packed)))
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            checked_logup_challenges(&circuit, off_range, off_table),
+            Some((off_range, off_table))
+        );
+        let extension_point = Fp4([Fp::ZERO, Fp::ONE, Fp::ZERO, Fp::ZERO]);
+        assert_eq!(
+            checked_logup_challenges(&circuit, extension_point, extension_point),
+            Some((extension_point, extension_point))
+        );
+    }
+
+    #[test]
+    fn sparse_table_sum_checks_the_entire_count_vector() {
+        let circuit = lookup_circuit();
+        let point = Fp4([Fp::ZERO, Fp::ONE, Fp::ZERO, Fp::ZERO]);
+        for len in [circuit.table_len() - 1, circuit.table_len() + 1] {
+            assert_eq!(
+                sparse_table_sum(&circuit, &vec![0; len], point, point),
+                Err(VerifyError::Shape)
+            );
+        }
+    }
+
+    #[test]
+    fn every_race_road_value_maps_to_its_table_row() {
+        use crate::games::race_v1::{self, Track};
+        for track in [Track::NeonTokyo, Track::Harbor, Track::Sakura] {
+            let circuit = race_v1::circuit(track, 1);
+            assert!(circuit.fixed_table_rows() > 0);
+            for (row, packed) in circuit.fixed_table_values().into_iter().enumerate() {
+                assert_eq!(
+                    circuit.fixed_row_index(packed),
+                    Some(row),
+                    "{track:?} row {row}"
+                );
+            }
+        }
+    }
 }

@@ -81,7 +81,9 @@ weaken parameters. Arbitrary uploaded IVM programs are **not** currently claimed
 The RaceV1 circuit is written with the engine's bounded-integer builder. Every register and
 intermediate carries a proven integer interval below the field's signed range; comparisons decompose a
 shifted difference with one 16-bit LogUp lookup and a Boolean; divisions constrain range-checked
-quotients and remainders; track cells and objects use one-hot selectors. Contacts are evaluated in the
+quotients and remainders; object cells use one-hot selectors, and the bend of the real road under
+each car is read from the track's fixed table, keyed by the car's 5 m station, through the engine's
+separate fixed-table LogUp argument. Contacts are evaluated in the
 fixed ascending `(i,j)` order with slowing deferred to the end of the tick, which the node simulation
 defines identically. With the fixed initial boundary and the next-row identities, induction makes each
 row the unique integer transition. The gadget contracts, the trusted `assume_interval` uses and the
@@ -94,7 +96,7 @@ when a car already finished; the earlier finish remains history, but the DNF car
 prize. Finishes retain their actual tick while the last six-tick batch is consumed to its boundary.
 At a six-tick boundary, fewer than two active keys also ends the game: the earliest eligible finishers
 share priority, otherwise the sole eligible survivor wins. An all-forfeit outcome refunds regardless
-of historical finishes. At the 5,400-tick limit, if no eligible racer finished, the eligible racers with
+of historical finishes. At the 8,100-tick limit, if no eligible racer finished, the eligible racers with
 greatest progress share the prize. An unfinished active race therefore cannot become a
 refund merely by refusing to cross the line. Ranking is derived from the complete proof-constrained
 terminal state and bound into the outcome statement; timeout adds no separate arithmetic witness.
@@ -124,15 +126,18 @@ completeness, DEEP/ALI composition, transcript order, domain separation and deco
 
 ## Interactive environment
 
-Every track has twelve fixed object cells per lap, repeated over three laps. Immutable tree, sign and oil catalogs, rain phases and wind tables are committed in the rules and compiled profile. Tree/sign contacts use swept forward progress and strict lateral contact radii; stationary cars cannot repeatedly hit the same object. Oil changes damping and steering inside a bounded inclusive rectangle; rain reduces steering and lateral speed. Wind contributes `trunc(gust * speed / 2400)`, so parked cars remain stationary.
+Every track is a real road of 1986 at true scale, raced as one stretch three laps long. The bend under every 5 m of it, from 100 m before the start line to the finish, is a generated integer table (`iroha_execution_stark::games::race_v1_roads`); the rules name each table's length and SHA-256, and the compiled profile commits the table source. A bend pushes a car outward by `trunc(road[station] * speed^2 / 2^24)` millimetres a tick. Guard rails hold every car within ±6,520 mm of the centre line, and the clamp is applied again after contacts; beyond ±6,000 mm a car is on the verge and loses speed.
 
-The whole-tick graph exports the exact `oil_contact`, `solid_hit` and object-kind predicates used in the state computation for browser effects. These outputs are gated by the car's active state. They add no mutable ledger state. The exported fixed prefix includes native-derived rain and wind values, and the native verifier reconstructs those values from the public track and tick. Browser presentation cannot choose physics parameters.
+Every track also has twelve fixed object cells per lap, repeated over three laps. Immutable tree, sign and oil catalogs, rain phases and wind tables are committed in the rules and compiled profile. Signs are the only objects that are hit: their contacts use swept forward progress and a strict lateral contact radius, so stationary cars cannot repeatedly hit the same sign. Trees stand beyond the rails as scenery. Oil changes damping and steering inside a bounded inclusive rectangle; rain reduces steering and lateral speed. Wind contributes `trunc(gust * speed / 2400)`, so parked cars remain stationary.
+
+The whole-tick graph exports the exact `oil_contact`, `solid_hit` and object-kind predicates used in the state computation for browser effects. These outputs are gated by the car's active state. They add no mutable ledger state. The exported fixed prefix includes native-derived rain and wind values, and the native verifier reconstructs those values from the public track and tick. The export also carries each track's road table, and each car's bend coefficient is a fifth per-car fixed value that the browser reads from that table for the car's station. Browser presentation cannot choose physics parameters.
 
 ## Resource evidence and qualification
 
-Eight-car circuits have 1,321 main columns (56 registers), 49 public columns, 1,201 constraints and
-576 lookups over a 2^13-row trace for every track. Their computed worst-case wire is 2,044,445 bytes,
-below the explicit 3,250,000-byte STARK admission cap; actual eight-car proofs are about 1.66 MB.
+Eight-car circuits have 1,385 main columns (56 registers), 49 public columns, 1,217 constraints,
+656 range lookups and 8 lookups of the track's fixed road table (1,101 to 1,461 rows) over a
+2^13-row trace for every track. Their computed worst-case wire is at most 2,158,833 bytes (Harbor),
+below the explicit 3,250,000-byte STARK admission cap; actual eight-car proofs are about 1.78 MB.
 The codec test bounds the maximum-duration envelope and typed settlement below the shared 4 MiB cap.
 These are codec bounds, not validator-throughput measurements; network transaction, block, Torii,
 Connect and gossip limits remain separate admission requirements.
@@ -140,7 +145,8 @@ Connect and gossip limits remain separate admission requirements.
 The engine [README](../../../iroha_execution_stark/README.md) records proving and verification
 times and their measured scopes; retained BLAKE2b-384 runs on a shared Apple M4 Max proved full
 eight-car, 5,400-tick races in 2.160–3.547 s and verified them in memory in 28.2–39.8 ms.
-These standalone measurements exclude Core settlement and network costs.
+These standalone measurements exclude Core settlement and network costs, and they predate the
+real roads (8,100 ticks in the same 2^13 rows, with the road read through a fixed table).
 The `full_duration_eight_car_proof_is_thread_deterministic_and_round_trips`
 release gate proves that race at 1, 2 and 16 threads, requires identical bytes, and retains the request
 and proof with `IROHA_EXECUTION_PARITY_OUTPUT`. The previous staged

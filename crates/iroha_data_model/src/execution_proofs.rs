@@ -17,8 +17,8 @@ pub const EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1: usize = 4 * 1024 * 1024;
 
 /// Simulation ticks per second in the immutable `RaceV1` rules.
 pub const RACE_TICKS_PER_SECOND_V1: u32 = 30;
-/// Maximum duration of one `RaceV1` run.
-pub const RACE_MAX_TICKS_V1: u32 = 5_400;
+/// Maximum duration of one `RaceV1` run: four and a half minutes on the real roads.
+pub const RACE_MAX_TICKS_V1: u32 = 8_100;
 /// Maximum authenticated racers in a `RaceV1` run.
 pub const RACE_MAX_PLAYERS_V1: u8 = 8;
 /// Required completed laps.
@@ -30,7 +30,8 @@ pub const RACE_CONTROL_MASK_V1: u16 = 0x3f;
 /// Number of visual car skins; all share the same simulation parameters.
 pub const RACE_SKIN_COUNT_V1: u8 = 6;
 
-/// The closed first-release track catalog.
+/// The closed first-release track catalog: three real roads of 1986 at true scale, each raced as one
+/// stretch of road three laps long. The wire names predate the roads.
 #[derive(
     Clone,
     Copy,
@@ -47,16 +48,16 @@ pub const RACE_SKIN_COUNT_V1: u8 = 6;
 )]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum RaceTrackV1 {
-    /// Two-kilometre city circuit.
+    /// Midnight Circuit: 6 km of National Route 1 climbing from Hakone-Yumoto to Miyanoshita.
     NeonTokyo,
-    /// 2.4-kilometre waterfront circuit.
+    /// Harbor Run: 7.2 km from Sakuragichō over Bankoku-bashi and along the Yokohama waterfront.
     Harbor,
-    /// 1.8-kilometre cherry-blossom circuit.
+    /// Sakura Pass: 5.4 km of National Routes 119 and 120 from the JNR Nikkō station to Kiyotaki.
     Sakura,
 }
 
 impl RaceTrackV1 {
-    /// Exact length of one lap in millimetres.
+    /// Exact length of one lap (a third of the road) in millimetres.
     #[must_use]
     pub const fn length_mm(self) -> i64 {
         match self {
@@ -66,7 +67,9 @@ impl RaceTrackV1 {
         }
     }
 
-    /// Twelve road-curvature cells, sampled with Euclidean wrapped progress.
+    /// Twelve road-curvature cells, sampled with Euclidean wrapped progress: the bends `RaceV1` ran
+    /// before the real roads, which `ClassedRaceV1` (Touring) still runs from its own copy. `RaceV1`
+    /// reads the real road's bend under every 5 m (`iroha_execution_stark::games::race_v1_roads`).
     #[must_use]
     pub const fn curvature(self) -> [i32; 12] {
         match self {

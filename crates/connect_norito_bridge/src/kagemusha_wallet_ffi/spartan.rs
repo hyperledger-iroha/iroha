@@ -50,9 +50,22 @@ pub(crate) enum Action<'a> {
         fee: &'a [u8],
         issuer: &'a [u8],
     },
-    UnloadSettlement { slot: [u8; 32], operation: [u8; 32], signed: &'a [u8], proof: &'a [u8] },
-    ActivationSettlement { slot: [u8; 32], signed: &'a [u8], proof: &'a [u8] },
-    Epoch { slot: [u8; 32], expected: u64, boundary: &'a [u8] },
+    UnloadSettlement {
+        slot: [u8; 32],
+        operation: [u8; 32],
+        signed: &'a [u8],
+        proof: &'a [u8],
+    },
+    ActivationSettlement {
+        slot: [u8; 32],
+        signed: &'a [u8],
+        proof: &'a [u8],
+    },
+    Epoch {
+        slot: [u8; 32],
+        expected: u64,
+        boundary: &'a [u8],
+    },
     DirectTime {
         slot: [u8; 32],
         selector: u32,
@@ -216,7 +229,9 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: Send> FutureSession for
                     }
                     3 if !status.is_empty() => {
                         let id = request.try_into().map_err(|_| Failure::code(INVALID))?;
-                        let proof = self.runtime.credit_status_for_payment(&slot, id, &operation, status)?;
+                        let proof = self
+                            .runtime
+                            .credit_status_for_payment(&slot, id, &operation, status)?;
                         Ok(response(104, proof))
                     }
                     2 if !status.is_empty() => {
@@ -243,24 +258,47 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: Send> FutureSession for
                 )?;
                 Ok(response(95, digest.to_vec()))
             }
-            Action::UnloadSettlement { slot, operation, signed, proof } => {
-                let result = self.runtime.unload_settlement(&advance::KagemushaWalletSlotIdV1(slot), &operation, signed, proof)?;
+            Action::UnloadSettlement {
+                slot,
+                operation,
+                signed,
+                proof,
+            } => {
+                let result = self.runtime.unload_settlement(
+                    &advance::KagemushaWalletSlotIdV1(slot),
+                    &operation,
+                    signed,
+                    proof,
+                )?;
                 Ok(response(102, settlement::outcome_bytes(&result)))
             }
-            Action::ActivationSettlement { slot, signed, proof } => {
+            Action::ActivationSettlement {
+                slot,
+                signed,
+                proof,
+            } => {
                 let slot = advance::KagemushaWalletSlotIdV1(slot);
                 let result = self.runtime.activation_settlement(&slot, signed, proof)?;
                 Ok(response(108, settlement::outcome_bytes(&result)))
             }
-            Action::Epoch { slot, expected, boundary } => {
+            Action::Epoch {
+                slot,
+                expected,
+                boundary,
+            } => {
                 let slot = advance::KagemushaWalletSlotIdV1(slot);
                 let progress = if boundary.is_empty() && expected == 0 {
                     self.runtime.commit_epoch_progress(&slot)?
                 } else {
-                    self.runtime.sync_epoch_boundary(&slot, expected, boundary)?
+                    self.runtime
+                        .sync_epoch_boundary(&slot, expected, boundary)?
                 };
                 let mut bytes = Vec::with_capacity(24);
-                for word in [progress.epoch, progress.first_height, progress.boundary_height] {
+                for word in [
+                    progress.epoch,
+                    progress.first_height,
+                    progress.boundary_height,
+                ] {
                     bytes.extend_from_slice(&word.to_le_bytes());
                 }
                 Ok(response(103, bytes))
@@ -454,7 +492,9 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: Send> FutureSession for
                     return Ok(response(106, ordinal.to_le_bytes().to_vec()));
                 }
                 if part == 3 && operation == [0; 32] {
-                    let bytes = self.runtime.balance_snapshot(&advance::KagemushaWalletSlotIdV1(slot))?;
+                    let bytes = self
+                        .runtime
+                        .balance_snapshot(&advance::KagemushaWalletSlotIdV1(slot))?;
                     return Ok(response(101, bytes));
                 }
                 if part > 3 {

@@ -5,7 +5,10 @@
  */
 import { noritoEncodeGameValueV1, noritoDecodeGameValueV1 } from "./norito.js";
 
-const MAX_TICKS = 5400;
+/** RaceV1 runs on the real roads of 1986 for at most four and a half minutes. */
+const MAX_TICKS = 8100;
+/** The guard rails' faces either side of the centre line. */
+const RAIL_MM = 6520;
 const FINISH = Object.freeze({ neon_tokyo: 6_000_000, harbor: 7_200_000, sakura: 5_400_000 });
 const CAR_FIELDS = ["progress_mm", "lateral_mm", "speed_mm_per_tick", "lateral_velocity_mm_per_tick", "boost_energy", "finish_tick", "dnf_tick"];
 function exact(value, keys, label) {
@@ -40,7 +43,7 @@ function stateValue(input) {
   if (state.tick > MAX_TICKS || state.cars.some(car => {
     const progress = BigInt(car.progress_mm);
     return progress < -12_000n || progress > BigInt(finish)
-      || car.lateral_mm < -16_200 || car.lateral_mm > 16_200
+      || car.lateral_mm < -RAIL_MM || car.lateral_mm > RAIL_MM
       || car.speed_mm_per_tick < 0 || car.speed_mm_per_tick > 3000
       || car.lateral_velocity_mm_per_tick < -320 || car.lateral_velocity_mm_per_tick > 320
       || car.boost_energy > 1000

@@ -737,10 +737,13 @@ payload in memory under the DA worker limit.
 
 The producer signs the exact 32 bytes of its genesis network ID, length-prefixed
 canonical account-controller bytes, lane, epoch, sequence, canonical payload
-digest and length, and the full BLAKE3 request-content digest under the V1
-authorization domain. The content digest binds the compression tag and exact
-transmitted bytes. Shared producer vectors cover identity and zlib-wrapped
-DEFLATE in `fixtures/da/ingest/request_signing_v1.json`.
+digest and length, and the request-content commitment under the V1
+authorization domain. The commitment is the BLAKE3 request-content digest as an
+Iroha hash, whose final bit is set; `DaIngestAuthorizationV1.request_content_hash`
+keeps this frozen baseline encoding because stored pin intents carry it. The
+content digest binds the compression tag and exact transmitted bytes. Shared
+producer vectors cover identity and zlib-wrapped DEFLATE in
+`fixtures/da/ingest/request_signing_v1.json`.
 
 The Rust client requires the trusted Torii receipt public key for live submission.
 The CLI accepts this key through `--operator-public-key` for `app da submit` and
@@ -760,10 +763,25 @@ Before committing a receipt Torii writes each manifest-indexed data and parity
 shard to the private `artifacts/<prefix>/<ticket>/source` directory. The
 manifest digest is written last. A signed receipt acknowledges local ingest.
 Independent storage requires finalized native replication assignments,
-provider completion and readback. The producer-signed scope includes the
-BLAKE3 digest of the complete proposed commitment. The operator-signed receipt
-carries effective retention so clients can reconstruct that commitment
-before approving it.
+provider completion and readback. The producer's pin-scope witnesses sign the
+BLAKE3 digest of the complete proposed commitment together with the scope.
+Torii returns the scope with that digest as a `DaPinScopeProposalV1`; the
+stored `DaPinScopeV1` keeps the frozen baseline layout of
+`world.da_pin_intents_by_ticket` and does not carry the digest, so every
+verifier recomputes it from the paired `DaCommitmentRecord` (block validation,
+the proposal queue, Torii's spool from the durable receipt and the SoraFS
+deploy check). A World-only reader that cannot reach the record does not claim
+to re-verify scope witnesses. The operator-signed receipt carries effective
+retention so clients can reconstruct that commitment before approving it.
+
+Durable receipt records are version 2: `StoredDaReceipt` (nominal
+`iroha_torii::da::persistence::StoredDaReceiptV2`), the signed receipt
+assignment `DaIngestSignedReceiptAssignmentV2` and the operator-signed
+`DaReceiptSigningPayload` (version 2) all embed the receipt with
+`retention_policy`. Their nominal identities make the Norito header declare
+that layout. Torii and Core refuse a retired version-1 frame by its exact header
+owner with a typed error and never decode it; an operator whose spool holds
+version-1 receipts drains or archives it before upgrading.
 
 **Implementation status.** The canonical Norito types now live in
 `crates/iroha_data_model/src/da/`:
@@ -793,7 +811,7 @@ before approving it.
   a lane.
   A native proposer attaches eligible pairs to ordinary
   transactions or certified lane merges when they fit. Validators check the
-  producer's signatures, exact commitment digest, committed policies, quota,
+  producer's signatures over the paired record's exact commitment digest, committed policies, quota,
   uniqueness and cursor progression using the block and its parent State.
   Provider fulfillment and readback supply separate evidence of storage.
 

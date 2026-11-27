@@ -22,7 +22,7 @@ use crate::{
 use iroha_data_model::runtime::obligation::{MigrationRecordV1, MigrationStatusV1};
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::BinaryHeap,
     time::Duration,
 };
 
@@ -54,7 +54,8 @@ fn barrier(
     match REFUSAL.with(Cell::get) {
         Refusal::None => Ok(()),
         Refusal::Codec => {
-            let source = HashMap::from([(3_u64, 7_u64), (1, 9)]);
+            // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+            let source = BinaryHeap::from([(3_u64, 7_u64), (1, 9)]);
             norito::with_decode_limits_scope(
                 norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
                 || norito::core::classify_decode_attempt(|| norito::encode_canonical(&source)),

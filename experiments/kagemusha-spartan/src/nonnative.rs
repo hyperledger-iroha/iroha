@@ -1150,19 +1150,7 @@ pub fn comb_with_key_table(
     let lim = |x: &BigUint| -> [BigInt; 3] { limbs(x).map(BigInt::from) };
     let all_ones = limbs(&(pow2(256) - 1u32));
     for (sig, (q, z, r, s)) in inputs.iter().enumerate() {
-        assert!(
-            p256::verify(
-                q,
-                z,
-                &p256::Signature {
-                    r: r.clone(),
-                    s: s.clone()
-                }
-            ),
-            "a valid signature"
-        );
-        let w = p256::inv(s, &nn);
-        let (u1, u2) = (z * &w % &nn, r * &w % &nn);
+        let (u1, u2, expected_point) = p256::verified_point(q, z, r, s).expect("a valid signature");
         // Digits: bit t = 16 K + i of u at (scalar, step = 15 - i), cell K,
         // and the Horner limbs acc(step) = 2 acc(step - 1) + sum_K b 2^(..).
         let mut uacc: Vec<[BigUint; 3]> = Vec::new();
@@ -1286,8 +1274,7 @@ pub fn comb_with_key_table(
         let lam = slope(&accp, &cpt);
         let pt =
             p256::add_any(Some(accp.clone()), Some(cpt.clone())).expect("P is not the identity");
-        let expect = p256::add_any(p256::mul(&p256::generator(), &u1), p256::mul(q, &u2)).unwrap();
-        assert_eq!(pt, expect, "comb computes u1 G + u2 Q");
+        assert_eq!(pt, expected_point, "comb computes u1 G + u2 Q");
         assert_eq!(&pt.x % &nn, *r, "x(P) = r (mod n)");
         let t2 = &accp.x * ((&accp.x + &cpt.x) % &p) % &p;
         let extra: [BigUint; 10] = [
@@ -1589,7 +1576,8 @@ pub fn comb_with_key_table(
                         Fp::from(0u64),
                         Fp::from(0u64),
                         fp_u(&nlimbs[k]),
-                    ].into(),
+                    ]
+                    .into(),
                 }],
             );
             let c = plus(

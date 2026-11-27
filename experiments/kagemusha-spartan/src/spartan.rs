@@ -16,11 +16,11 @@ use ff::{Field, PrimeField};
 use group::GroupEncoding;
 use iroha_pasta::msm::{
     BoundedSecretScalars, MemoryBudget, MsmError, SharedMemoryBudget, msm_public,
-    msm_secret_ct_bounded_cancellable, msm_secret_ct_bounded_columns_cancellable,
+    msm_secret_bounded_cancellable, msm_secret_bounded_columns_cancellable,
 };
-use zeroize::Zeroizing;
 use iroha_pasta::{CancellationToken, PastaCurve};
 use rayon::prelude::*;
+use zeroize::Zeroizing;
 
 use crate::fs::{Scalar, SpikeRng, Transcript};
 use crate::grid::{
@@ -465,38 +465,76 @@ pub(crate) fn b_final_slots<S: Scalar>(
     total
 }
 
-/// The batched linear relation `<x, b> = kappa` over the IPA columns, and
-/// the row weights `eq(r_row, .)`.
+/// Public scalar side of the batched opening. Only the prover materializes the
+/// column weights; both verifiers evaluate their inner product with s(u) directly.
+pub(crate) struct OpeningRelation<S> {
+    pub(crate) kappa: S,
+    pub(crate) eq_row: Vec<S>,
+    pub(crate) coefficient: S,
+    pub(crate) r_col: Vec<S>,
+}
+impl<S: Scalar> OpeningRelation<S> {
+    pub(crate) fn folded_weight(&self, shape: &Shape, ch: &Challenges<S>, us: &[S]) -> S {
+        assert_eq!(us.len(), shape.col_bits, "generator claim dimension");
+        b_final_slots(shape, ch, self.coefficient, &self.r_col, us)
+    }
+}
+
+/// Evaluate the verifier's matrix at its transcript point before constructing
+/// the batched opening.
 pub(crate) fn relation<S: Scalar>(
     shape: &Shape,
     ch: &Challenges<S>,
     io: &[S],
     rel: &dyn Rel<S>,
-) -> (Vec<S>, S, Vec<S>, S, Vec<S>) {
-    let rx: Vec<S> = ch.rx.concat();
-    let ry: Vec<S> = ch.ry.concat();
+) -> OpeningRelation<S> {
+    let rx = ch.rx.concat();
+    let ry = ch.ry.concat();
     let (ma, mb, mc) = rel.matrix_evals(shape, &rx, &ry);
     relation_at(
         shape,
         ch,
         io,
+        &ry,
         ch.rabc[0] * ma + ch.rabc[1] * mb + ch.rabc[2] * mc,
     )
 }
 
-/// [`relation`] with the inner final's matrix value `M(r_x, r_y) = r_A A~ +
-/// r_B B~ + r_C C~` given: the verifier evaluates its program; the prover's
-/// folded `M(r_x, .)` table is that value after the last inner round.
-pub(crate) fn relation_at<S: Scalar>(
+/// Form the three constant terms in the batched relation: the last outer
+/// check, the first inner claim and the last inner check. The prover obtains
+/// the same matrix evaluation from the last entry of its folded table.
+fn relation_at<S: Scalar>(
     shape: &Shape,
     ch: &Challenges<S>,
     io: &[S],
+    ry: &[S],
     m_value: S,
-) -> (Vec<S>, S, Vec<S>, S, Vec<S>) {
+) -> OpeningRelation<S> {
+    let outer = ch.alpha.pow_vartime([ch.rx.len() as u64]);
+    let inner = outer * ch.alpha;
+    let matrix = inner * ch.alpha.pow_vartime([ch.ry.len() as u64]) * m_value;
+    let claim = ch.rabc[0] * ch.v[0] + ch.rabc[1] * ch.v[1] + ch.rabc[2] * ch.v[2];
+    let r_sel = ry[0];
+    let kappa = outer * (ch.v[0] * ch.v[1] - ch.v[2])
+        + inner * claim
+        + matrix * r_sel * r1cs::io_eval(shape, io, &ry[1..]);
+    OpeningRelation {
+        kappa,
+        eq_row: eq_table(&ry[1..1 + shape.row_bits]),
+        coefficient: matrix * (S::ONE - r_sel),
+        r_col: ry[1 + shape.row_bits..].to_vec(),
+    }
+}
+
+/// Dense column weights for the prover's cross terms at each IPA round.
+fn dense_weights<S: Scalar>(
+    shape: &Shape,
+    ch: &Challenges<S>,
+    relation: &OpeningRelation<S>,
+) -> Vec<S> {
     let (outer_off, inner_off) = tail_offsets(shape);
     let (ob, ib) = (shape.outer_blocks(), shape.inner_blocks());
     let mut b = vec![S::ZERO; shape.cols()];
-    let mut kappa = S::ZERO;
     let mut apow = S::ONE;
 
     // Outer: sum_{y in {0,1}^k} eq(tau_i, y) t_i(y) = t_{i-1}(r_{i-1}), t_0 := 0.
@@ -522,11 +560,9 @@ pub(crate) fn relation_at<S: Scalar>(
     for (grid, weight) in grid_weights(&ch.rx[last]).iter().enumerate() {
         b[outer_off[last] + at[grid]] += apow * weight;
     }
-    kappa += apow * (ch.v[0] * ch.v[1] - ch.v[2]);
     apow *= ch.alpha;
 
     // Inner: sum_{y in {0,1}^k} q_i(y) = q_{i-1}(r'_{i-1}), q_0 := claim.
-    let claim = ch.rabc[0] * ch.v[0] + ch.rabc[1] * ch.v[1] + ch.rabc[2] * ch.v[2];
     for (i, &k) in ib.iter().enumerate() {
         let at = slot_positions(k);
         for &grid in &boolean_positions(k) {
@@ -537,28 +573,20 @@ pub(crate) fn relation_at<S: Scalar>(
             for (grid, weight) in grid_weights(&ch.ry[i - 1]).iter().enumerate() {
                 b[inner_off[i - 1] + at[grid]] -= apow * weight;
             }
-        } else {
-            kappa += apow * claim;
         }
         apow *= ch.alpha;
     }
     // Inner final: q_last(r'_last) = M(rx, ry) ((1 - r_sel) w~(r_yw) + r_sel io~(r_yw)).
-    let ry: Vec<S> = ch.ry.concat();
     let last = ib.len() - 1;
     let at = slot_positions(ib[last]);
     for (grid, weight) in grid_weights(&ch.ry[last]).iter().enumerate() {
         b[inner_off[last] + at[grid]] += apow * weight;
     }
-    let r_sel = ry[0];
-    let r_row = &ry[1..1 + shape.row_bits];
-    let r_col = &ry[1 + shape.row_bits..];
-    let eq_col = eq_table(r_col);
-    let coefficient = apow * m_value * (S::ONE - r_sel);
+    let eq_col = eq_table(&relation.r_col);
     b[..shape.active_cols()]
         .par_iter_mut()
         .zip(eq_col.par_iter())
-        .for_each(|(weight, e)| *weight -= coefficient * e);
-    kappa += apow * m_value * r_sel * r1cs::io_eval(shape, io, &ry[1..]);
+        .for_each(|(weight, e)| *weight -= relation.coefficient * e);
     // Round slot i is opened as gamma^(i+1) times its values (separation of
     // every commitment by a challenge drawn after all of them).
     let gamma_inv = ch.gamma.invert().expect("nonzero challenge");
@@ -569,7 +597,7 @@ pub(crate) fn relation_at<S: Scalar>(
             .iter_mut()
             .for_each(|w| *w *= scale);
     }
-    (b, kappa, eq_table(r_row), coefficient, r_col.to_vec())
+    b
 }
 
 fn fold_top<S: Field>(table: &[S], r: &[S]) -> Vec<S> {
@@ -648,9 +676,9 @@ fn round_values<S: Field>(
 }
 
 /// A round's grid values committed at its slot's base-4 positions, with the
-/// blind on `H`: one constant-time secret MSM over the slot's grid generators
-/// then `H`. The round values and the blind are private, so no digit-bucketed
-/// table MSM.
+/// blind on `H`: one secret MSM over the slot's grid generators then `H`.
+/// The round values and the blind are private; the secret MSM is variable
+/// time in them (TODO.md G8).
 fn commit_values<C: PastaCurve>(gens: &Gens<C>, offset: usize, values: &[F<C>], blind: F<C>) -> C {
     let mut bases: Vec<Aff<C>> = slot_positions(grid_vars(values.len()))
         .iter()
@@ -672,18 +700,18 @@ fn commit_row<C: PastaCurve>(
 ) -> C {
     let split = values.len() - shape.row_full_tail(row);
     // The public width class bounds the head; the masking tail is full width.
-    // Both go through the constant-time secret MSM (see `bounded_row` for a
-    // head outside its class). The unblinded sum is wiped once blinded.
+    // Both go through the secret MSM (see `bounded_row` for a head outside its
+    // class). The unblinded sum is wiped once blinded.
     let head = bounded_row::<C>(&values[..split], shape.row_bits_class(row));
     let mut sum = Zeroizing::new(
-        msm_secret_ct_bounded_cancellable::<C>(
+        msm_secret_bounded_cancellable::<C>(
             &head,
             &gens.g[..split],
             MemoryBudget::DEFAULT,
             &SharedMemoryBudget::process_default(),
             None,
         )
-        .expect("constant-time row commitment"),
+        .expect("row commitment"),
     );
     if split < values.len() {
         *sum += ipa::secret_msm::<C>(&values[split..], &gens.g[split..values.len()]);
@@ -698,27 +726,37 @@ pub static COMMIT_SPLIT: std::sync::Mutex<[f64; 3]> = std::sync::Mutex::new([0.0
 
 /// The prover's private commitment kernels, for measurement lines. Every
 /// private commitment (witness rows, round values, the opening's L and R)
-/// runs a constant-time secret MSM over public bases; no fixed-base table is
-/// built or read, so a shape has no commitment setup to warm or account.
-pub const COMMIT_KERNELS: &str = "commits: constant-time secret MSMs (bounded columns for rows, full width for rounds and the opening), no fixed-base table";
+/// runs the secret Pippenger MSM over public bases, variable time in the
+/// private scalars (TODO.md G8); no fixed-base table is built or read, so a
+/// shape has no commitment setup to warm or account.
+pub const COMMIT_KERNELS: &str = "commits: variable-time secret Pippenger MSMs (bounded columns for rows, full width for rounds and the opening), no fixed-base table";
 
-/// `sum_j col[j] G_j` per bounded column through the constant-time secret
-/// column MSM: one window plan from the columns' public bounds, tables of
-/// public generator multiples shared by every column, whole-table
-/// constant-time selection, and no digit-indexed bucket or value-based skip.
+/// `sum_j col[j] G_j` per bounded column through the secret column MSM: each
+/// column is planned for its public bound and the columns share admitted
+/// batches within the default per-kernel budget. Bucket choice and zero-digit
+/// skips follow the private digits, so zero cells (structural holes included)
+/// cost no additions.
 pub(crate) fn column_sums<C: PastaCurve>(
     gens: &Gens<C>,
     active: usize,
     columns: &[BoundedSecretScalars<F<C>>],
 ) -> Vec<C> {
     column_sums_with_budget(gens, active, columns, MemoryBudget::DEFAULT, None)
-        .expect("constant-time bounded row commitment")
+        .expect("bounded row commitment")
 }
+
+/// Caller ceiling on one call's row-commitment scratch, inside the process
+/// MSM allowance (`PROCESS_MSM_SCRATCH_BYTES`, which stage admission
+/// charges). The column kernel batches columns by the shared budget's free
+/// bytes, so without it a batch of full-width rows holds most of the 64 MiB
+/// in recoded digits at once.
+const ROW_COMMIT_SCRATCH_BYTES: usize = 16 << 20;
 
 /// [`column_sums`] within an explicit per-kernel `budget`, cancellable.
 ///
 /// A budget below the kernel's single-base plan is [`MsmError::Budget`];
-/// shared contention only changes the plan.
+/// shared contention (the process allowance under
+/// [`ROW_COMMIT_SCRATCH_BYTES`]) only changes the plan.
 fn column_sums_with_budget<C: PastaCurve>(
     gens: &Gens<C>,
     active: usize,
@@ -726,20 +764,20 @@ fn column_sums_with_budget<C: PastaCurve>(
     budget: MemoryBudget,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<C>, MsmError> {
-    msm_secret_ct_bounded_columns_cancellable::<C>(
+    msm_secret_bounded_columns_cancellable::<C>(
         columns,
         &gens.g[..active],
         budget,
-        &SharedMemoryBudget::process_default(),
+        &SharedMemoryBudget::new(ROW_COMMIT_SCRATCH_BYTES),
         cancellation,
     )
 }
 
-/// A row at its public bit bound, checked in constant time without a
+/// A row at its public bit bound, checked without branches and without a
 /// value-derived width. The bound is a prover-side speedup: a row outside it
-/// (a cheating prover in the refusal tests) commits at full width. That
-/// whole-row validity bit is the only value-derived decision; an honest
-/// witness always passes, so it reveals nothing about an honest row.
+/// (a cheating prover in the refusal tests) commits at full width; an honest
+/// witness always passes. The commitment MSM that follows is variable time in
+/// the row's digits (TODO.md G8).
 fn bounded_row<'a, C: PastaCurve>(row: &'a [F<C>], bits: usize) -> BoundedSecretScalars<'a, F<C>> {
     BoundedSecretScalars::new(row, bits.clamp(1, 255), None)
         .or_else(|_| BoundedSecretScalars::new(row, 255, None))
@@ -773,7 +811,7 @@ fn commit_row_slices<C: PastaCurve>(
     let clock = Instant::now();
     // A row given empty is one the caller never wrote (`kern::Rows`, public
     // build structure): zero, its sum the identity. Every other row, LogUp
-    // helper rows included, is a constant-time bounded secret column.
+    // helper rows included, is a bounded secret column.
     let lanes: Vec<(usize, &[F<C>])> = range
         .clone()
         .filter(|&r| !w[r].is_empty())
@@ -1000,13 +1038,9 @@ pub fn fixed_commitments<C: PastaCurve>(
             if row.len() == 1 && row[0] == F::<C>::ONE {
                 return gens.g[0];
             }
-            iroha_pasta::msm::msm_public::<C>(
-                &row,
-                &gens.g[..row.len()],
-                MemoryBudget::DEFAULT,
-            )
-            .expect("msm")
-            .to_affine()
+            iroha_pasta::msm::msm_public::<C>(&row, &gens.g[..row.len()], MemoryBudget::DEFAULT)
+                .expect("msm")
+                .to_affine()
         })
         .collect()
 }
@@ -1018,7 +1052,7 @@ pub fn verify_circuit<C: PastaCurve>(
     bytes: &[u8],
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<(), String> {
-    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io)?;
+    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io, None)?;
     verify_inner(
         shape,
         gens,
@@ -1050,19 +1084,28 @@ pub fn fixed_for<C: PastaCurve>(
 }
 
 /// Fixed-row assembly at the verifier boundary. Check the wallet inputs
-/// before computing the circuit's ordinary verification-key commitments.
+/// before assembling the circuit's ordinary verification-key commitments.
+/// A mounted key contains only the circuit constants for these generators.
 fn fixed_for_verifier<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
     circuit: &dyn Circuit<F<C>>,
     io: &[F<C>],
+    mounted_key: Option<&[Aff<C>]>,
 ) -> Result<Vec<Aff<C>>, String> {
     let nf = circuit.fixed_rows(shape);
     if nf > shape.rows() || circuit.wallet_rows() > nf {
         return Err("invalid fixed-row layout".into());
     }
     let mut fixed = wallet_commitments::<C>(circuit, io)?;
-    fixed.extend(fixed_commitments(shape, gens, circuit));
+    if let Some(key) = mounted_key {
+        if key.len() != nf - fixed.len() {
+            return Err("invalid fixed-row verification key".into());
+        }
+        fixed.extend_from_slice(key);
+    } else {
+        fixed.extend(fixed_commitments(shape, gens, circuit));
+    }
     Ok(fixed)
 }
 
@@ -1416,7 +1459,12 @@ pub fn prepare_linked_phase1_retained<'a, C: PastaCurve>(
     circuit: &'a dyn Circuit<F<C>>,
 ) -> LinkedPhase1<'a, C> {
     retain_linked_witness(
-        shape, gens, inst, ProverWitness::Borrowed(wit, fill), rng, circuit,
+        shape,
+        gens,
+        inst,
+        ProverWitness::Borrowed(wit, fill),
+        rng,
+        circuit,
     )
 }
 
@@ -1510,8 +1558,18 @@ fn prove_inner<C: PastaCurve>(
 ) -> (Proof<C>, Timings, Option<([u8; 32], [u8; 32])>) {
     let rows = vec![r1cs::RowFill::Values; shape.rows()];
     prove_rows(
-        shape, gens, inst, ProverWitness::Borrowed(wit, &rows), rng, cheat, separated, claims,
-        link, circuit, fixed, None,
+        shape,
+        gens,
+        inst,
+        ProverWitness::Borrowed(wit, &rows),
+        rng,
+        cheat,
+        separated,
+        claims,
+        link,
+        circuit,
+        fixed,
+        None,
     )
 }
 
@@ -1872,7 +1930,13 @@ fn prove_rows<C: PastaCurve>(
                 advance_inner_round(&basis, k, &mut m, &folded, &mut round)
             } else {
                 let live = z_live.as_ref().expect("the folded witness's live runs");
-                advance_inner_round(&basis, k, &mut m, &crate::kern::Masked::new(&z, live), &mut round)
+                advance_inner_round(
+                    &basis,
+                    k,
+                    &mut m,
+                    &crate::kern::Masked::new(&z, live),
+                    &mut round,
+                )
             };
             z = next_z;
             support
@@ -1905,7 +1969,9 @@ fn prove_rows<C: PastaCurve>(
     let clock_rel = Instant::now();
     // M(r_x, r_y): the folded table's one value (no matrix program run).
     assert_eq!(m.len(), 1, "the inner rounds bind every variable");
-    let (weights, kappa, eq_row, _, _) = relation_at(shape, &ch, &inst.io, m[0]);
+    let relation = relation_at(shape, &ch, &inst.io, &ch.ry.concat(), m[0]);
+    let weights = dense_weights(shape, &ch, &relation);
+    let OpeningRelation { kappa, eq_row, .. } = relation;
     timings.relation = clock_rel.elapsed().as_secs_f64();
     let powers = gamma_powers(gamma, tail_values.len());
     let x_clock = Instant::now();
@@ -2116,7 +2182,13 @@ pub fn prove_linked_built<C: PastaCurve>(
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, [u8; 32], [u8; 32]) {
     prove_linked_witness(
-        shape, gens, inst, ProverWitness::Borrowed(wit, fill), rng, link, circuit,
+        shape,
+        gens,
+        inst,
+        ProverWitness::Borrowed(wit, fill),
+        rng,
+        link,
+        circuit,
     )
 }
 
@@ -2187,9 +2259,49 @@ pub fn verify_linked_circuit<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<[u8; 32], String> {
-    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io)?;
-    verify_inner(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
-        .map(|o| o.expect("linked").0)
+    verify_linked_circuit_with_io(shape, gens, inst, bytes, link, circuit, None)
+        .map(|verified| verified.word)
+}
+
+/// Link word and complete public inputs from one successfully verified proof.
+pub(crate) struct VerifiedLink<S> {
+    /// The transcript word bound to the other proof of the pair.
+    pub word: [u8; 32],
+    /// Public inputs used for the final relation, including link and late slots.
+    pub io: Vec<S>,
+}
+
+/// Also retain the exact early, link and late inputs used in the verified relation.
+pub(crate) fn verify_linked_circuit_with_io<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    bytes: &[u8],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    mounted_key: Option<&[Aff<C>]>,
+) -> Result<VerifiedLink<F<C>>, String> {
+    verify_linked_circuit_deciding::<C, ()>(shape, gens, inst, bytes, link, circuit, mounted_key)
+        .map(|(verified, ())| verified)
+}
+
+/// Verify a linked circuit proof. The wallet may retain the checked generator
+/// blocks for its subsequent predecessor fold.
+pub(crate) fn verify_linked_circuit_deciding<
+    C: PastaCurve,
+    D: crate::generator_claim::GeneratorDecision<C>,
+>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    bytes: &[u8],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    mounted_key: Option<&[Aff<C>]>,
+) -> Result<(VerifiedLink<F<C>>, D), String> {
+    let fixed = fixed_for_verifier(shape, gens, circuit, &inst.io, mounted_key)?;
+    verify_inner_deciding::<C, D>(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
+        .map(|(o, decision)| (o.expect("linked"), decision))
 }
 
 pub fn verify_linked<C: PastaCurve>(
@@ -2211,7 +2323,7 @@ pub fn verify_linked<C: PastaCurve>(
         &ToyCircuit,
         &[],
     )
-    .map(|o| o.expect("linked").0)
+    .map(|o| o.expect("linked").word)
 }
 
 pub fn verify_unseparated<C: PastaCurve>(
@@ -2244,7 +2356,24 @@ fn verify_inner<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
     fixed: &[Aff<C>],
-) -> Result<Option<([u8; 32], [u8; 32])>, String> {
+) -> Result<Option<VerifiedLink<F<C>>>, String> {
+    verify_inner_deciding::<C, ()>(
+        shape, gens, inst, bytes, separated, claims, link, circuit, fixed,
+    )
+    .map(|(result, ())| result)
+}
+
+fn verify_inner_deciding<C: PastaCurve, D: crate::generator_claim::GeneratorDecision<C>>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    inst: &Instance<F<C>>,
+    bytes: &[u8],
+    separated: bool,
+    claims: &[Claim<C>],
+    link: &Link,
+    circuit: &dyn Circuit<F<C>>,
+    fixed: &[Aff<C>],
+) -> Result<(Option<VerifiedLink<F<C>>>, D), String> {
     shape.check();
     let nf = circuit.fixed_rows(shape);
     if nf > shape.rows() || fixed.len() != nf || circuit.wallet_rows() > nf {
@@ -2318,16 +2447,23 @@ fn verify_inner<C: PastaCurve>(
         alpha,
         gamma,
     };
-    let (weights, kappa, eq_row, coefficient, r_col) = relation(shape, &ch, &io_full, rel.as_ref());
+    let opening = relation(shape, &ch, &io_full, rel.as_ref());
     let rounds: Vec<Aff<C>> = proof.outer.iter().chain(&proof.inner).copied().collect();
-    let p = combined_commitment::<C>(&proof.rows, &rounds, &eq_row, gamma);
-    let (us, b_final) = ipa::verify(gens, &mut t, &p, weights, kappa, &proof.ipa, claims)?;
-    // The circuits evaluate the closed form; it must equal the O(C) fold.
-    assert!(
-        b_final_slots(shape, &ch, coefficient, &r_col, &us) == b_final,
-        "closed-form b_final"
-    );
-    Ok(link_out)
+    let p = combined_commitment::<C>(&proof.rows, &rounds, &opening.eq_row, gamma);
+    let decision = ipa::verify::<C, D>(
+        gens,
+        &mut t,
+        &p,
+        shape.cols(),
+        opening.kappa,
+        &proof.ipa,
+        claims,
+        |us| opening.folded_weight(shape, &ch, us),
+    )?;
+    Ok((
+        link_out.map(|(word, _)| VerifiedLink { word, io: io_full }),
+        decision,
+    ))
 }
 
 /// `q_0 = t_0 + J` with `sum_y eq(tau_0, y) q_0(y) = 0` and `q_0(r_0) = t_0(r_0)`:
@@ -2580,6 +2716,172 @@ mod table_tests {
         shape
     }
 
+    #[test]
+    fn factored_opening_weights_match_dense_restrictions_on_both_fields() {
+        fn check<S: Scalar>() {
+            let mut rng = SpikeRng::new(b"opening weights");
+            for (sx, col_bits, k) in [(3, 6, 1), (7, 8, 2), (8, 10, 3)] {
+                let shape = Shape {
+                    label: "opening weights",
+                    sx,
+                    row_bits: 2,
+                    col_bits,
+                    k,
+                };
+                shape.check();
+                let mut blocks = |lengths: Vec<usize>| {
+                    lengths
+                        .into_iter()
+                        .map(|n| (0..n).map(|_| rng.scalar::<S>()).collect())
+                        .collect()
+                };
+                let mut ch = Challenges {
+                    rx: blocks(shape.outer_blocks()),
+                    ry: blocks(shape.inner_blocks()),
+                    tau: (0..sx).map(|_| rng.scalar()).collect(),
+                    v: std::array::from_fn(|_| rng.scalar()),
+                    rabc: std::array::from_fn(|_| rng.scalar()),
+                    alpha: rng.scalar(),
+                    gamma: S::from(13),
+                };
+                let io: Vec<S> = (0..7).map(|_| rng.scalar()).collect();
+                let matrix = rng.scalar();
+                for case in 0..3 {
+                    if case > 0 {
+                        // Boolean points immediately before and at the reserved slot boundary.
+                        let column = shape.active_cols() - usize::from(case == 1);
+                        let mut bits = (0..col_bits)
+                            .rev()
+                            .map(|j| S::from(((column >> j) & 1) as u64));
+                        for r in ch.ry.iter_mut().flatten().skip(1 + shape.row_bits) {
+                            *r = bits.next().unwrap();
+                        }
+                        ch.alpha = if case == 1 { S::ONE } else { S::from(2) };
+                        ch.gamma = S::ONE;
+                    }
+                    let opening = relation_at(&shape, &ch, &io, &ch.ry.concat(), matrix);
+                    let weights = dense_weights(&shape, &ch, &opening);
+                    for us in [
+                        vec![S::ZERO; col_bits],
+                        vec![S::ONE; col_bits],
+                        (0..col_bits).map(|_| rng.scalar()).collect(),
+                    ] {
+                        let mut dense = weights.clone();
+                        for &u in &us {
+                            let half = dense.len() / 2;
+                            let (lo, hi) = dense.split_at_mut(half);
+                            lo.iter_mut().zip(hi).for_each(|(l, h)| *l += u * *h);
+                            dense.truncate(half);
+                        }
+                        assert_eq!(opening.folded_weight(&shape, &ch, &us), dense[0]);
+                    }
+                }
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
+
+    #[test]
+    fn linked_verification_and_trace_use_the_provers_opening_weights() {
+        fn check<C: PastaCurve>() {
+            use crate::generator_claim::VerifiedBlocks;
+            let shape = Shape {
+                label: "linked opening weights",
+                sx: 10,
+                row_bits: 2,
+                col_bits: 7,
+                k: 1,
+            };
+            let gens = Gens::<C>::new(shape.cols());
+            let link = Link::First {
+                rho: [2; 32],
+                r: [3; 32],
+            };
+            for count in [0, 2] {
+                let (instance, witness, claims) =
+                    crate::verifier::instance::<C>(shape, &gens, count, 8, b"linked opening");
+                let (proof, word, _) = prove_linked(
+                    &shape,
+                    &gens,
+                    &instance,
+                    &witness,
+                    &mut SpikeRng::new(b"prove linked opening"),
+                    &claims,
+                    &link,
+                );
+                let bytes = proof.to_bytes();
+                let verify = |bytes: &[u8], claims: &[Claim<C>]| {
+                    verify_linked(&shape, &gens, &instance, bytes, claims, &link)
+                };
+                let trace = |proof: &Proof<C>, claims: &[Claim<C>]| {
+                    crate::verifier::trace(&shape, &gens, &instance, proof, claims, &link)
+                };
+                assert_eq!(verify(&bytes, &claims), Ok(word));
+                let valid = trace(&proof, &claims);
+                assert!(valid.accepts);
+                let ch = Challenges {
+                    tau: valid.tau,
+                    rx: valid.rx,
+                    v: proof.v,
+                    rabc: valid.rabc,
+                    ry: valid.ry,
+                    alpha: valid.alpha,
+                    gamma: valid.gamma,
+                };
+                let opening = relation(&shape, &ch, &instance.io, &crate::r1cs::Toy);
+                let weights = dense_weights(&shape, &ch, &opening);
+                let dense = |us: &[F<C>]| -> F<C> {
+                    ipa::s_vector(us)
+                        .into_iter()
+                        .zip(&weights)
+                        .map(|(a, b)| a * b)
+                        .sum()
+                };
+                assert_eq!(valid.b_final, dense(&valid.us));
+                assert_eq!(
+                    valid.claim_values,
+                    claims.iter().map(|c| dense(&c.us)).collect::<Vec<_>>()
+                );
+                let mut bad = proof.clone();
+                bad.ipa.g_final = C::identity().to_affine();
+                assert!(verify(&bad.to_bytes(), &claims).is_err());
+                let mut bad_response = proof.clone();
+                bad_response.ipa.z1 += F::<C>::ONE;
+                assert!(verify(&bad_response.to_bytes(), &claims).is_err());
+                if count == 0 {
+                    let collect = |bytes: &[u8]| {
+                        verify_linked_circuit_deciding::<C, VerifiedBlocks<C>>(
+                            &shape,
+                            &gens,
+                            &instance,
+                            bytes,
+                            &link,
+                            &ToyCircuit,
+                            None,
+                        )
+                    };
+                    assert_eq!(collect(&bytes).unwrap().0.word, word);
+                    assert!(collect(&bad.to_bytes()).is_err());
+                    assert!(collect(&bad_response.to_bytes()).is_err());
+                    let mut short = proof;
+                    short.ipa.lr.pop();
+                    assert!(verify(&short.to_bytes(), &claims).is_err());
+                    assert!(!trace(&short, &claims).accepts);
+                } else {
+                    for length in [shape.col_bits - 1, shape.col_bits + 1] {
+                        let mut wrong = claims.clone();
+                        wrong[0].us.resize(length, F::<C>::ONE);
+                        assert!(verify(&bytes, &wrong).is_err());
+                        assert!(!trace(&proof, &wrong).accepts);
+                    }
+                }
+            }
+        }
+        check::<Pallas>();
+        check::<Vesta>();
+    }
+
     /// The fixed-base table window the retired bucket-table commits used
     /// (Pixel 6, b04a57 11-09: c14 for P on Vesta, c13 for S on Pallas); a
     /// reference for the algebra only.
@@ -2588,7 +2890,7 @@ mod table_tests {
         if p { 14 } else { 13 }
     }
 
-    /// Constant-time column sums equal the public MSM and the bucket table
+    /// Secret column sums equal the public MSM and the bucket table
     /// they replaced, on rows of every width class, including full-width and
     /// all-zero rows.
     fn same<C: PastaCurve>(cols: usize, label: &[u8]) {
@@ -2637,7 +2939,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_column_sums_equal_public_and_table_sums() {
+    fn secret_column_sums_equal_public_and_table_sums() {
         same::<Vesta>(1 << 12, b"table vesta");
         same::<Pallas>(1 << 11, b"table pallas");
     }
@@ -2646,7 +2948,7 @@ mod table_tests {
     /// retired round-slot table's public MSM (window 9) and the plain public
     /// MSM over the same bases.
     fn rounds<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time rounds");
+        let shape = small_shape("secret rounds");
         let gens = Gens::<C>::new(shape.cols());
         let mut rng = SpikeRng::new(label);
         for slot in slots(&shape) {
@@ -2660,9 +2962,12 @@ mod table_tests {
                 .map(|p| gens.g[slot.offset + p])
                 .collect();
             bases.push(gens.h);
-            let table =
-                iroha_pasta::msm::FixedBaseTable::<C>::with_window(&bases, 9, MemoryBudget::DEFAULT)
-                    .unwrap();
+            let table = iroha_pasta::msm::FixedBaseTable::<C>::with_window(
+                &bases,
+                9,
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
             assert_eq!(
                 actual,
                 table.msm_public(&scalars, MemoryBudget::DEFAULT).unwrap()
@@ -2675,7 +2980,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_round_commitments_equal_the_table_algebra() {
+    fn secret_round_commitments_equal_the_table_algebra() {
         rounds::<Vesta>(b"rounds vesta");
         rounds::<Pallas>(b"rounds pallas");
     }
@@ -2684,7 +2989,7 @@ mod table_tests {
     /// head, the full-width masking tail and the blind, for honest rows and for
     /// a row with a value outside its class, which commits at full width.
     fn rows_without_bounds<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time single rows");
+        let shape = small_shape("secret single rows");
         let gens = Gens::<C>::new(shape.cols());
         let active = shape.active_cols();
         let mut rng = SpikeRng::new(label);
@@ -2708,7 +3013,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_single_row_commitments_on_both_curves() {
+    fn secret_single_row_commitments_on_both_curves() {
         rows_without_bounds::<Vesta>(b"single rows vesta");
         rows_without_bounds::<Pallas>(b"single rows pallas");
     }
@@ -2716,13 +3021,11 @@ mod table_tests {
     /// Bounded row lanes: every written row gets exactly its own sum and an
     /// unwritten row the blinded identity.
     fn lanes<C: PastaCurve>(label: &[u8]) {
-        let shape = small_shape("constant-time lanes");
+        let shape = small_shape("secret lanes");
         let gens = Gens::<C>::new(shape.cols());
         let (cols, active) = (shape.cols(), shape.active_cols());
         let mut rng = SpikeRng::new(label);
-        let bounds: Vec<usize> = (0..shape.rows())
-            .map(|r| shape.row_bits_class(r))
-            .collect();
+        let bounds: Vec<usize> = (0..shape.rows()).map(|r| shape.row_bits_class(r)).collect();
         let written: Vec<Vec<F<C>>> = bounds
             .iter()
             .map(|&bits| {
@@ -2744,14 +3047,26 @@ mod table_tests {
             .map(|(r, row)| if r == 1 { unwritten } else { row.as_slice() })
             .collect();
         let blinds: Vec<F<C>> = (0..shape.rows()).map(|_| rng.scalar()).collect();
-        let actual = commit_row_slices(&gens, &shape, &rows, 0..shape.rows(), &bounds, &blinds, false);
+        let actual = commit_row_slices(
+            &gens,
+            &shape,
+            &rows,
+            0..shape.rows(),
+            &bounds,
+            &blinds,
+            false,
+        );
         assert_eq!(actual.len(), shape.rows());
         for (r, point) in actual.iter().enumerate() {
             let sum = if r == 1 {
                 C::identity()
             } else {
-                msm_public::<C>(&written[r][..active], &gens.g[..active], MemoryBudget::DEFAULT)
-                    .unwrap()
+                msm_public::<C>(
+                    &written[r][..active],
+                    &gens.g[..active],
+                    MemoryBudget::DEFAULT,
+                )
+                .unwrap()
             };
             assert_eq!(
                 *point,
@@ -2762,16 +3077,16 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_row_lanes_on_both_curves() {
+    fn secret_row_lanes_on_both_curves() {
         lanes::<Vesta>(b"lanes vesta");
         lanes::<Pallas>(b"lanes pallas");
     }
 
     /// The opening's private sums equal the public MSM.
     #[test]
-    fn constant_time_opening_sums_equal_the_public_msm() {
+    fn secret_opening_sums_equal_the_public_msm() {
         let gens = Gens::<Vesta>::new(64);
-        let mut rng = SpikeRng::new(b"constant-time opening");
+        let mut rng = SpikeRng::new(b"secret opening");
         let scalars: Vec<F<Vesta>> = (0..64).map(|_| rng.scalar()).collect();
         assert_eq!(
             ipa::secret_msm::<Vesta>(&scalars, &gens.g),
@@ -2813,7 +3128,7 @@ mod table_tests {
     }
 
     #[test]
-    fn constant_time_commitment_refusals_on_both_curves() {
+    fn secret_commitment_refusals_on_both_curves() {
         refusals::<Vesta>();
         refusals::<Pallas>();
     }
@@ -2897,14 +3212,20 @@ mod retained_phase1_tests {
         );
         let owned = || {
             ProverWitness::Owned(r1cs::WrittenWitness::new(
-                Witness { w: original.clone() },
+                Witness {
+                    w: original.clone(),
+                },
                 fill.clone(),
             ))
         };
         let (owned_secondary, owned_rho, owned_r) = prove_linked_witness(
-            &shape, &gens, &inst, owned(),
+            &shape,
+            &gens,
+            &inst,
+            owned(),
             &mut SpikeRng::new(b"retained first phase, secondary"),
-            &Link::Second { d, rlc: &fallback }, &c,
+            &Link::Second { d, rlc: &fallback },
+            &c,
         );
         assert_eq!(owned_secondary.to_bytes(), secondary.to_bytes());
         assert_eq!((owned_rho, owned_r), (rho, r));
@@ -2924,13 +3245,16 @@ mod retained_phase1_tests {
         let (proof, actual_d, actual_r) = retained.prove_first(rho, r);
         let bytes = proof.to_bytes();
         assert_eq!(bytes, reference.to_bytes(), "byte-identical proof");
-        let first = retain_linked_witness(
-            &shape, &gens, &inst, owned(), &mut SpikeRng::new(seed), &c,
-        );
+        let first =
+            retain_linked_witness(&shape, &gens, &inst, owned(), &mut SpikeRng::new(seed), &c);
         assert_eq!(first.digest(), d);
         assert!(first.retained_bytes() >= original.len() * std::mem::size_of::<F<C>>());
         let (owned_first, owned_d, owned_r) = first.prove_first(rho, r);
-        assert_eq!(owned_first.to_bytes(), bytes, "consuming the witness preserves the opening");
+        assert_eq!(
+            owned_first.to_bytes(),
+            bytes,
+            "consuming the witness preserves the opening"
+        );
         assert_eq!((owned_d, owned_r), (actual_d, actual_r));
         assert_eq!((actual_d, actual_r), (reference_d, reference_r));
         assert_eq!((actual_d, actual_r), (d, r), "the prepared digest and R");
@@ -3153,9 +3477,16 @@ mod streamed_first_inner_tests {
             let (streamed, sd, sr) = prove(&c);
             let (split, dd, dr) = prove(&dense);
             let bytes = streamed.to_bytes();
-            assert_eq!(bytes, split.to_bytes(), "byte-identical linked proof (account {account})");
+            assert_eq!(
+                bytes,
+                split.to_bytes(),
+                "byte-identical linked proof (account {account})"
+            );
             assert_eq!((sd, sr), (dd, dr));
-            assert_eq!(verify_linked_circuit(&shape, &gens, &inst, &bytes, &link, &c).unwrap(), d);
+            assert_eq!(
+                verify_linked_circuit(&shape, &gens, &inst, &bytes, &link, &c).unwrap(),
+                d
+            );
         }
 
         let (arrays, pi, _) = rp57::<F<C>>(2, b"streamed first inner circuit");
@@ -3181,7 +3512,11 @@ mod streamed_first_inner_tests {
             prove_circuit(&shape, &gens, &inst, &wit, &mut rng, circuit).0
         };
         let bytes = prove(&c).to_bytes();
-        assert_eq!(bytes, prove(&Dense(&c)).to_bytes(), "byte-identical proof with a support");
+        assert_eq!(
+            bytes,
+            prove(&Dense(&c)).to_bytes(),
+            "byte-identical proof with a support"
+        );
         verify_circuit(&shape, &gens, &inst, &bytes, &c).unwrap();
     }
 

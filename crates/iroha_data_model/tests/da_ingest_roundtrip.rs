@@ -142,20 +142,19 @@ fn pin_scope_witnesses_roundtrip_without_changing_primary_digest() {
         &request.authorization(),
         sample_ticket(0x41),
         ManifestDigest::new(*sample_digest(0x42).as_bytes()),
-        Default::default(),
         Some("roundtrip.example".to_owned()),
     );
+    let commitment = sample_digest(0x44);
+    let proposal = DaPinScopeProposalV1::new(scope.clone(), commitment);
     let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
         .expect("valid deterministic scope witness key");
     request
-        .try_add_pin_scope_signature(&scope, &key_pair)
+        .try_add_pin_scope_signature(&proposal, &key_pair)
         .expect("add pin-scope witness");
     assert_eq!(request.signing_digest(), primary_digest);
-    assert!(
-        request
-            .pin_scope_authorization(scope)
-            .has_valid_canonical_signatures()
-    );
+    let authorization = request.pin_scope_authorization(scope);
+    assert!(authorization.has_valid_canonical_signatures(&commitment));
+    assert!(!authorization.has_valid_canonical_signatures(&sample_digest(0x45)));
 
     let bytes = norito::to_bytes(&request).expect("encode request with pin-scope witness");
     let decoded: DaIngestRequest =
@@ -276,7 +275,6 @@ fn da_ingest_signature_binds_complete_request_intent() {
         "../../../fixtures/da/ingest/request_signing_v1.json"
     ))
     .expect("shared DA signing fixtures");
-    let mut seen_content_bits = [false; 2];
     for vector in vectors {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         let mut variant = intent.clone();
@@ -289,11 +287,10 @@ fn da_ingest_signature_binds_complete_request_intent() {
         let request = variant.try_sign(&key_pair).unwrap();
         assert_eq!(request.signatures[0].signer.to_string(), vector.signer);
         let content = request.authorization().request_content_hash;
-        seen_content_bits[usize::from(content.as_bytes()[31] & 1)] = true;
-        assert_eq!(
-            hex::encode_upper(content.as_bytes()),
-            vector.content_digest_hex
-        );
+        let content: &[u8; 32] = content.as_ref();
+        // The content commitment is an entity hash: its final bit is always set.
+        assert_eq!(content[31] & 1, 1);
+        assert_eq!(hex::encode_upper(content), vector.content_digest_hex);
         assert_eq!(
             hex::encode_upper(request.signing_digest()),
             vector.authorization_digest_hex
@@ -306,7 +303,6 @@ fn da_ingest_signature_binds_complete_request_intent() {
             .verify_signatures()
             .expect("shared SDK producer witness");
     }
-    assert_eq!(seen_content_bits, [true, true]);
     let expected_digest = intent.signing_digest();
     let request = intent
         .try_sign(&key_pair)
@@ -766,7 +762,8 @@ fn receipt_operator_transcript_authenticates_the_declared_frame_sequence_and_ent
     let mut receipt = sample_ingest_receipt();
     let bytes = receipt.operator_signing_bytes(sequence).unwrap();
     let frame: ExpectedReceiptFrame = norito::decode_canonical(&bytes).unwrap();
-    assert_eq!((frame.version, frame.sequence), (1, sequence));
+    assert_eq!((frame.version, frame.sequence), (2, sequence));
+    assert_eq!(DaIngestReceipt::SIGNING_PAYLOAD_VERSION, 2);
     let mut unsigned = receipt.clone();
     unsigned.operator_signature = DaIngestReceipt::signature_placeholder();
     assert_eq!(frame.receipt, unsigned);
@@ -1063,13 +1060,21 @@ fn da_ingest_json_requires_current_fields_and_rejects_unknown_fields() {
 
 #[test]
 fn signed_pin_intent_fixture_authenticates_both_domains_and_round_trips() {
+    // The producer signed the scope with the digest of its paired commitment, which a
+    // stored pin intent does not carry (`fixtures/da/ingest/README.md`).
+    const PAIRED_COMMITMENT_DIGEST: BlobDigest = BlobDigest::new([0x44; 32]);
     let source = include_str!("../../../fixtures/da/ingest/pin_intent_v1.json");
     let intent: DaPinIntent = norito::json::from_str(source).unwrap();
     assert!(intent.authorization.has_valid_canonical_signatures());
     assert!(
         intent
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(&PAIRED_COMMITMENT_DIGEST)
+    );
+    assert!(
+        !intent
+            .pin_scope_authorization
+            .has_valid_canonical_signatures(&BlobDigest::new([0x45; 32]))
     );
     assert!(
         intent

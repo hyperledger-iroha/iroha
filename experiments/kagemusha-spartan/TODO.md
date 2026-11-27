@@ -117,10 +117,20 @@ Swift and Kotlin can prepare Refresh from a signed time anchor and its issuer ce
   the custody boundary on both phones.
   *2026-11-18:* stated prominently in DESIGN.md §1 ("What the proofs do not guarantee") and §11. Phone qualification
   open (needs E5/E6 devices).
-- [ ] **G8. Constant-time secret MSMs**, or the owner accepts the same side-channel exposure as today's prover, in
+- [x] **G8. Constant-time secret MSMs**, or the owner accepts the same side-channel exposure as today's prover, in
   writing.
-  *2026-11-19.* Witness rows, round values and the opening's L/R use iroha_pasta's constant-time secret MSMs
-  (`msm::spartan_ct`); no fixed-base table is built, warmed or charged at admission. The inner sumcheck's support
+  *2026-11-24 (resolved).* The owner accepted variable-time secret MSMs ("Allow variable time"). Every private
+  commitment now runs iroha_pasta's secret Pippenger kernel (`msm_secret_cancellable`,
+  `msm_secret_bounded_cancellable`, `msm_secret_bounded_columns_cancellable`): the witness rows, the committed sumcheck
+  round values, the IPA opening's L/R vectors and the generator-claim folds. Bucket choice and zero-digit skips follow
+  the private digits, so a process that can observe this prover's timing, cache or memory-access pattern (another app,
+  a co-resident process, a cache or power side channel) learns information about those private values. The bucket
+  inversion stays constant time and digit and bucket scratch is still wiped. Proof bytes, programs, transcript and
+  verification are unchanged; the constant-time kernel (`msm::spartan_ct`) is deleted. Other constant-time code that
+  is not an MSM is unchanged: the build's `ct_eq` copy and absent-instance checks at public positions, constant-time
+  scalar multiplication of the H masks and predecessor claims, and field arithmetic.
+  *2026-11-19 (superseded 2026-11-24).* Witness rows, round values and the opening's L/R used iroha_pasta's
+  constant-time secret MSMs (`msm::spartan_ct`); no fixed-base table is built, warmed or charged at admission. The inner sumcheck's support
   and folds follow public structure only and carry the folded witness's layout forward (`kern::Live`); outer tables
   are dense. LogUp counting and link-table recount now follow a schedule selected from public geometry.
   *2026-11-20.* The installed prover (`native::engine`: the preparation check, `prepare_linked_phase1_built` and

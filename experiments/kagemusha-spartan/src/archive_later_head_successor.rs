@@ -113,38 +113,86 @@ fn folded_status_digest_reconstructs_wire_objects_for_both_heads() {
         let cap = native::RecoveryCapsule::decode(
             &std::fs::read(wallet.join("counterparty-receive-capsule.norito")).unwrap(),
             &native::device_fixture::scheme().scheme_id(),
-        ).unwrap();
+        )
+        .unwrap();
         let record = native::CompletionRecord::decode(
             &std::fs::read(wallet.join("counterparty-receive-completion.norito")).unwrap(),
             cap.wallet(),
-        ).unwrap();
-        let (_, recv) = engine.verify_released_operation(&cap, &record, parameters).unwrap();
+        )
+        .unwrap();
+        let (_, recv) = engine
+            .verify_released_operation(&cap, &record, parameters)
+            .unwrap();
         let prior: native::engine::HeadFrame = native::decode(recv.head().exact_pair()).unwrap();
 
         let mut digests = Vec::new();
         for (delivery, raw_pair, profile, raw_receipt) in [
-            (payer.delivery, prior.pair.as_slice(), recv.head().profile(), record.exact_receipt()),
-            (&headed, later.exact_pair(), later.profile(), &[later.receipt().body.as_slice(), &later.receipt().signature].concat()[..]),
+            (
+                payer.delivery,
+                prior.pair.as_slice(),
+                recv.head().profile(),
+                record.exact_receipt(),
+            ),
+            (
+                &headed,
+                later.exact_pair(),
+                later.profile(),
+                &[later.receipt().body.as_slice(), &later.receipt().signature].concat()[..],
+            ),
         ] {
             let input = delivery.receiver_evidence();
-            let kind = if std::ptr::eq(delivery, payer.delivery) { crate::full::RECEIVE } else { crate::full::SEND };
+            let kind = if std::ptr::eq(delivery, payer.delivery) {
+                crate::full::RECEIVE
+            } else {
+                crate::full::SEND
+            };
             let selected = &parameters.inner.programs[kind];
             assert_eq!(input.pair.kind, kind);
             assert_eq!(input.pair.ip.io.as_slice(), profile.as_slice());
             assert_eq!(input.exact_pair.as_slice(), raw_pair);
-            assert_eq!(input.pair.cp.program_digest(), selected.primary.program_digest());
-            assert_eq!(input.pair.cs.program_digest(), selected.secondary.program_digest());
-            let other = &parameters.inner.programs[if kind == crate::full::RECEIVE { crate::full::SEND } else { crate::full::RECEIVE }];
-            assert_ne!(input.pair.cp.program_digest(), other.primary.program_digest());
-            assert_ne!(input.pair.cs.program_digest(), other.secondary.program_digest());
-            eprintln!("retained decided receiver kind={kind} primary={} secondary={} original={} B", blake3::Hash::from(input.pair.cp.program_digest()).to_hex(), blake3::Hash::from(input.pair.cs.program_digest()).to_hex(), raw_pair.len());
+            assert_eq!(
+                input.pair.cp.program_digest(),
+                selected.primary.program_digest()
+            );
+            assert_eq!(
+                input.pair.cs.program_digest(),
+                selected.secondary.program_digest()
+            );
+            let other = &parameters.inner.programs[if kind == crate::full::RECEIVE {
+                crate::full::SEND
+            } else {
+                crate::full::RECEIVE
+            }];
+            assert_ne!(
+                input.pair.cp.program_digest(),
+                other.primary.program_digest()
+            );
+            assert_ne!(
+                input.pair.cs.program_digest(),
+                other.secondary.program_digest()
+            );
+            eprintln!(
+                "retained decided receiver kind={kind} primary={} secondary={} original={} B",
+                blake3::Hash::from(input.pair.cp.program_digest()).to_hex(),
+                blake3::Hash::from(input.pair.cs.program_digest()).to_hex(),
+                raw_pair.len()
+            );
             let status = delivery.wire_status().unwrap();
             let digest = delivery.status_digest().unwrap();
             assert_eq!(status.lineage.proof, raw_pair);
-            assert_eq!(status.lineage.public.head.value, profile[crate::full::HEAD_IO].to_repr());
+            assert_eq!(
+                status.lineage.public.head.value,
+                profile[crate::full::HEAD_IO].to_repr()
+            );
             assert_eq!(status.opening.root().unwrap(), root.to_repr());
-            assert_eq!(status.opening.credit_id, payer.delivery.payment().statement()[17].to_repr());
-            assert_eq!(status.opening.payment_digest, payer.delivery.payment().digest_bytes());
+            assert_eq!(
+                status.opening.credit_id,
+                payer.delivery.payment().statement()[17].to_repr()
+            );
+            assert_eq!(
+                status.opening.payment_digest,
+                payer.delivery.payment().digest_bytes()
+            );
             let mut transcript = Vec::from(1u16.to_le_bytes());
             transcript.extend_from_slice(&profile[crate::full::STATEMENT_IO].to_repr());
             transcript.extend_from_slice(&raw_receipt[242..274]);
@@ -152,8 +200,20 @@ fn folded_status_digest_reconstructs_wire_objects_for_both_heads() {
             transcript.extend_from_slice(&status.lineage.lineage_digest());
             transcript.extend_from_slice(&status.opening.opening_digest().unwrap());
             assert_eq!(transcript.len(), 162);
-            assert_eq!(digest, kagemusha_wallet_poseidon_bytes_v1(KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1, &transcript));
-            assert_ne!(digest, kagemusha_wallet_poseidon_bytes_v1(KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1, delivery.credit_status()));
+            assert_eq!(
+                digest,
+                kagemusha_wallet_poseidon_bytes_v1(
+                    KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1,
+                    &transcript
+                )
+            );
+            assert_ne!(
+                digest,
+                kagemusha_wallet_poseidon_bytes_v1(
+                    KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1,
+                    delivery.credit_status()
+                )
+            );
             let mut other = status;
             other.opening.payment_digest = [0; 32];
             assert!(other.credit_status_digest().is_err());
@@ -162,7 +222,6 @@ fn folded_status_digest_reconstructs_wire_objects_for_both_heads() {
         assert_ne!(digests[0], digests[1]);
     });
 }
-
 
 #[test]
 #[ignore = "requires signed receiver Receive and later Send originals"]
@@ -265,7 +324,10 @@ fn successor_archive_status_at_a_later_receiver_send() {
         );
         drop(joined);
         let io = at_later_send.public_io(nonce, verifier.0.io_len).unwrap();
-        assert_eq!(io, instance.io, "the verifier recomputes the exact public input");
+        assert_eq!(
+            io, instance.io,
+            "the verifier recomputes the exact public input"
+        );
         assert_eq!(&io[55..59], &[Fp::ONE; 4]);
         assert_eq!(&io[76..78], &[Fp::ONE, later.statement()[17]]);
         at_later_send.verify(&verifier, nonce, &proof).unwrap();
@@ -442,7 +504,10 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
         let program = positive.0.program_digest();
         assert_eq!(&positive.1.io[55..59], &[Fp::ONE; 4]);
         assert_eq!(&positive.1.io[64..79], &headed.public_words());
-        assert!(holds(&positive), "the exact later Send head selects removal");
+        assert!(
+            holds(&positive),
+            "the exact later Send head selects removal"
+        );
         drop(positive);
         assert!(
             !holds(&build(&noop, &headed)),
@@ -459,7 +524,11 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
         let mut r = headed.clone();
         r.send = false;
         r.subject = credit;
-        substitutions.push(("Receive form bit on the later Send head receipt", r, rejected));
+        substitutions.push((
+            "Receive form bit on the later Send head receipt",
+            r,
+            rejected,
+        ));
         let mut r = headed.clone();
         r.subject += Fp::ONE;
         substitutions.push(("another later operation subject", r, rejected));
@@ -467,7 +536,11 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
         let mut r = headed.clone();
         r.receipt = received.receipt.clone();
         r.expected[5] = received.expected[5];
-        substitutions.push(("Receive receipt as the later Send head receipt", r, rejected));
+        substitutions.push((
+            "Receive receipt as the later Send head receipt",
+            r,
+            rejected,
+        ));
         let mut r = received.clone();
         r.send = true;
         r.subject = later.statement()[17];
@@ -481,7 +554,11 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
         // In the Send form only the credit opening binds the original Payment.
         let mut r = headed.clone();
         r.expected[4] += Fp::ONE;
-        substitutions.push(("another Payment under the covering credit root", r, rejected));
+        substitutions.push((
+            "another Payment under the covering credit root",
+            r,
+            rejected,
+        ));
         let mut r = headed.clone();
         r.receipt.signature = [0; 64];
         r.receipt.signature[31] = 1;
@@ -498,7 +575,10 @@ fn successor_archive_later_send_receipt_form_selects_only_its_signed_head() {
             assert_eq!(refused.0.program_digest(), program, "{label}");
             assert_eq!(&refused.1.io[55..59], bits, "{label}");
             assert_eq!(&refused.1.io[64..79], &bad.public_words(), "{label}");
-            assert!(holds(&refused), "{label}: the derived false result forces the no-op");
+            assert!(
+                holds(&refused),
+                "{label}: the derived false result forces the no-op"
+            );
             drop(refused);
             assert!(
                 !holds(&build(&accepted, bad)),

@@ -325,6 +325,9 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_initializer_invariant_keeps_original_across_validation_and_producer_recovery',
         'original_evidence_decode_owner_survives_worker_deferral_until_its_last_reader',
         'a_local_ballot_refusal_stays_deferred_through_publication',
+        'runtime_support_codec_refusal_remains_original_publication_deferral',
+        'missing_g3_result_profile_requires_recovery_with_the_original_diagnostic',
+        'g3_codec_and_storage_refusals_keep_their_original_publication_owners',
     )),
     ('native publication refusal identity', 'sumeragi/executor/publication.rs', 'sumeragi/executor/publication/tests.rs', 'tests', 'sumeragi::executor::publication::tests', (
         'state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',
@@ -424,6 +427,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'one_shot_admitted_push_admits_both_slots_before_a_refusal_can_release_itself',
         'one_shot_admitted_push_funds_no_owner_that_could_release_its_own_wait',
         'a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds',
+        'historical_rereads_keep_their_verified_predecessor_and_reject_a_different_cut',
+        'signer_source_capture_preserves_the_next_readers_decoder_budget',
     )),
     ('native pending original execution', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/pending_execution_tests.rs', 'pending_execution_tests', 'sumeragi::test_chain::tests::pending_execution_tests', (
         'pending_execution_retains_one_source_and_publishes_once',

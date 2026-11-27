@@ -46,6 +46,11 @@ against a manifest signed by the root-certified Artifact key. Manifest v4 select
 two full-width LogUp challenges and the bounded program encoding. Its source and
 conditional security budget are described in the [Control soundness review](research/CONTROL-SOUNDNESS.md).
 
+Private commitments (witness rows, sumcheck round values, the IPA opening's L/R
+vectors and the generator-claim folds) use iroha_pasta's variable-time secret
+Pippenger MSMs. The owner accepted on 2026-11-24 that their timing and memory
+accesses follow the private values; proof bytes are unchanged ([TODO G8](TODO.md)).
+
 ## Payment and SDK integration
 
 `payment_wire.rs` encodes and strictly decodes the complete IPM1 Payment, including
@@ -77,7 +82,20 @@ native payment and restart test.
 
 ## Validation
 
-The five-family compiler reproduced the registered 9,263,339-byte bundle with
+The selected five-family bundle is 6,973,167 bytes and has SHA-256
+`968f70cceba4ca9e7b249ffbb69f559d2a5d0bbc77179ee74effa8c14ee4f980`.
+On 2026-11-23 the iPhone 17 Pro Max passed all five launches of development
+fixture `2026.11.27`. The holder confirmed Send. Cold Receive authenticated
+the return Payment and restored the balance to 100. Restart recovered all four
+operations and both 10,231-byte Payments. ArchiveSent returned the same 29,763
+completion bytes at sequence 4 after restart.
+
+Normal Receive took **45.484491 s**, including 40.518284 s in Execute. The
+process reached **864,616,448 bytes peak RSS**. The release limits are 3 s
+and 730,144,440 bytes. The Pixel 6 result below covers the earlier v4 bundle.
+[Five-launch verifier](device/ios/verify-returned-launches.py)
+
+The previous five-family compiler reproduced the registered 9,263,339-byte bundle with
 SHA-256 `844b031c4b19448f46f52080e00ca4b3c846b4d8e58d83be20e3a9b3ece084a3`.
 The complete host wallet credited the 10,615-byte Payment and recovered both
 original Payments after a cold restart.
@@ -115,7 +133,7 @@ bytes to verified durable output. Execute accounted for **309.055566 s**. Both
 its phase peak and the process-lifetime peak were **1,078,714,368 bytes RSS**.
 The third launch recovered all four operations with zero executions or prompts.
 The authenticated fixture APK was `a3812a9c…9a31`. The 3 s and 730,144,440-byte
-targets remain open on this device. The iPhone run is pending.
+targets remain open on this device.
 [Pixel measurements and original report digests](output/production-20261119/pixel6-v4-protected-result.json)
 
 A separate three-launch v4 custody fixture measured the software counterparty on

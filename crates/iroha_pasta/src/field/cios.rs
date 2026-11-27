@@ -144,6 +144,25 @@ pub const fn sub(a: &[u64; 4], b: &[u64; 4], p: &Modulus) -> [u64; 4] {
     [d0, d1, d2, d3]
 }
 
+/// Multiply a reduced residue by an ordinary integer word. A Montgomery
+/// input stays in Montgomery form because the product retains its factor of R.
+#[inline(always)]
+pub const fn mul_u64(a: &[u64; 4], word: u64, p: &Modulus) -> [u64; 4] {
+    let (r0, carry) = mac(0, a[0], word, 0);
+    let (r1, carry) = mac(0, a[1], word, carry);
+    let (r2, carry) = mac(0, a[2], word, carry);
+    let (r3, r4) = mac(0, a[3], word, carry);
+    // Split the product at bit 254. For m = 2^254 + c (c < 2^128)
+    // and a < m, the high part is at most word: c * word < 2^254.
+    // Modulo m each multiple of 2^254 contributes -c. Both low and
+    // high * c are below m, so a single modular subtraction suffices.
+    let high = (r4 << 2) | (r3 >> 62);
+    let low = [r0, r1, r2, r3 & ((1 << 62) - 1)];
+    let (c0, carry) = mac(0, high, p.m[0], 0);
+    let (c1, c2) = mac(0, high, p.m[1], carry);
+    sub(&low, &[c0, c1, c2, 0], p)
+}
+
 /// Modular negation of a canonical value (`-0 = 0`).
 #[inline(always)]
 pub const fn neg(a: &[u64; 4], p: &Modulus) -> [u64; 4] {
@@ -421,6 +440,25 @@ mod tests {
                 add(&m_minus_1, &m_minus_1, &p),
                 sub_raw(&m_minus_1, &[1, 0, 0, 0])
             );
+        }
+    }
+
+    #[test]
+    fn word_products_reduce_at_the_254_bit_split() {
+        for p in [P, Q] {
+            let split = [0, 0, 0, 1 << 62];
+            for a in [
+                [0; 4],
+                [1, 0, 0, 0],
+                sub_raw(&split, &[1, 0, 0, 0]),
+                split,
+                sub_raw(&p.m, &[1, 0, 0, 0]),
+            ] {
+                for word in [0, 1, 2, 1 << 32, 1 << 63, u64::MAX] {
+                    let b = to_mont(&[word, 0, 0, 0], &p);
+                    assert_eq!(mul_u64(&a, word, &p), mont_mul(&a, &b, &p));
+                }
+            }
         }
     }
 

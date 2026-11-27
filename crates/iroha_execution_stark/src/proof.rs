@@ -66,8 +66,8 @@ impl Statement {
 /// An upper bound on the encoded size of any proof for `circuit` under `params`.
 ///
 /// Every variable-length part is bounded by its worst case: one Merkle path per query and layer,
-/// one FRI leaf per query, and multiplicities no larger than the total lookup count (which the
-/// verifier enforces).
+/// one FRI leaf per query, and multiplicities (one per range value and fixed-table row) no larger than
+/// the total lookup count (which the verifier enforces).
 ///
 /// # Errors
 /// Rejects parameters the circuit cannot use and sizes not representable on this platform.
@@ -80,7 +80,7 @@ pub fn max_proof_bytes(
     let queries = as_wide(params.queries);
     let log_lde = u128::from(circuit.log_rows + params.log_blowup);
     let width = as_wide(circuit.columns.len());
-    let has_lookups = !circuit.lookups.is_empty();
+    let has_lookups = circuit.has_lookups();
     let aux_ext = if has_lookups {
         as_wide(circuit.helper_count() + 1)
     } else {
@@ -93,7 +93,7 @@ pub fn max_proof_bytes(
     if has_lookups {
         let max_count = crate::params::lookup_occurrences(circuit)?;
         let varint = u128::from((64 - max_count.leading_zeros()).div_ceil(7).max(1));
-        total += (1u128 << circuit.range_bits) * varint;
+        total += as_wide(circuit.table_len()) * varint;
     }
     let next = as_wide(circuit.next_columns().len());
     total += 5 * len + (width + next + aux_ext + u128::from(has_lookups) + chunks) * fp4;
@@ -134,7 +134,7 @@ pub(crate) fn max_proof_elements(circuit: &crate::Circuit, params: &crate::Param
     let queries = params.queries as u128;
     let log_lde = circuit.log_rows + params.log_blowup;
     let width = circuit.columns.len() as u128;
-    let has_lookups = !circuit.lookups.is_empty();
+    let has_lookups = circuit.has_lookups();
     let aux = if has_lookups {
         (circuit.helper_count() + 1) as u128
     } else {
@@ -142,11 +142,7 @@ pub(crate) fn max_proof_elements(circuit: &crate::Circuit, params: &crate::Param
     };
     let chunks = crate::air::quotient_shape(circuit).chunks() as u128;
     let next = circuit.next_columns().len() as u128;
-    let mut total = if has_lookups {
-        1u128 << circuit.range_bits
-    } else {
-        0
-    };
+    let mut total = circuit.table_len() as u128;
     // The five OOD vectors, all opened main/auxiliary/quotient rows, and their batch siblings.
     total += width + next + aux + u128::from(has_lookups) + chunks;
     total += queries * (width + 4 * aux + 4 * chunks);
@@ -170,7 +166,8 @@ pub(crate) fn max_proof_elements(circuit: &crate::Circuit, params: &crate::Param
 pub struct Proof {
     /// Main-trace commitment.
     pub main_root: Digest,
-    /// Range-table multiplicities (sent before the LogUp challenge; empty without lookups).
+    /// Table multiplicities, range values then fixed-table rows (sent before the LogUp challenges;
+    /// empty without lookups).
     pub multiplicities: Vec<u64>,
     /// LogUp-column commitment (absent without lookups).
     pub aux_root: Option<Digest>,
@@ -329,13 +326,15 @@ impl Reader<'_> {
         }
         usize::try_from(v).map_err(|_| DecodeError::Length)
     }
-    /// Charges `count` elements against the decoding budget; every element needs at least one
-    /// input byte, so a count beyond the remaining input is rejected before allocating.
-    fn charge(&mut self, count: u64) -> Result<(), DecodeError> {
-        if count > self.budget || count > self.bytes.len() as u64 {
+    /// Check the element budget and the minimum encoded span before allocating the vector.
+    fn charge(&mut self, count: usize, bytes_per_element: usize) -> Result<(), DecodeError> {
+        if count as u64 > self.budget || count > self.bytes.len() {
             return Err(DecodeError::Length);
         }
-        self.budget -= count;
+        if count > self.bytes.len() / bytes_per_element {
+            return Err(DecodeError::Truncated);
+        }
+        self.budget -= count as u64;
         Ok(())
     }
     fn digest(&mut self) -> Result<Digest, DecodeError> {
@@ -343,7 +342,7 @@ impl Reader<'_> {
     }
     fn digests(&mut self) -> Result<Vec<Digest>, DecodeError> {
         let n = self.len()?;
-        self.charge(n as u64)?;
+        self.charge(n, DIGEST_BYTES)?;
         (0..n).map(|_| self.digest()).collect()
     }
     fn fp(&mut self) -> Result<Fp, DecodeError> {
@@ -355,7 +354,7 @@ impl Reader<'_> {
     }
     fn fp4s(&mut self) -> Result<Vec<Fp4>, DecodeError> {
         let n = self.len()?;
-        self.charge(n as u64)?;
+        self.charge(n, 32)?;
         (0..n).map(|_| self.fp4()).collect()
     }
     fn rows(&mut self) -> Result<Vec<Vec<Fp>>, DecodeError> {
@@ -367,7 +366,7 @@ impl Reader<'_> {
         if n == 0 && width != 0 {
             return Err(DecodeError::NonCanonical);
         }
-        self.charge((n as u64) * (width as u64))?;
+        self.charge(n * width, 8)?;
         (0..n)
             .map(|_| (0..width).map(|_| self.fp()).collect())
             .collect()
@@ -421,11 +420,29 @@ impl Proof {
         w.0
     }
 
-    /// Strict canonical decoding.
+    /// Strict canonical decoding without an expected circuit. Verifiers with a known circuit
+    /// should use [`Self::from_bytes_for_circuit`] to bound lookup storage at the wire boundary.
     ///
     /// # Errors
     /// Rejects truncated, noncanonical, oversized or trailing input.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Self::decode(bytes, None)
+    }
+
+    /// Decode a proof for a trusted, builder-produced circuit. The variable-width lookup
+    /// counts must match its exact table length before storage for them is allocated. The
+    /// verifier checks the counts themselves and the remaining circuit-dependent dimensions.
+    ///
+    /// # Errors
+    /// Rejects a table-length mismatch and any input rejected by [`Self::from_bytes`].
+    pub fn from_bytes_for_circuit(
+        bytes: &[u8],
+        circuit: &crate::Circuit,
+    ) -> Result<Self, DecodeError> {
+        Self::decode(bytes, Some(circuit.table_len()))
+    }
+
+    fn decode(bytes: &[u8], table_len: Option<usize>) -> Result<Self, DecodeError> {
         let mut r = Reader {
             bytes,
             budget: MAX_ELEMENTS,
@@ -435,7 +452,10 @@ impl Proof {
         }
         let main_root = r.digest()?;
         let multiplicity_count = r.len()?;
-        r.charge(multiplicity_count as u64)?;
+        if table_len.is_some_and(|expected| multiplicity_count != expected) {
+            return Err(DecodeError::Length);
+        }
+        r.charge(multiplicity_count, 1)?;
         let multiplicities = (0..multiplicity_count)
             .map(|_| r.varint())
             .collect::<Result<Vec<u64>, _>>()?;
@@ -466,7 +486,7 @@ impl Proof {
             if leaf_count == 0 && arity != 0 {
                 return Err(DecodeError::NonCanonical);
             }
-            r.charge((leaf_count as u64) * (arity as u64))?;
+            r.charge(leaf_count * arity, 32)?;
             let leaves = (0..leaf_count)
                 .map(|_| (0..arity).map(|_| r.fp4()).collect())
                 .collect::<Result<Vec<Vec<Fp4>>, _>>()?;
@@ -512,6 +532,27 @@ impl Proof {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_width_reads_require_the_complete_span_before_consuming_elements() {
+        let count = 2u64;
+        let mut bytes = count.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0; 32]);
+        let mut reader = Reader {
+            bytes: &bytes,
+            budget: MAX_ELEMENTS,
+        };
+        assert_eq!(reader.fp4s(), Err(DecodeError::Truncated));
+        assert_eq!(reader.bytes, &bytes[8..]);
+        assert_eq!(reader.budget, MAX_ELEMENTS);
+        let mut reader = Reader {
+            bytes: &bytes,
+            budget: MAX_ELEMENTS,
+        };
+        assert_eq!(reader.digests(), Err(DecodeError::Truncated));
+        assert_eq!(reader.bytes, &bytes[8..]);
+        assert_eq!(reader.budget, MAX_ELEMENTS);
+    }
 
     #[test]
     fn decoder_rejects_noncanonical_empty_row_width() {
@@ -584,6 +625,10 @@ mod tests {
         assert!(proof.aux_rows.is_empty());
         let bytes = proof.to_bytes();
         assert_eq!(Proof::from_bytes(&bytes).unwrap(), proof);
+        assert_eq!(
+            Proof::from_bytes_for_circuit(&bytes, &circuit).unwrap(),
+            proof
+        );
         // The retired 256-bit suite is never accepted or guessed from payload geometry.
         let mut retired = bytes.clone();
         retired[..4].copy_from_slice(b"IES1");

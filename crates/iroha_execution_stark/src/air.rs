@@ -290,10 +290,10 @@ pub fn quotient_shape(circuit: &Circuit) -> QuotientShape {
         .max()
         .unwrap_or(1)
         .max(2);
-    let high_degree = if circuit.lookups.is_empty() {
-        0
-    } else {
+    let high_degree = if circuit.has_lookups() {
         u32::try_from(circuit.lookups_per_helper).expect("small") + 1
+    } else {
+        0
     };
     QuotientShape {
         low_degree,
@@ -306,8 +306,12 @@ pub fn quotient_shape(circuit: &Circuit) -> QuotientShape {
 pub struct CompiledAir {
     layout: Layout,
     constraints: Vec<CConstraint>,
+    /// Range lookups, then table lookups.
     lookups: Vec<CLin>,
+    /// Lookup ranges per helper: the range lookups' helpers, then the table lookups'.
     helpers: Vec<(usize, usize)>,
+    /// Helpers of range lookups (they use the range challenge; later helpers use the table challenge).
+    range_helpers: usize,
     shape: QuotientShape,
     /// Identity count: circuit and boundary identities, the accumulator, then helpers.
     pub total_constraints: usize,
@@ -381,12 +385,22 @@ impl CompiledAir {
         let lookups: Vec<CLin> = circuit
             .lookups
             .iter()
+            .chain(&circuit.table_lookups)
             .map(|l| CLin::compile(l, &layout))
             .collect();
+        // Helpers never mix the two arguments: each range or table helper sums up to `per` lookups of
+        // its own kind.
         let per = circuit.lookups_per_helper;
-        let helpers: Vec<(usize, usize)> = (0..circuit.helper_count())
-            .map(|h| (h * per, ((h + 1) * per).min(lookups.len())))
+        let chunks = |start: usize, end: usize| {
+            (start..end)
+                .step_by(per)
+                .map(move |first| (first, (first + per).min(end)))
+        };
+        let range_end = circuit.lookups.len();
+        let helpers: Vec<(usize, usize)> = chunks(0, range_end)
+            .chain(chunks(range_end, lookups.len()))
             .collect();
+        debug_assert_eq!(helpers.len(), circuit.helper_count());
         let shape = quotient_shape(circuit);
         let total_constraints = constraints.len()
             + if lookups.is_empty() {
@@ -399,6 +413,7 @@ impl CompiledAir {
             constraints,
             lookups,
             helpers,
+            range_helpers: circuit.range_helper_count(),
             shape,
             total_constraints,
         }
@@ -429,7 +444,7 @@ impl CompiledAir {
         out.extend(self.lookups.iter().map(|l| l.eval(row)));
     }
 
-    /// Helper values of one row given `1/(beta - a)` for each lookup.
+    /// Helper values of one row given `1/(beta - a)` for each lookup (`beta_tables` for table lookups).
     pub fn helper_values(&self, inverses: &[Fp4], out: &mut Vec<Fp4>) {
         out.clear();
         for (start, end) in &self.helpers {
@@ -477,11 +492,15 @@ impl CompiledAir {
     }
 
     /// Helper group at one point: `h * prod(beta - a_i) - sum_i prod_{s != i}(beta - a_s)`.
+    ///
+    /// Range helpers use the range challenge `beta`; table helpers use the table challenge
+    /// `beta_tables`.
     pub fn combine_helpers<E: Element>(
         &self,
         row: &[E],
         aux: &[Fp4],
         beta: &BetaPowers,
+        beta_tables: &BetaPowers,
         alphas: &[Fp4],
     ) -> Fp4 {
         let mut total = Fp4::ZERO;
@@ -492,9 +511,21 @@ impl CompiledAir {
             for (slot, lookup) in values.iter_mut().zip(&self.lookups[*start..*end]) {
                 *slot = lookup.eval(row);
             }
-            total += E::helper_identity(aux[h], &values[..count], beta) * alphas[base + h];
+            let challenge = if h < self.range_helpers {
+                beta
+            } else {
+                beta_tables
+            };
+            total += E::helper_identity(aux[h], &values[..count], challenge) * alphas[base + h];
         }
         total
+    }
+
+    /// Lookups of the range argument (the first lookups of a row); the rest are table lookups.
+    pub fn range_lookups(&self) -> usize {
+        self.helpers
+            .get(self.range_helpers)
+            .map_or(self.lookups.len(), |(start, _)| *start)
     }
 
     /// Evaluates one circuit constraint (diagnostics).

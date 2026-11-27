@@ -775,7 +775,11 @@ fn sort_count(
     // Forwards: a lookup is found when an entry of its tuple precedes it.
     let mut seen = 0u64;
     for i in 0..p {
-        let same = if i > 0 { eq_mask(key(i), key(i - 1)) } else { 0 };
+        let same = if i > 0 {
+            eq_mask(key(i), key(i - 1))
+        } else {
+            0
+        };
         let is_lookup = lookup(i);
         seen = !is_lookup | (same & seen);
         out[i] |= seen & is_lookup & 1;
@@ -1069,7 +1073,11 @@ mod tests {
         let program = Program::build(&table).expect("a range program");
         let low_bits: Vec<(u32, u32)> = (0..11u32).map(|b| (0, b)).collect();
         assert_eq!(program.planes, low_bits);
-        assert_eq!(program.ops.len(), (1 << 12) - 2 + (1 << 11), "6,142 operations");
+        assert_eq!(
+            program.ops.len(),
+            (1 << 12) - 2 + (1 << 11),
+            "6,142 operations"
+        );
         assert_eq!(program.depth, 11);
         assert_eq!(program.fixed_mask, vec![!0x7ffu64, !0, !0, !0]);
         let per_lookup = trie_cost(&program, FIELD_WORDS, 1 << 20) >> 20;

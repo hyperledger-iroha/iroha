@@ -782,7 +782,7 @@ mod validation_fee_admission_tests;
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod tests {
     use crate::{
-        NetworkMessage, PeerTrustGossip, PeersGossip,
+        NETWORK_MESSAGE_DA_PROPOSAL_TAG, NetworkMessage, PeerTrustGossip, PeersGossip,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,

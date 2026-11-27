@@ -9,7 +9,7 @@ extern crate self as iroha_data_model;
 pub mod execution_proofs {
     #![allow(missing_copy_implementations)]
     /// Maximum number of input ticks in a RaceV1 replay.
-    pub const RACE_MAX_TICKS_V1: u32 = 5_400;
+    pub const RACE_MAX_TICKS_V1: u32 = 8_100;
     /// Maximum number of cars in a RaceV1 starting grid.
     pub const RACE_MAX_PLAYERS_V1: u8 = 8;
     /// Number of laps required to finish a RaceV1 race.
@@ -34,14 +34,6 @@ pub mod execution_proofs {
                 Self::NeonTokyo => 2_000_000,
                 Self::Harbor => 2_400_000,
                 Self::Sakura => 1_800_000,
-            }
-        }
-        /// Signed curvature values for the track's twelve equal-length segments.
-        pub const fn curvature(self) -> [i32; 12] {
-            match self {
-                Self::NeonTokyo => [0, 1, 2, 1, 0, -1, -2, -1, 0, 2, -2, 0],
-                Self::Harbor => [0, -2, -2, 0, 1, 3, 1, 0, -1, -3, -1, 0],
-                Self::Sakura => [0, 1, 1, 0, -2, -1, 0, 2, 3, 1, -2, 0],
             }
         }
     }
@@ -201,7 +193,7 @@ fn port_matches_the_node_simulation_tick_by_tick() {
                     players,
                     seed * 1_000 + (t * 10 + players) as u64,
                     throttle,
-                    5_400,
+                    race_v1::MAX_TICKS,
                 );
                 let states = race_v1::replay_states(&replay).unwrap();
                 // Compare the whole replay plus prefixes at irregular lengths (removal boundaries).

@@ -318,9 +318,7 @@ pub fn verify_initial_credential_fields_v1(
     selected_issuer
         .verify_role(scheme, KagemushaWalletSignerRoleV1::Enrollment)
         .map_err(|_| "selected enrollment issuer")?;
-    fields
-        .validate()
-        .map_err(|_| "initial credential fields")?;
+    fields.validate().map_err(|_| "initial credential fields")?;
     challenge
         .validate()
         .map_err(|_| "initial credential challenge")?;

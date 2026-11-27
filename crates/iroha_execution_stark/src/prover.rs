@@ -8,9 +8,7 @@ use crate::field::{Fp, Fp4, GENERATOR, batch_inverse_ext};
 use crate::fri::FriCommitment;
 use crate::hash::{DIGEST_BYTES, FramedHash, hash};
 use crate::merkle::{Digest, MerkleTree, hash_leaf};
-use crate::ntt::{
-    CosetPowers, Domain, barycentric_weights, evaluate_coefficients, evaluate_with_weights,
-};
+use crate::ntt::{CosetPowers, Domain, evaluate_with_weights};
 use crate::params::Params;
 use crate::proof::{Proof, Statement};
 use crate::trace::{self, TraceError};
@@ -31,8 +29,8 @@ pub enum ProveError {
     /// The parameters cannot be used with this circuit.
     #[error(transparent)]
     Parameters(#[from] crate::params::ParamsError),
-    /// The out-of-domain point collided with a domain (negligible probability).
-    #[error("out-of-domain sample collided with the evaluation domain")]
+    /// A field challenge hit a lookup pole or the out-of-domain point hit an evaluation domain.
+    #[error("invalid field sample")]
     BadSample,
 }
 
@@ -144,18 +142,21 @@ impl Committed {
     }
 }
 
-fn interpolate_columns(columns: &[Vec<Fp>], domain: &Domain) -> Vec<Vec<Fp>> {
+fn interpolate_columns(columns: &mut [Vec<Fp>], domain: &Domain) {
     columns
-        .par_iter()
-        .map(|column| {
-            let mut coeffs = column.clone();
-            domain.inverse(&mut coeffs);
-            coeffs
-        })
+        .par_iter_mut()
+        .for_each(|column| domain.inverse(column));
+}
+
+/// Monomial weights for evaluating all coefficient columns at the same extension point.
+fn coefficient_powers(point: Fp4, count: usize) -> Vec<Fp4> {
+    std::iter::successors(Some(Fp4::ONE), |power| Some(*power * point))
+        .take(count)
         .collect()
 }
 
-/// Canonical bytes of the range-table multiplicities, absorbed before the LogUp challenge.
+/// Canonical bytes of the table multiplicities (range values, then fixed-table rows), absorbed before
+/// the LogUp challenges.
 pub fn encode_multiplicities(multiplicities: &[u64]) -> Vec<u8> {
     multiplicities
         .iter()
@@ -172,7 +173,62 @@ pub fn table_inverses(beta: Fp4, bits: u32) -> Vec<Fp4> {
     out
 }
 
-/// The table side of the LogUp identity: `sum_v m_v / (beta - v)`.
+/// `1/(beta_tables - t)` for every packed fixed-table row `t`, in multiplicity order.
+pub fn fixed_table_inverses(beta_tables: Fp4, circuit: &Circuit) -> Vec<Fp4> {
+    let mut out: Vec<Fp4> = circuit
+        .fixed_table_values()
+        .into_iter()
+        .map(|t| beta_tables - Fp4::from_base(Fp::new(t)))
+        .collect();
+    out.par_chunks_mut(1024).for_each(batch_inverse_ext);
+    out
+}
+
+/// The LogUp challenges: `beta` for the range argument and, only when the circuit has table lookups,
+/// `beta_tables` for the table argument (zero otherwise, so table-free transcripts are unchanged).
+pub(crate) fn logup_challenges(
+    transcript: &mut Transcript,
+    circuit: &Circuit,
+) -> Option<(Fp4, Fp4)> {
+    let beta = transcript.challenge_fp4(b"logup-beta");
+    let beta_tables = if circuit.table_lookups.is_empty() {
+        Fp4::ZERO
+    } else {
+        transcript.challenge_fp4(b"logup-beta-tables")
+    };
+    checked_logup_challenges(circuit, beta, beta_tables)
+}
+
+/// Reject poles across the full tables before either dense or sparse inversion.
+/// Multiplicity zero does not remove a table entry from the sampling domain.
+pub(crate) fn checked_logup_challenges(
+    circuit: &Circuit,
+    beta: Fp4,
+    beta_tables: Fp4,
+) -> Option<(Fp4, Fp4)> {
+    let base_value = |point: Fp4| {
+        let base = point.0[0];
+        (point == Fp4::from_base(base)).then_some(base.as_u64())
+    };
+    let range_len = 1u64 << circuit.range_bits;
+    if base_value(beta).is_some_and(|value| value < range_len)
+        || base_value(beta_tables).is_some_and(|value| circuit.fixed_row_index(value).is_some())
+    {
+        return None;
+    }
+    Some((beta, beta_tables))
+}
+
+/// `1/(challenge - t)` for every table entry in multiplicity order: the range values against `beta`,
+/// then the fixed-table rows against `beta_tables`.
+pub fn all_table_inverses(beta: Fp4, beta_tables: Fp4, circuit: &Circuit) -> Vec<Fp4> {
+    let mut out = table_inverses(beta, circuit.range_bits);
+    out.extend(fixed_table_inverses(beta_tables, circuit));
+    out
+}
+
+/// The table side of the LogUp identity: `sum_v m_v / (beta - v)` over the range values plus
+/// `sum_t m_t / (beta_tables - t)` over the fixed-table rows, given [`all_table_inverses`].
 pub fn table_sum(multiplicities: &[u64], inverses: &[Fp4]) -> Fp4 {
     multiplicities
         .par_iter()
@@ -352,13 +408,15 @@ fn prove_inner(
     let mut transcript = initial_transcript(circuit, params, statement, &public);
 
     // Main trace.
-    let main_coefficients = interpolate_columns(&main_trace.columns, &domain);
+    // The lookup helpers still need the original evaluations after the main commitment.
+    let mut main_coefficients: Vec<_> = main_trace.columns.par_iter().cloned().collect();
+    interpolate_columns(&mut main_coefficients, &domain);
     let main = commit_columns(&main_coefficients, &domain, &powers);
     transcript.absorb_digest(b"main-root", &main.tree.root());
     phases.mark("main commit (LDE+Merkle)");
 
-    // LogUp: multiplicities are absorbed before the challenge; the verifier sums the table side.
-    let has_lookups = !circuit.lookups.is_empty();
+    // LogUp: multiplicities are absorbed before the challenges; the verifier sums the table side.
+    let has_lookups = circuit.has_lookups();
     if has_lookups {
         transcript.absorb(
             b"multiplicities",
@@ -366,17 +424,20 @@ fn prove_inner(
         );
     }
     let width = air.layout().width();
-    let public_fp: Vec<Vec<Fp>> = public
-        .iter()
-        .map(|c| c.iter().map(|v| Fp::from_i64(*v)).collect())
+    let mut public_columns: Vec<Vec<Fp>> = public
+        .into_iter()
+        .map(|column| column.into_iter().map(Fp::from_i64).collect())
         .collect();
     let n_inverse = Fp::new(n as u64).inverse().expect("n != 0");
-    let (beta, table_per_row, aux_columns_ext) = if has_lookups {
-        let beta = transcript.challenge_fp4(b"logup-beta");
-        let table_inverses = table_inverses(beta, circuit.range_bits);
+    let aux_width = air.aux_columns();
+    let (beta, beta_tables, table_per_row, mut aux_coefficients) = if has_lookups {
+        let (beta, beta_tables) =
+            logup_challenges(&mut transcript, circuit).ok_or(ProveError::BadSample)?;
+        let table_inverses = all_table_inverses(beta, beta_tables, circuit);
         let table_per_row =
             table_sum(&main_trace.multiplicities, &table_inverses).mul_base(n_inverse);
-        let helper_count = air.aux_columns() - 1;
+        let helper_count = aux_width - 1;
+        let (range_lookups, range_table) = (air.range_lookups(), 1usize << circuit.range_bits);
         let rows: Vec<Vec<Fp4>> = (0..n)
             .into_par_iter()
             .map(|k| {
@@ -384,14 +445,25 @@ fn prove_inner(
                 for (c, column) in main_trace.columns.iter().enumerate() {
                     row[c] = column[k];
                 }
-                for (p, column) in public_fp.iter().enumerate() {
+                for (p, column) in public_columns.iter().enumerate() {
                     row[air.layout().main + p] = column[k];
                 }
                 let mut values = Vec::new();
                 air.lookup_values(&row, &mut values);
                 let inverses: Vec<Fp4> = values
                     .iter()
-                    .map(|v| table_inverses[usize::try_from(v.as_u64()).expect("lookup in table")])
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let position = if i < range_lookups {
+                            usize::try_from(v.as_u64()).expect("range lookup in table")
+                        } else {
+                            range_table
+                                + circuit
+                                    .fixed_row_index(v.as_u64())
+                                    .expect("table lookup in table")
+                        };
+                        table_inverses[position]
+                    })
                     .collect();
                 let mut helpers = Vec::with_capacity(helper_count);
                 air.helper_values(&inverses, &mut helpers);
@@ -399,29 +471,32 @@ fn prove_inner(
             })
             .collect();
         // Accumulator: S_0 = 0, S_{k+1} = S_k + sum(helpers_k) - table/n, returning to 0 after n rows.
-        let mut columns: Vec<Vec<Fp4>> = vec![vec![Fp4::ZERO; n]; helper_count + 1];
+        // Write the four coordinates straight into the columns that will be interpolated.
+        let mut columns = vec![vec![Fp::ZERO; n]; 4 * aux_width];
         let mut running = Fp4::ZERO;
-        for (k, row) in rows.iter().enumerate() {
-            columns[helper_count][k] = running;
-            let mut delta = -table_per_row;
-            for (c, value) in row.iter().enumerate() {
-                columns[c][k] = *value;
-                delta += *value;
+        for (k, row) in rows.into_iter().enumerate() {
+            debug_assert_eq!(row.len(), helper_count);
+            let delta = row.iter().fold(-table_per_row, |sum, value| sum + *value);
+            for (coords, value) in columns
+                .chunks_exact_mut(4)
+                .zip(row.into_iter().chain([running]))
+            {
+                for (column, coord) in coords.iter_mut().zip(value.0) {
+                    column[k] = coord;
+                }
             }
             running += delta;
         }
         if !running.is_zero() {
             return Err(ProveError::Unsatisfied);
         }
-        (beta, table_per_row, columns)
+        (beta, beta_tables, table_per_row, columns)
     } else {
-        (Fp4::ZERO, Fp4::ZERO, Vec::new())
+        (Fp4::ZERO, Fp4::ZERO, Fp4::ZERO, Vec::new())
     };
-    let aux_base: Vec<Vec<Fp>> = aux_columns_ext
-        .iter()
-        .flat_map(|column| (0..4).map(move |c| column.iter().map(|v| v.0[c]).collect::<Vec<Fp>>()))
-        .collect();
-    let aux_coefficients = interpolate_columns(&aux_base, &domain);
+    drop(main_trace.columns);
+    debug_assert_eq!(aux_coefficients.len(), 4 * aux_width);
+    interpolate_columns(&mut aux_coefficients, &domain);
     phases.mark("logup columns");
     let aux = has_lookups.then(|| commit_columns(&aux_coefficients, &domain, &powers));
     if let Some(aux) = &aux {
@@ -439,6 +514,7 @@ fn prove_inner(
     }
     let shape = air.shape();
     let beta_powers = BetaPowers::new(beta);
+    let beta_tables_powers = BetaPowers::new(beta_tables);
     let (low_chunks, high_chunks) = (shape.low_chunks(), shape.high_chunks());
     let q_low_log = quotient_log_blowup(shape.low_degree);
     let q_high_log = if high_chunks > 0 {
@@ -449,7 +525,8 @@ fn prove_inner(
     let q_max_log = q_low_log.max(q_high_log);
     debug_assert!(1usize << q_max_log <= blowup, "checked by Params::check");
     let v = Fp::two_adic_generator(log_n + params.log_blowup);
-    let public_coefficients = interpolate_columns(&public_fp, &domain);
+    interpolate_columns(&mut public_columns, &domain);
+    let public_coefficients = public_columns;
     let last_point = domain.element(n - 1);
     let mut low_values = vec![Fp4::ZERO; n << q_low_log];
     let mut high_values = vec![Fp4::ZERO; if high_chunks > 0 { n << q_high_log } else { 0 }];
@@ -474,7 +551,6 @@ fn prove_inner(
             .ok_or(ProveError::BadSample)?;
         let layout = air.layout();
         let row_width = layout.row();
-        let aux_width = aux_columns_ext.len();
         let block_values: Vec<(usize, Vec<Fp4>, Vec<Fp4>)> = (0..n)
             .step_by(EVAL_BLOCK)
             .collect::<Vec<_>>()
@@ -526,8 +602,14 @@ fn prove_inner(
                     }
                     if in_high {
                         high.push(
-                            air.combine_helpers(row, aux_row, &beta_powers, &alphas)
-                                .mul_base(zerofier_inverse),
+                            air.combine_helpers(
+                                row,
+                                aux_row,
+                                &beta_powers,
+                                &beta_tables_powers,
+                                &alphas,
+                            )
+                            .mul_base(zerofier_inverse),
                         );
                     }
                 }
@@ -544,12 +626,13 @@ fn prove_inner(
             }
         }
     }
+    drop(public_coefficients);
     phases.mark("constraint evaluation");
     // Interpolate each group on shift * <w_{qn}> and split into chunks of degree < n.
     let mut quotient_polys: Vec<Vec<Fp>> = Vec::new();
     for (values, q_log, chunks) in [
-        (&low_values, q_low_log, low_chunks),
-        (&high_values, q_high_log, high_chunks),
+        (low_values, q_low_log, low_chunks),
+        (high_values, q_high_log, high_chunks),
     ] {
         if chunks == 0 {
             continue;
@@ -576,6 +659,7 @@ fn prove_inner(
         }
     }
     let chunks = low_chunks + high_chunks;
+    debug_assert!(quotient_polys.iter().all(|column| column.len() == n));
     let quotient = commit_columns(&quotient_polys, &domain, &powers);
     transcript.absorb_digest(b"quotient-root", &quotient.tree.root());
     phases.mark("quotient commit");
@@ -591,38 +675,33 @@ fn prove_inner(
     {
         return Err(ProveError::BadSample);
     }
-    let weights_z = barycentric_weights(&domain, z);
-    let weights_wz = barycentric_weights(&domain, wz);
-    let ood_main: Vec<Fp4> = main_trace
-        .columns
+    let powers_z = coefficient_powers(z, n);
+    let powers_wz = coefficient_powers(wz, n);
+    let ood_main: Vec<Fp4> = main_coefficients
         .par_iter()
-        .map(|column| evaluate_with_weights(column, &weights_z))
+        .map(|column| evaluate_with_weights(column, &powers_z))
         .collect();
     let next_columns = circuit.next_columns();
     let ood_main_next: Vec<Fp4> = next_columns
         .iter()
-        .map(|c| evaluate_with_weights(&main_trace.columns[*c as usize], &weights_wz))
+        .map(|c| evaluate_with_weights(&main_coefficients[*c as usize], &powers_wz))
         .collect();
     let ext_eval = |base: &[Vec<Fp>], weights: &[Fp4], index: usize| -> Fp4 {
         (0..4).fold(Fp4::ZERO, |acc, c| {
             acc + basis(c) * evaluate_with_weights(&base[4 * index + c], weights)
         })
     };
-    let ood_aux: Vec<Fp4> = (0..aux_columns_ext.len())
+    let ood_aux: Vec<Fp4> = (0..aux_width)
         .into_par_iter()
-        .map(|a| ext_eval(&aux_base, &weights_z, a))
+        .map(|a| ext_eval(&aux_coefficients, &powers_z, a))
         .collect();
     let ood_aux_next: Vec<Fp4> = if has_lookups {
-        vec![ext_eval(&aux_base, &weights_wz, aux_columns_ext.len() - 1)]
+        vec![ext_eval(&aux_coefficients, &powers_wz, aux_width - 1)]
     } else {
         Vec::new()
     };
     let ood_quotient: Vec<Fp4> = (0..chunks)
-        .map(|chunk| {
-            (0..4).fold(Fp4::ZERO, |acc, c| {
-                acc + basis(c) * evaluate_coefficients(&quotient_polys[4 * chunk + c], z)
-            })
-        })
+        .map(|chunk| ext_eval(&quotient_polys, &powers_z, chunk))
         .collect();
     for (label, values) in [
         (&b"ood-main"[..], &ood_main),
@@ -639,7 +718,7 @@ fn prove_inner(
     let gamma = transcript.challenge_fp4(b"deep-gamma");
     let deep = DeepLayout {
         main: main_coefficients.len(),
-        aux_ext: aux_columns_ext.len(),
+        aux_ext: aux_width,
         quotient_ext: chunks,
         next_main: next_columns.clone(),
         next_aux: has_lookups,
@@ -650,7 +729,7 @@ fn prove_inner(
     for (c, coeffs) in main_coefficients.iter().enumerate() {
         z_terms.push((coeffs, gamma_z[c]));
     }
-    for a in 0..aux_columns_ext.len() {
+    for a in 0..aux_width {
         for c in 0..4 {
             z_terms.push((
                 &aux_coefficients[4 * a + c],
@@ -671,7 +750,7 @@ fn prove_inner(
         wz_terms.push((&main_coefficients[*c as usize], gamma_wz[i]));
     }
     if has_lookups {
-        let last = aux_columns_ext.len() - 1;
+        let last = aux_width - 1;
         for c in 0..4 {
             wz_terms.push((
                 &aux_coefficients[4 * last + c],
@@ -698,6 +777,7 @@ fn prove_inner(
     };
     let g_z = combine_coefficients(&z_terms);
     let g_wz = combine_coefficients(&wz_terms);
+    drop((main_coefficients, aux_coefficients, quotient_polys));
     let claim_z = ood_main
         .iter()
         .chain(&ood_aux)
@@ -856,6 +936,25 @@ pub(crate) fn check_main_trace(
 #[cfg(test)]
 mod hash_binding_tests {
     use super::*;
+
+    #[test]
+    fn coefficient_powers_match_barycentric_evaluation_at_both_openings() {
+        use crate::ntt::barycentric_weights;
+
+        let domain = Domain::new(5);
+        let evaluations: Vec<Fp> = (0..32).map(|i| Fp::new(i * i + 11 * i + 1)).collect();
+        let mut columns = vec![evaluations.clone()];
+        interpolate_columns(&mut columns, &domain);
+        for coords in [[3, 1, 4, 1], [5, 9, 2, 6]] {
+            let z = Fp4(coords.map(Fp::new));
+            for point in [z, z.mul_base(domain.generator())] {
+                assert_eq!(
+                    evaluate_with_weights(&columns[0], &coefficient_powers(point, domain.size())),
+                    evaluate_with_weights(&evaluations, &barycentric_weights(&domain, point)),
+                );
+            }
+        }
+    }
 
     #[test]
     fn public_digest_binds_values_and_column_boundaries() {

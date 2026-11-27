@@ -83,7 +83,7 @@ pub fn receipt_pdp_commitment(receipt: &DaIngestReceipt) -> Result<Option<PdpCom
 /// Rejects invalid witnesses, substituted scopes or receipts, and inconsistent source commitments.
 pub fn verify_da_pin_receipt(
     request: &DaIngestRequest,
-    scope: &iroha_data_model::da::ingest::DaPinScopeV1,
+    scope: &iroha_data_model::da::ingest::DaPinScopeProposalV1,
     receipt: &DaIngestReceipt,
     operator: &iroha_crypto::PublicKey,
 ) -> Result<()> {
@@ -146,8 +146,8 @@ pub fn verify_da_pin_receipt(
     if !request.pin_scope_signatures.is_empty() {
         eyre::ensure!(
             request
-                .pin_scope_authorization(scope.clone())
-                .has_valid_canonical_signatures(),
+                .pin_scope_authorization(scope.scope())
+                .has_valid_canonical_signatures(&scope.commitment_digest),
             "existing pin witnesses do not verify for the prepared DA scope"
         );
     }
@@ -162,7 +162,7 @@ pub fn verify_da_pin_receipt(
 /// and duplicate witnesses.
 pub fn authorize_da_pin_receipt(
     request: &mut DaIngestRequest,
-    scope: &iroha_data_model::da::ingest::DaPinScopeV1,
+    scope: &iroha_data_model::da::ingest::DaPinScopeProposalV1,
     receipt: &DaIngestReceipt,
     operator: &iroha_crypto::PublicKey,
     network: NetworkId,

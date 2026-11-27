@@ -3,11 +3,11 @@
 //! exact lineage digests. The component binds their values and the very same opening
 //! cells used by membership, including on a false membership branch.
 use super::*;
+pub(crate) use crate::native::engine::transfers::archive_sent::relation::transcript::status_chain;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_WALLET_CREDIT_STATUS_DOMAIN_V1, KAGEMUSHA_WALLET_CREDITED_DOMAIN_V1,
     KagemushaWalletCreditOpeningV1, kagemusha_wallet_poseidon_bytes_v1,
 };
-pub(crate) use crate::native::engine::transfers::archive_sent::relation::transcript::status_chain;
 
 fn evidence(
     w: &mut Wiring<Fp>,

@@ -83,6 +83,7 @@ pub(super) fn impact(
     let distance = a.sub(progress, old_progress);
     impact_from_geometry(a, geometry, distance, lateral, speed)
 }
+/// Only signs are hit: trees stand beyond the rails and oil is driven through.
 pub(super) fn impact_from_geometry(
     a: &mut IntegerAirV1,
     [relative, kind, x]: [Value; 3],
@@ -92,25 +93,19 @@ pub(super) fn impact_from_geometry(
 ) -> [Value; 4] {
     let solid = a.less(kind, Value::constant(2));
     let tree = a.less(kind, Value::constant(1));
+    let not_tree = a.not(tree);
+    let sign = a.and(solid, not_tree);
     let before = a.less(relative, Value::constant(0));
     let advanced = a.add(relative, distance);
     let before_after = a.less(advanced, Value::constant(0));
     let crossed = a.not(before_after);
     let crossed = a.and(before, crossed);
-    let radius = a.select(tree, Value::constant(1400), Value::constant(1300));
     let delta = a.sub(lateral, x);
     let distance = a.absolute(delta);
-    let touching = a.less(distance, radius);
-    let contact = a.and(solid, crossed);
+    let touching = a.less(distance, Value::constant(1300));
+    let contact = a.and(sign, crossed);
     let contact = a.and(contact, touching);
-    let tree_contact = a.and(contact, tree);
-    let to_right = a.less(x, lateral);
-    let push = a.select(to_right, Value::constant(1800), Value::constant(-1800));
-    let pushed = a.add(x, push);
-    let pushed = a.clamp(pushed, -9000, 9000);
-    let lateral = a.select(tree_contact, pushed, lateral);
-    let loss = a.select(tree, Value::constant(600), Value::constant(260));
-    let slowed = a.sub(speed, loss);
+    let slowed = a.sub_constant(speed, 260);
     let slowed = a.maximum(slowed, Value::constant(0));
     [lateral, a.select(contact, slowed, speed), contact, kind]
 }
@@ -136,7 +131,7 @@ mod tests {
         ] {
             let mut a = IntegerAirV1::default();
             let progress = a.input(0, track.length_mm());
-            let lateral = a.input(-9000, 9000);
+            let lateral = a.input(-6_520, 6_520);
             let velocity = a.input(-320, 320);
             let steer = a.input(-28, 28);
             let rain = a.input(0, 1);
@@ -148,9 +143,9 @@ mod tests {
             let impact = impact(&mut a, track, progress, next_progress, lateral, speed);
             for cell in 0..12 {
                 for offset in [-9001, -9000, -1, 0, 9000, 9001] {
-                    for lateral_offset in [-1401, -1400, 0, 1300, 1400, 1401] {
+                    for lateral_offset in [-1401, -1400, -1300, -1299, 0, 1299, 1300, 1400, 1401] {
                         let x = i32::try_from(
-                            (env::laterals(track)[cell] + lateral_offset).clamp(-9000, 9000),
+                            (env::laterals(track)[cell] + lateral_offset).clamp(-6_520, 6_520),
                         )
                         .expect("bounded fixture value");
                         let p = env::centers(track)[cell] + offset;
@@ -173,7 +168,7 @@ mod tests {
                             let expected = env::impact(track, p, p + 1500, x, 1500);
                             assert_eq!(
                                 [integer(impact[0], &row), integer(impact[1], &row)],
-                                [i64::from(expected.0), i64::from(expected.1)]
+                                [i64::from(x), i64::from(expected)]
                             );
                             let fields = row.iter().copied().map(field).collect::<Vec<_>>();
                             assert!(
@@ -181,7 +176,7 @@ mod tests {
                                     .iter()
                                     .all(|r| *r == field(0))
                             );
-                            for output in [vx, oil, impact[0], impact[1], impact[2]] {
+                            for output in [vx, oil, impact[1], impact[2]] {
                                 let Source::Column(index) = output.source else {
                                     panic!("computed output")
                                 };

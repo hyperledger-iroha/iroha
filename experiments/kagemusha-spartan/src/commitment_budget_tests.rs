@@ -1,4 +1,4 @@
-//! A kernel memory budget bounds the constant-time column MSM's plan, never
+//! A kernel memory budget bounds the secret column MSM's plan, never
 //! its sums: a small budget commits exactly what the default one does, and a
 //! budget below the single-base plan or a cancelled token is an error, never
 //! an identity or partial sum. Private commitments build no fixed-base table,
@@ -29,8 +29,7 @@ fn check<C: PastaCurve>() {
         .map(|(row, bits)| BoundedSecretScalars::new(row, bits, None).unwrap())
         .collect();
     let bounded = column_sums_with_budget(&gens, n, &columns, small, None).unwrap();
-    let default =
-        column_sums_with_budget(&gens, n, &columns, MemoryBudget::DEFAULT, None).unwrap();
+    let default = column_sums_with_budget(&gens, n, &columns, MemoryBudget::DEFAULT, None).unwrap();
     assert_eq!(bounded, default, "the budget changes the plan only");
     for (actual, scalars) in bounded.iter().zip(&rows) {
         let reference = scalars

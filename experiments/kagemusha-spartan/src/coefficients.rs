@@ -72,7 +72,9 @@ impl<F: Clone + Eq + Hash> Coefficients<F> {
         const MAX_ENTRIES: usize = 4096;
         if let Some(existing) = pool.get(&self[..]) {
             *self = Self::Shared(Arc::clone(existing));
-        } else if pool.len() < MAX_ENTRIES && let Self::Owned(values) = self {
+        } else if pool.len() < MAX_ENTRIES
+            && let Self::Owned(values) = self
+        {
             let shared: Arc<[F]> = std::mem::take(values).into();
             pool.insert(Arc::clone(&shared));
             *self = Self::Shared(shared);
@@ -82,13 +84,24 @@ impl<F: Clone + Eq + Hash> Coefficients<F> {
 
 impl<F: Clone + Eq + Hash> UniformCircuit<F> {
     pub(crate) fn share_template_coefficients(&mut self) {
-        let mut pool = HashSet::new();
-        for a in &mut self.arrays {
-            let rows = a.rows.iter_mut().flatten();
-            let lookups = a.lookups.iter_mut().flat_map(|(_, tuple)| tuple.iter_mut());
-            for term in rows.chain(lookups).flatten() {
-                term.coef.share(&mut pool);
-            }
+        share_array_coefficients(&mut self.arrays);
+    }
+}
+
+/// Let equal public template coefficients of `arrays` share one allocation.
+///
+/// The values are unchanged (a shared buffer is copied on write), so a
+/// circuit built from the arrays is the same circuit. Sharing the wiring's
+/// templates before the build keeps their duplicate buffers out of the
+/// build's peak, where the arrays' private values, the placed witness and the
+/// new circuit's structures are all live.
+pub(crate) fn share_array_coefficients<F: Clone + Eq + Hash>(arrays: &mut [super::Array<F>]) {
+    let mut pool = HashSet::new();
+    for a in arrays {
+        let rows = a.rows.iter_mut().flatten();
+        let lookups = a.lookups.iter_mut().flat_map(|(_, tuple)| tuple.iter_mut());
+        for term in rows.chain(lookups).flatten() {
+            term.coef.share(&mut pool);
         }
     }
 }

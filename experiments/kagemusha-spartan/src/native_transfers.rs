@@ -50,7 +50,9 @@ pub trait SpartanWalletMaps {
         key: [u8; 32],
     ) -> Result<iroha_data_model::kagemusha::KagemushaWalletIndexedRemoveV1> {
         let _ = (map, root, key);
-        Err(Error::Unavailable("wallet pending-outgoing removal staging"))
+        Err(Error::Unavailable(
+            "wallet pending-outgoing removal staging",
+        ))
     }
 }
 
@@ -468,7 +470,9 @@ impl NativeEngine {
         // its own projected pair later. A failed proof keeps the same bounded
         // envelope available for the hosted Request checks and noncredit refusal.
         let (trusted, candidate) = Self::payment_candidate(bytes, parameters)?;
-        let valid = match self.verify_payment_candidate(bytes, parameters, &trusted, &candidate) {
+        let valid = match self
+            .verify_payment_candidate(bytes, parameters, &trusted, &candidate, None)
+        {
             Ok(_) => true,
             Err(
                 e @ (Error::ResourceLimit | Error::NotEnoughMemory { .. } | Error::Unavailable(_)),
@@ -539,15 +543,33 @@ impl NativeEngine {
         // Exact selected retries were resolved by custody. An unselected attempt cannot publish
         // the defensive Burn branch, or overwrite the first digest recorded for an existing credit.
         if !incoming.valid || consumed.leaf.key == rq.credit || credit.leaf.key == rq.credit {
-            return Err(Error::Rejected("incoming Payment cannot credit this receiver".into()));
+            return Err(Error::Rejected(
+                "incoming Payment cannot credit this receiver".into(),
+            ));
         }
-        let value = poseidon::hash_with_domain(crate::receive_lineage::CONSUMED_DOMAIN,
-            &[rq.credit, Fp::from_u128(amount), after[11]]);
-        let (consumed_insert, consumed_root) = insert(maps, SpartanWalletMap::Consumed, before[17], rq.credit, value)?;
+        let value = poseidon::hash_with_domain(
+            crate::receive_lineage::CONSUMED_DOMAIN,
+            &[rq.credit, Fp::from_u128(amount), after[11]],
+        );
+        let (consumed_insert, consumed_root) = insert(
+            maps,
+            SpartanWalletMap::Consumed,
+            before[17],
+            rq.credit,
+            value,
+        )?;
         after[17] = consumed_root;
-        let value = poseidon::hash_with_domain(crate::receive_lineage::CREDIT_DOMAIN,
-            &[rq.credit, incoming.digest, Fp::ZERO]);
-        let (credit_insert, _) = insert(maps, SpartanWalletMap::Credit, credit_root, rq.credit, value)?;
+        let value = poseidon::hash_with_domain(
+            crate::receive_lineage::CREDIT_DOMAIN,
+            &[rq.credit, incoming.digest, Fp::ZERO],
+        );
+        let (credit_insert, _) = insert(
+            maps,
+            SpartanWalletMap::Credit,
+            credit_root,
+            rq.credit,
+            value,
+        )?;
         let mut s = *terms(&prepared.witness).1;
         s[7] = credential::digest(c);
         s[8] = before[0];
@@ -664,7 +686,9 @@ fn refresh_witness(
     let verified = time_anchor::authenticate(&authority, scheme, &wallet, root)
         .map_err(Error::AuthorityMismatch)?;
     if verified.digest == rest[5] {
-        return Err(Error::AuthorityMismatch("time anchor must differ from the held one"));
+        return Err(Error::AuthorityMismatch(
+            "time anchor must differ from the held one",
+        ));
     }
     let fresh = nonce(before[29])?;
     if fresh == before[29] {
@@ -733,21 +757,29 @@ mod tests {
     #[ignore = "requires an installed five-family fixture and retained real Payment"]
     fn wallet_receive_originals_match_recursive_candidate() {
         use std::{path::PathBuf, time::Instant};
-        let artifacts = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
+        let artifacts =
+            PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS").unwrap());
         let wallet = PathBuf::from(std::env::var_os("KAGEMUSHA_SPARTAN_DEVICE_ROOT").unwrap());
         let read = |name: &str| std::fs::read(artifacts.join(name)).unwrap();
         let world: [u8; 32] = read("world-manifest-digest.bin").try_into().unwrap();
         let params = crate::native::device_fixture::install_selected(
-            &read("program-bundle.norito"), &read("parameter-manifest.norito"),
-            read("parameter-signature.bin").try_into().unwrap(), Some(&world),
-        ).unwrap();
+            &read("program-bundle.norito"),
+            &read("parameter-manifest.norito"),
+            read("parameter-signature.bin").try_into().unwrap(),
+            Some(&world),
+        )
+        .unwrap();
         let bytes = std::fs::read(wallet.join("incoming-payment.bin")).unwrap();
         let engine = NativeEngine::default();
         let trusted = params.inner.profile(full::SEND).unwrap();
         let profile = payment_wire::Profile {
-            pair: &trusted, scheme: params.inner.scheme, relation: params.inner.relation,
+            pair: &trusted,
+            scheme: params.inner.scheme,
+            relation: params.inner.relation,
         };
-        let accepted = NativeEngine::default().verify_payment(&bytes, &params).unwrap();
+        let accepted = NativeEngine::default()
+            .verify_payment(&bytes, &params)
+            .unwrap();
         let mut malformed = accepted.exact_pair().to_vec();
         malformed[42..74].fill(255);
         let malformed = payment_wire::test_replace_pair(&profile, &bytes, malformed).unwrap();
@@ -758,17 +790,26 @@ mod tests {
             let originals_time = start.elapsed();
             let start = Instant::now();
             let recursive = engine.incoming_candidate(wire, &params).unwrap();
-            eprintln!("wallet Receive originals {originals_time:?}, recursive pair {:?}, valid {valid}", start.elapsed());
-            assert_eq!((valid, recursive.valid), (can_credit, can_credit));
+            eprintln!(
+                "wallet Receive originals {originals_time:?}, recursive pair {:?}, valid {valid}",
+                start.elapsed()
+            );
+            assert_eq!((valid, recursive.valid()), (can_credit, can_credit));
             assert_eq!(input.digest, recursive.payment_digest);
             assert_eq!(input.request, recursive.originals.request);
             assert!(exact_credential(&input.payer, &recursive.originals.payer));
             assert_eq!(input.statement, recursive.originals.statement);
             assert_eq!(input.receipt.body, recursive.originals.receipt.body);
-            assert_eq!(input.receipt.signature, recursive.originals.receipt.signature);
+            assert_eq!(
+                input.receipt.signature,
+                recursive.originals.receipt.signature
+            );
         }
         let truncated = &bytes[..bytes.len() - 1];
-        let a = engine.wallet_receive_originals(truncated, &params).err().unwrap();
+        let a = engine
+            .wallet_receive_originals(truncated, &params)
+            .err()
+            .unwrap();
         let b = engine.incoming_candidate(truncated, &params).err().unwrap();
         assert!(matches!((&a, &b), (Error::Rejected(_), Error::Rejected(_))));
         assert_eq!(a.to_string(), b.to_string());
@@ -864,7 +905,10 @@ mod tests {
         let digest = time_anchor::digest(&step.authority.anchor);
         assert_eq!(asked.get(), 1);
         assert_eq!(step.mode, crate::control::Mode::RefreshTimeAnchor);
-        assert_eq!(step.authority.anchor.body[..], anchor[..time_anchor::BODY_BYTES]);
+        assert_eq!(
+            step.authority.anchor.body[..],
+            anchor[..time_anchor::BODY_BYTES]
+        );
         assert_eq!(step.after_core[11], boot.core[11] + Fp::ONE);
         assert_eq!(step.after_core[28], Fp::from(time));
         assert_eq!(step.after_core[29], boot.core[29] + Fp::ONE);
@@ -895,7 +939,12 @@ mod tests {
         let prepared =
             crate::control::append_preparation(&mut w, family, &ctx.root.root, &input, &prior)
                 .unwrap();
-        harness::expose(&mut w, family, 4, &[prepared.head(), prepared.body().message()]);
+        harness::expose(
+            &mut w,
+            family,
+            4,
+            &[prepared.head(), prepared.body().message()],
+        );
         assert!(harness::holds(&harness::finish(w, 16)));
         // A retry keeps the operation identity custody binds for exact replay.
         let again = build(&anchor, &issuer, &boot.rest).unwrap();
@@ -919,7 +968,12 @@ mod tests {
             ("held anchor", &anchor, &issuer, &held),
             ("tampered signature", &tampered, &issuer, &boot.rest),
             ("another wallet", &foreign, &issuer, &boot.rest),
-            ("Enrollment-role signer", &wrong_role, &wrong_issuer, &boot.rest),
+            (
+                "Enrollment-role signer",
+                &wrong_role,
+                &wrong_issuer,
+                &boot.rest,
+            ),
             ("truncated anchor", &truncated, &issuer, &boot.rest),
             ("truncated issuer", &anchor, &short_issuer, &boot.rest),
         ] {

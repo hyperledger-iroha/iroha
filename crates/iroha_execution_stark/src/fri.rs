@@ -207,7 +207,7 @@ impl FriCommitment {
 /// Replays the FRI commit phase on the verifier side: absorbs roots, returns folding challenges.
 ///
 /// Returns `None` if the proof has the wrong number of layers or final coefficients.
-pub fn verifier_challenges(
+pub(crate) fn verifier_challenges(
     proof: &FriProof,
     log_degree: u32,
     params: &Params,
@@ -238,7 +238,7 @@ pub fn verifier_challenges(
 }
 
 /// Checks the openings: `initial[i]` is the claimed layer-0 value at `queries[i]`.
-pub fn verify_queries(
+pub(crate) fn verify_queries(
     proof: &FriProof,
     betas: &[Fp4],
     queries: &[usize],
@@ -247,6 +247,14 @@ pub fn verify_queries(
     shift: Fp,
     params: &Params,
 ) -> bool {
+    // The enclosing verifier checks the layer geometry and derives these vectors from its transcript.
+    if queries.len() != params.queries
+        || initial.len() != queries.len()
+        || betas.len() != proof.layers.len()
+        || proof.roots.len() != proof.layers.len()
+    {
+        return false;
+    }
     let arity = 1usize << params.fri_log_arity;
     let mut positions: Vec<usize> = queries.to_vec();
     let mut expected: Vec<Fp4> = initial.to_vec();
@@ -374,6 +382,20 @@ mod tests {
             &params
         ));
 
+        for (opening_challenges, opening_values) in [
+            (&betas[..betas.len() - 1], initial.as_slice()),
+            (betas.as_slice(), &initial[..initial.len() - 1]),
+        ] {
+            assert!(!verify_queries(
+                &proof,
+                opening_challenges,
+                &queries,
+                opening_values,
+                log_degree + 3,
+                shift,
+                &params
+            ));
+        }
         let mut bad_initial = initial.clone();
         bad_initial[3] += Fp4::ONE;
         assert!(!verify_queries(

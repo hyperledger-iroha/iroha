@@ -31,7 +31,10 @@ struct UnloadOutcome {
 }
 
 /// Authenticate the bounded original and its single Ed25519 relayer under the selected network.
-pub(crate) fn signed_unload_relay_original(bytes: &[u8], network: &iroha_data_model::NetworkId) -> Result<SignedTransaction, Error> {
+pub(crate) fn signed_unload_relay_original(
+    bytes: &[u8],
+    network: &iroha_data_model::NetworkId,
+) -> Result<SignedTransaction, Error> {
     let transaction = ledger_outcome::signed_original(bytes)?;
     let public = transaction
         .authority()

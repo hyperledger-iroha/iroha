@@ -99,10 +99,10 @@ pub(super) fn prepare(
         || !scope.matches_authorization(&intent.authorization)
         || scope.storage_ticket != ticket_id
         || scope.manifest_hash != record.manifest_hash
-        || scope.commitment_digest != record.pin_scope_digest()
+        // The producer's witnesses sign the digest of this exact finalized commitment.
         || !intent
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(&record.pin_scope_digest())
         || !intent.authorization.has_valid_canonical_signatures()
     {
         return Err("DA publication does not match the finalized producer authorization".into());
@@ -220,9 +220,11 @@ mod tests {
 
     #[test]
     fn native_pin_retains_negotiated_replica_count_tier_and_deadline() {
-        let mut retention = RetentionPolicy::default();
-        retention.storage_class = RegistryStorageClass::Cold;
-        retention.required_replicas = 4;
+        let mut retention = RetentionPolicy {
+            storage_class: RegistryStorageClass::Cold,
+            required_replicas: 4,
+            ..RetentionPolicy::default()
+        };
         let policy = pin_policy(&retention, 77, 77).unwrap();
         assert_eq!(policy.min_replicas, 4);
         assert_eq!(policy.storage_class, StorageClass::Cold);

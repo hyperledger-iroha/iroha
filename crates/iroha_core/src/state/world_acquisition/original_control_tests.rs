@@ -17,7 +17,9 @@ fn world_on(source: &AllocationBudget) -> World {
 // and aggregate layouts. Their real empty-undo resets and publication owners
 // share one original refund scope, just as they do in World acquisition.
 pub(in crate::state) fn prepaid_world_table_writer_bytes(mode: BlockMode, freeze: bool) -> usize {
-    use crate::state::{LightClientSetStorage, sccp_reconciliation_store};
+    use crate::state::{
+        ArtifactStorage, CarrierStorage, LightClientSetStorage, sccp_reconciliation_store,
+    };
     use mv::BlockCapture;
     let source = AllocationBudget::new(1 << 20);
     let scope = source.try_owned_refund_scope().unwrap();
@@ -53,6 +55,8 @@ pub(in crate::state) fn prepaid_world_table_writer_bytes(mode: BlockMode, freeze
             assert_eq!(source.reserved_bytes(), scope_bytes);
         }};
     }
+    measure!(ArtifactStorage);
+    measure!(CarrierStorage);
     measure!(CommitteeStorage);
     measure!(AnchorStorage);
     measure!(OffenceStorage);

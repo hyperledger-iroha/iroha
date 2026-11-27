@@ -17,6 +17,17 @@ signature, retention class, proof scheme, chunk root and optional proof digest.
 first-release lane configuration accepts `sorafs_por_blake3`.
 [Record definition](../../crates/iroha_data_model/src/da/commitment.rs)
 
+`DaProofScheme` has one variant at discriminant 0. Earlier builds named it
+`MerkleSha256`, but every producer already committed the SoraFS BLAKE3 PoR
+tree root and no SHA-256 verifier existed, so the rename to `SorafsPorBlake3`
+keeps the binary meaning. The JSON tag changes from `MerkleSha256` to
+`SorafsPorBlake3`, and the lane label from `merkle_sha256` to
+`sorafs_por_blake3`; Taira's `/v1/da/proof-policies` still reports
+`MerkleSha256` until its validators run the coordinated release. The
+`chunk_root` and label changes are part of the coordinated certified-block wire
+identity rollout (`specs/ironwood_runtime_transition.md`); Taira has committed
+no DA commitments or pin intents.
+
 Commitment and pin-intent bundles travel with the canonical `SignedBlockWire`.
 For each nonempty bundle, the signed block header commits its tree version,
 leaf count and root. Leaves use each record's canonical Norito encoding. Leaf,

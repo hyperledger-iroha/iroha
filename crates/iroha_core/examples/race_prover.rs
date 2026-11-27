@@ -98,10 +98,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         Some("sample") if args.len()==4=>{
             let players=args[1].parse::<u8>()?;let ticks=args[2].parse::<u32>()?;
-            if !(2..=8).contains(&players)||ticks==0||ticks>5400||ticks%6!=0{return Err("ticks must be a positive multiple of six, at most 5400".into());}
+            if !(2..=8).contains(&players)||ticks==0||ticks>RACE_MAX_TICKS_V1||ticks%6!=0{return Err("ticks must be a positive multiple of six, at most 8100".into());}
             let replay=sample_replay(RaceTrackV1::NeonTokyo,players,ticks)?;let final_state=replay_race_v1(&replay)?;
             let network_id=NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"race-prover-local-fixture-network")));
-            let manifest=iroha_data_model::game::GameManifestV1{version:1,application_id:Hash::new(b"local-racing-game"),profile_id:race_profile_id_v1(),application_parameters:replay.track.encode(),min_participants:2,max_participants:players,batch_ticks:6,max_ticks:5400,max_input_bytes:12,max_participant_data_bytes:1,access:iroha_data_model::game::GameAccessV1::Public,payout_policy:iroha_data_model::game::GamePayoutPolicyV1::NoPayout};
+            let manifest=iroha_data_model::game::GameManifestV1{version:1,application_id:Hash::new(b"local-racing-game"),profile_id:race_profile_id_v1(),application_parameters:replay.track.encode(),min_participants:2,max_participants:players,batch_ticks:6,max_ticks:RACE_MAX_TICKS_V1,max_input_bytes:12,max_participant_data_bytes:1,access:iroha_data_model::game::GameAccessV1::Public,payout_policy:iroha_data_model::game::GamePayoutPolicyV1::NoPayout};
             let result=race_result_v1(&final_state)?;
             let outcome=iroha_data_model::game::GameOutcomeV1{terminal_tick:final_state.tick,winner_slots:result.winners.clone(),result:result.encode()};
             // Public deterministic sample identities only; this command never funds a session.

@@ -7,8 +7,8 @@ use norito::streaming::{
         data_availability_root, merkle_proof, merkle_root, storage_commitment, verify_merkle_proof,
     },
     codec::{
-        BaselineEncoder, BaselineEncoderConfig, BaselineManifestParams, EncodedSegment,
-        FrameDimensions, ManifestError, RawFrame, SegmentError, verify_segment,
+        BaselineEncoder, BaselineEncoderConfig, BaselineManifestParams, Chroma420Frame,
+        EncodedSegment, FrameDimensions, ManifestError, RawFrame, SegmentError, verify_segment,
     },
 };
 use std::convert::TryFrom;
@@ -402,6 +402,63 @@ fn refresh_segment_commitments(segment: &mut EncodedSegment) {
     }
     segment.header.chunk_merkle_root = merkle_root(&commitments).expect("chunk root");
 }
+#[test]
+fn baseline_decoder_reads_a_zstandard_literal_block_with_five_plane_bytes() {
+    // RFC 8878 single-segment frame, content size 5, last raw block of length 5.
+    // The uncompressed bytes encode DC zero followed by the end-of-block record.
+    let body = [
+        0x28, 0xb5, 0x2f, 0xfd, 0x20, 5, 0x29, 0, 0, 0, 0, 0xff, 0, 0,
+    ];
+    let dims = FrameDimensions::new(8, 8);
+    let (cfg, mut segment) = build_segment_for_decoder_tests(dims, 1);
+    let chunk = &mut segment.chunks[0];
+    chunk.truncate(16);
+    chunk[12] = 0x80;
+    chunk.extend_from_slice(&body);
+    refresh_segment_commitments(&mut segment);
+    let decoder = BaselineDecoder::new(dims, cfg.frame_duration_ns);
+    let decoded = decoder.decode_segment(&segment).unwrap();
+    assert_eq!(decoded[0].luma, [0; 64]);
+    assert!(decoded[0].chroma.is_none());
+}
+
+#[test]
+fn mixed_compressed_and_raw_frames_share_the_same_yuv_reference() {
+    let dims = FrameDimensions::new(66, 50);
+    let cfg = BaselineEncoderConfig {
+        frame_dimensions: dims,
+        ..Default::default()
+    };
+    let decoder = BaselineDecoder::new(dims, cfg.frame_duration_ns);
+    let lumas: Vec<_> = (0..3)
+        .map(|i| RawFrame::new(dims, pattern_frame(dims, 15 + i)).unwrap())
+        .collect();
+    let n = dims.pixel_count() / 4;
+    let colors = vec![Chroma420Frame::new(dims, vec![17; n], vec![211; n]).unwrap(); 3];
+    let mut segment = BaselineEncoder::new(cfg)
+        .encode_segment_with_chroma(3, 0, 0, &lumas, Some(&colors), None)
+        .unwrap();
+    assert!(segment.chunks.iter().all(|c| c[12] & 0x80 != 0));
+    let expected = decoder.decode_segment(&segment).unwrap();
+    assert!(expected.iter().all(|f| f.chroma.is_some()));
+
+    // Store the middle frame literally and verify the following frame still uses the same pixels.
+    let middle = &mut segment.chunks[1];
+    let records = zstd::bulk::decompress(&middle[16..], 65536).unwrap();
+    middle[12] &= !0x80;
+    middle.truncate(16);
+    middle.extend_from_slice(&records);
+    refresh_segment_commitments(&mut segment);
+    assert_eq!(decoder.decode_segment(&segment).unwrap(), expected);
+
+    segment.chunks[1].push(0);
+    refresh_segment_commitments(&mut segment);
+    assert!(matches!(
+        decoder.decode_segment(&segment),
+        Err(CodecError::TrailingPlaneData)
+    ));
+}
+
 #[test]
 fn baseline_decoder_rejects_frame_index_mismatch() {
     let dims = FrameDimensions::new(8, 8);

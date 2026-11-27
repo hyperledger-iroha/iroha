@@ -320,14 +320,20 @@ final class ToriiDaIngestTests: XCTestCase {
     func testReceiptRequiresEffectiveReplicationPolicy() throws {
         let baseline = canonicalReceiptObject()
         let valid = try XCTUnwrap(baseline["retention_policy"] as? [String: Any])
-        for (replicas, tag) in [(0, "da.sidecar"), (3, ""), (3, " da.sidecar"), (3, "da\nsidecar")] {
+        for (replicas, tag) in [(0, "da.sidecar"), (0, ""), (3, ""), (3, " da.sidecar"),
+                                (3, "da.sidecar "), (3, "da\nsidecar")] {
             var receipt = baseline
             var policy = valid
             policy["required_replicas"] = replicas
             policy["governance_tag"] = [tag]
             receipt["retention_policy"] = policy
             let data = try JSONSerialization.data(withJSONObject: receipt)
-            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data))
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: data)) { error in
+                guard case DecodingError.dataCorrupted(let context) = error else {
+                    return XCTFail("Unexpected receipt error: \(error)")
+                }
+                XCTAssertEqual(context.codingPath.last?.stringValue, "retention_policy")
+            }
         }
     }
 

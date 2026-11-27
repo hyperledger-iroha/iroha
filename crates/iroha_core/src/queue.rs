@@ -1333,12 +1333,26 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             return Ok(None);
         }
         if matches!(transaction.entrypoint(), TransactionEntrypoint::External(_)) {
-            match crate::runtime::generic_carriers::admission::admit(self.view.world(), self.next_block_height, signed.instructions()) {
+            match crate::runtime::generic_carriers::admission::admit(
+                self.view.world(),
+                self.next_block_height,
+                signed.instructions(),
+            ) {
                 Ok(true) => return Ok(None),
-                Ok(false) => {},
-                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(original)) => return Err(Error::Deferred(original)),
-                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(iroha_data_model::ValidationFail::InstructionFailed(iroha_data_model::isi::error::InstructionExecutionError::Runtime(rejection)))) => return Ok(Some(rejection)),
-                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(rejection)) => return Err(Error::UnsupportedTransactionAdmission { reason: rejection.to_string() }),
+                Ok(false) => {}
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(original)) => {
+                    return Err(Error::Deferred(original));
+                }
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    iroha_data_model::ValidationFail::InstructionFailed(
+                        iroha_data_model::isi::error::InstructionExecutionError::Runtime(rejection),
+                    ),
+                )) => return Ok(Some(rejection)),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(rejection)) => {
+                    return Err(Error::UnsupportedTransactionAdmission {
+                        reason: rejection.to_string(),
+                    });
+                }
             }
         }
         Ok(crate::runtime::envelope::first_unadmitted_envelope(
@@ -4421,9 +4435,11 @@ impl Queue {
         // would only commit `definition_inactive` or `malformed_payload`
         // (`specs/live_runtime_upgrades.md` §5.2).
         match state_access.first_inactive_envelope(checked.as_accepted()) {
-            Ok(Some(rejection)) => return Err(Self::refused(Error::RuntimeRejected(rejection), checked)),
+            Ok(Some(rejection)) => {
+                return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
+            }
             Err(original) => return Err(Self::refused(original, checked)),
-            Ok(None) => {},
+            Ok(None) => {}
         }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.

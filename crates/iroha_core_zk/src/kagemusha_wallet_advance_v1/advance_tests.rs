@@ -130,7 +130,9 @@ fn fresh_local_policy_refuses_before_selection_and_selected_retry_skips_a_later_
         field: "future locally blocked counterparty",
     };
     assert_eq!(
-        provider.advance_with_local_policy(&slot, &TestOwnerV1, &TestOwnerV1, &request, |_| Err(blocked)),
+        provider.advance_with_local_policy(&slot, &TestOwnerV1, &TestOwnerV1, &request, |_| Err(
+            blocked
+        )),
         Err(blocked)
     );
     assert_eq!(
@@ -817,12 +819,18 @@ fn wallet_advance_v1_advance_retries_older_operations_while_one_is_pending() {
     // produce the pending receipt, even when the requested output is archived.
     assert!(matches!(
         provider.advance_with_local_policy(
-            &slot, &TestOwnerV1, &FailingOwnerV1 { body: true }, &bootstrap_request,
+            &slot,
+            &TestOwnerV1,
+            &FailingOwnerV1 { body: true },
+            &bootstrap_request,
             |_| panic!("archived retry performed a fresh selection"),
         ),
         Ok(KagemushaWalletAdvanceOutcomeV1::Archived(_))
     ));
-    assert!(matches!(provider.status(&slot), Ok(KagemushaWalletSlotStatusV1::Released(_))));
+    assert!(matches!(
+        provider.status(&slot),
+        Ok(KagemushaWalletSlotStatusV1::Released(_))
+    ));
     released(
         provider
             .advance(&slot, &TestOwnerV1, &request)

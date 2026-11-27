@@ -1392,7 +1392,10 @@ mod tests {
         ));
         parameters.manifest_digest = manifest;
         let resumed = engine.resume(&capsule, &parameters).unwrap();
-        assert_eq!(resumed.capsule().encode().unwrap(), capsule.encode().unwrap());
+        assert_eq!(
+            resumed.capsule().encode().unwrap(),
+            capsule.encode().unwrap()
+        );
         let signature = bootstrap::sign(
             field(&prepared.signing_message()).unwrap(),
             &key.d,
@@ -1405,7 +1408,9 @@ mod tests {
         // A spendable predecessor is admitted through the same private head
         // capability as a normal wallet's first Load after Bootstrap.
         let first_load = device_fixture::load100(&boot).unwrap();
-        let fresh_load = engine.prepare(&first_load, released.head(), &parameters).unwrap();
+        let fresh_load = engine
+            .prepare(&first_load, released.head(), &parameters)
+            .unwrap();
         assert_eq!(fresh_load.capsule().kind(), 2);
         parameters.manifest_digest[0] ^= 1;
         assert!(matches!(

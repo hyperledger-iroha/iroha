@@ -1537,15 +1537,11 @@ impl CertifiedTestChain {
     /// schedule and the production entrypoint admission and payload owners.
     ///
     /// # Panics
-    /// The input is empty, fails original admission, or cannot be assembled.
+    /// No transaction or lane work exists, or admission or assembly fails.
     pub fn proposal_entrypoints(
         &self,
         entrypoints: Vec<iroha_data_model::transaction::TransactionEntrypoint>,
     ) -> SignedBlock {
-        assert!(
-            !entrypoints.is_empty(),
-            "native proposals require original work"
-        );
         let view = self.state.view();
         let parent = view
             .latest_block()

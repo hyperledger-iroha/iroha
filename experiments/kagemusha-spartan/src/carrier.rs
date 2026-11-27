@@ -122,14 +122,21 @@ impl TrustedProfile {
         &self.id
     }
     /// Byte offset, authenticated slot order and column dimension of one side's late public words.
-    pub(crate) fn projected_late_layout(&self, primary: bool) -> Result<(usize, &[usize], usize), String> {
+    pub(crate) fn projected_late_layout(
+        &self,
+        primary: bool,
+    ) -> Result<(usize, &[usize], usize), String> {
         let ranges = projected_ranges(self)?;
         let (start, layout, slots) = if primary {
             (ranges.primary.start, &self.p, &self.late_slots[0])
         } else {
             (ranges.secondary.start, &self.s, &self.late_slots[1])
         };
-        Ok((start + layout.rows as usize * 32, slots, layout.col_bits as usize))
+        Ok((
+            start + layout.rows as usize * 32,
+            slots,
+            layout.col_bits as usize,
+        ))
     }
     /// Original KGSPPR2 offsets for the inherited generator's public coordinates
     /// and endoscalar challenges. The installed circuit supplies the slot order.

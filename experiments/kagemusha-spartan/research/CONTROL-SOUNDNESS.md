@@ -105,3 +105,22 @@ The compiler measured \((s_x,\mathrm{row\ bits},\mathrm{column\ bits})=(22,5,18)
 The fixed-point compiler regenerated the registered 9,263,339-byte bundle, SHA-256 `844b031c4b19448f46f52080e00ca4b3c846b4d8e58d83be20e3a9b3ece084a3`. Independent reimport and re-export matched all ten program originals and their registered digests. Each tape has two phase-two challenges. The challenge degrees are (1, 7) on P, (1, 4) on S for Receive, Send, Control and ArchiveSent, and (1, 1) on S for Bootstrap. [Registered program digests](../src/native.rs) · [Fixed-point and degree check](../src/archive_fixed_point_compiler.rs)
 
 Under the extractor and compiler correspondence assumptions, this geometry bounds the algebraic contribution below \(2^{-38.41}\) at \(Q=2^{80}\), including the two-field slack. The count covers fresh replies through the last acceptance and both parent edges of Receive and ArchiveSent. An end-to-end bound also needs the concrete recursive RP57 extraction loss, generator binding at the extractor’s running time, signatures and hashing. A multi-round Fiat–Shamir knowledge theorem for a special-sound interactive protocol would require a proof of its transcript-tree hypotheses and a reduction for the recursive evaluation of RP57 in these circuits. The planning target for the total lifetime risk remains an issuer decision. [Recursive premises and accounting](SOUNDNESS.md) · [Fiat–Shamir transformation of multi-round interactive proofs](https://eprint.iacr.org/2021/1377)
+
+## Reduced five-family programs
+
+The fixed-point compiler for the 6,973,167-byte program bundle produced SHA-256 `968f70cceba4ca9e7b249ffbb69f559d2a5d0bbc77179ee74effa8c14ee4f980`. Its ten digests are registered in the native producer. Each round groups up to four variables. The geometry below determines which checks share a transcript reply. [Producer registry](../src/native.rs) · [Fixed-point compiler](../src/archive_fixed_point_compiler.rs) · [Transcript](../src/spartan.rs)
+
+| Curve | Constraint, row and column bits | Outer round widths | Inner round widths | Fresh replies per proof |
+|---|---|---|---|---:|
+| P | 21, 4, 18 | 4, 4, 4, 4, 4, 1 | 4, 4, 4, 4, 4, 3 | 36 |
+| S | 20, 4, 17 | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4, 2 | 34 |
+
+The last inner reply has charge \(26\lambda_0(q)+13\lambda_1(q)\) on P and \(8\lambda_0(p)+12\lambda_1(p)\) on S. On either side a full four-variable round sets the maximum charge. Write \(H=2^{126}\). For a transcript field of order \(r\), the maximum low-half atom is \(\lambda_0(r)=\lceil r/H\rceil/r\). Both Pasta field orders give \(80 < H\delta < 81\) for \(\delta=80\max(\lambda_0(p),\lambda_0(q))\). Thus \(81Q/2^{126}\) is a conservative upper bound on the algebraic contribution for \(Q\) fresh replies across the two fields under the pre-reply discrepancy and extraction hypotheses. If each field has a separate budget of \(Q\), the sum is bounded by \(162Q/2^{126}\). [Challenge extraction](../src/fs.rs) · [Recursive hypotheses](SOUNDNESS.md)
+
+Applying this calculation to joined histories requires showing that the discrepancies associated with a repeated transcript input were fixed before its first reply and bounding the work to extract both parents. The concrete recursive RP57 loss and a simulator for the published pair and accumulator words remain open. These quantities are needed for an end-to-end security or zero-knowledge claim about the reduced generation.
+
+### Privacy of the published matrix claim
+
+For the five-family generation above, a Payment publishes the folded matrix claim. Its coordinates depend on the earlier operations that contributed to the wallet state. The outgoing and return Payments in the physical iPhone round trip both passed independent native verification. Reading the originals reproduced different second-selector coordinates on both curves. The public Send statements also differ between these two Payments, so this observation alone does not quantify the additional information available to a recipient with a fixed public statement. [Matrix claim construction](../src/deferral.rs) and [recursive operation inputs](../src/full.rs)
+
+A history-privacy argument must cover the complete published pair together with the public Payment statement and any originals that a recipient already holds. Commitment hiding and the algebraic soundness bound above each cover only part of this view. The physical round trip establishes interoperability. A history-privacy claim for this generation remains open.

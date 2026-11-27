@@ -251,7 +251,10 @@ fn lin_heap<F>(v: &Lin<F>, coefficients: &mut HashSet<*const F>) -> u128 {
     bytes(v) + v.iter().map(|t| term_heap(t, coefficients)).sum::<u128>()
 }
 fn tuple_heap<F>(v: &Vec<Lin<F>>, coefficients: &mut HashSet<*const F>) -> u128 {
-    bytes(v) + v.iter().map(|lin| lin_heap(lin, coefficients)).sum::<u128>()
+    bytes(v)
+        + v.iter()
+            .map(|lin| lin_heap(lin, coefficients))
+            .sum::<u128>()
 }
 fn symbolic_heap(rows: &SymbolicRows) -> u128 {
     nested(rows)
@@ -353,6 +356,9 @@ impl<F: Scalar> UniformCircuit<F> {
         let start = retained;
         if let Some(t) = self.plan.get() {
             retained += bytes(&t.pool) + bytes(&t.regs.inputs);
+            if let Some(words) = t.word_scales.get() {
+                retained += bytes(words);
+            }
             retained += match &t.regs.ops {
                 RegisterInstructions::Packed(words) => bytes(words),
                 RegisterInstructions::Wide(instructions) => bytes(instructions),

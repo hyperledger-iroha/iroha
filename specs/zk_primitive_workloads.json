@@ -3738,7 +3738,7 @@
     },
     "sha2-256": {
      "class": "test-or-tooling",
-     "note": "The authority registry's test-only storage_layout module fingerprints recursive baseline storage schemas for its local release evidence fixture."
+     "note": "The test-only authority registry hashes each baseline storage key and value schema to detect changes to the pinned layout fixture."
     }
    }
   },
@@ -3766,7 +3766,7 @@
     },
     "sha2-256": {
      "class": "evidence-metadata",
-     "note": "Kernel export checksums."
+     "note": "Kernel export checksums. The RaceV1 rules string also names the SHA-256 of each real-road table, which a test of proof.rs recomputes; no admission code computes it (the circuit identity and the hashed sources bind the tables)."
     },
     "sha2-512": {
      "class": "role",
@@ -3789,6 +3789,10 @@
     "blake3": {
      "class": "test-or-tooling",
      "note": "Only the race_bench example names it, to fingerprint its binary and proofs (a dev-dependency); no protocol hash uses it."
+    },
+    "sha2-256": {
+     "class": "evidence-metadata",
+     "note": "Only the header comment of the generated RaceV1 road table (src/games/race_v1_roads.rs) names it: the SHA-256 of the sora-cars road data the table was generated from. No code of this crate computes it."
     }
    }
   },
@@ -5194,7 +5198,7 @@
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/shift.rs": ["digest384"],
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace.rs": ["digest384"],
    "crates/iroha_core_privacy/src/execution_proofs/kernel_export.rs": ["sha2-256"],
-   "crates/iroha_core_privacy/src/execution_proofs/proof.rs": ["blake2b", "iroha-hash"],
+   "crates/iroha_core_privacy/src/execution_proofs/proof.rs": ["blake2b", "iroha-hash", "sha2-256"],
    "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/execution_proofs/registry.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/execution_proofs/stark/aggregate_stark.rs": ["digest384", "poseidon"],
@@ -5810,6 +5814,7 @@
    "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs": ["iroha-hash"],
    "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs": ["iroha-hash"],
    "crates/iroha_execution_stark/examples/race_bench.rs": ["blake3"],
+   "crates/iroha_execution_stark/src/games/race_v1_roads.rs": ["sha2-256"],
    "crates/iroha_execution_stark/src/hash.rs": ["blake2b"],
    "crates/iroha_execution_stark/src/lib.rs": ["blake2b"],
    "crates/iroha_execution_stark/src/merkle.rs": ["blake2b"],

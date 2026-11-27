@@ -25,7 +25,7 @@ export {
   verifyOffchainSignatureV1,
 };
 
-/** Exact current binary FrameV1 + EnvelopeV1 + AEAD overhead for SignRequestTx. */
+/** Canonical Torii FrameV1, EnvelopeV1 and AEAD overhead for SignRequestTx on both hops. */
 export const CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1 = 472;
 
 /** Validate endpoint-reported WebSocket/buffer capacity; this is not wallet or finality authentication. */
@@ -866,6 +866,13 @@ function readLengthPrefixedSlice(bytes, state, label) {
   return payload;
 }
 
+function decodeConnectU64(bytes, label) {
+  if (bytes.length !== 8) {
+    throw new Error(`${label} must contain eight bytes`);
+  }
+  return readU64(bytes, 0, label);
+}
+
 function decodeDir(bytes, label) {
   if (bytes.length !== 4) {
     throw new Error(`${label} must be 4 bytes`);
@@ -916,29 +923,34 @@ function decodeRelayWalletSignature(bytes, label) {
     throw new Error(`${label}.signature is truncated`);
   }
   const count = readU64(sequence, 0, `${label}.signature.count`);
+  const algorithm = readU32(algorithmBytes, 0, `${label}.algorithm`);
+  if (algorithm === ALGORITHM_ED25519 && count !== 64) {
+    throw new Error(`${label} Ed25519 signature must be 64 bytes`);
+  }
   return {
-    algorithm: readU32(algorithmBytes, 0, `${label}.algorithm`),
+    algorithm,
     signature: decodeElementFramedBytes(sequence.subarray(8), count, `${label}.signature`),
   };
 }
 
+/**
+ * Decode the `WalletSignatureV1` of an encrypted `SignResultOk`. Torii's Rust wallet sends
+ * the canonical layout above. The maintained desktop wallet sends a compact Ed25519 layout
+ * (a one-byte algorithm and 64 packed signature bytes), accepted only here, inside the
+ * authenticated envelope; plaintext approvals stay canonical.
+ */
 function decodeWalletSignature(bytes, label) {
   const state = { offset: 0 };
   const algorithmBytes = readLengthPrefixedSlice(bytes, state, `${label}.algorithm`);
-  if (algorithmBytes.length !== 1) {
-    throw new Error(`${label}.algorithm must be 1 byte`);
-  }
-  const signature = decodeNoritoBytes(
-    readLengthPrefixedSlice(bytes, state, `${label}.signature`),
-    `${label}.signature`,
-  );
+  const sequence = readLengthPrefixedSlice(bytes, state, `${label}.signature`);
   if (state.offset !== bytes.length) {
     throw new Error(`${label} length mismatch`);
   }
-  return {
-    algorithm: algorithmBytes[0],
-    signature,
-  };
+  if (algorithmBytes.length === 1 && algorithmBytes[0] === ALGORITHM_ED25519
+      && sequence.length === 8 + 64 && readU64(sequence, 0, `${label}.signature.count`) === 64) {
+    return { algorithm: ALGORITHM_ED25519, signature: sequence.slice(8) };
+  }
+  return decodeRelayWalletSignature(bytes, label);
 }
 
 function decodeConnectControl(bytes) {
@@ -1065,7 +1077,7 @@ function decodeConnectFrame(bytes) {
     "frame.sid",
   );
   const dir = decodeDir(readLengthPrefixedSlice(bytes, state, "frame.dir"), "frame.dir");
-  const seq = readU64(readLengthPrefixedSlice(bytes, state, "frame.seq"), 0, "frame.seq");
+  const seq = decodeConnectU64(readLengthPrefixedSlice(bytes, state, "frame.seq"), "frame.seq");
   const kindBytes = readLengthPrefixedSlice(bytes, state, "frame.kind");
   if (state.offset !== bytes.length) {
     throw new Error("connect frame length mismatch");
@@ -1133,7 +1145,7 @@ function decodeNoritoFrame(bytes, label, typeName = CONNECT_ENVELOPE_TYPE_NAME) 
   const payloadLength = readU64(bytes, 23, `${label}.payloadLength`);
   const checksum = new DataView(bytes.buffer, bytes.byteOffset + 31, 8).getBigUint64(0, true);
   const payload = bytes.subarray(40, 40 + payloadLength);
-  if (payload.length !== payloadLength) {
+  if (payload.length !== payloadLength || bytes.length !== 40 + payloadLength) {
     throw new Error(`${label} payload exceeded available bytes`);
   }
   if (crc64Xz(payload) !== checksum) {
@@ -1152,7 +1164,7 @@ function encodeEnvelope(seq, payload) {
 function decodeEnvelope(bytes) {
   const payload = decodeNoritoFrame(bytes, "Connect envelope");
   const state = { offset: 0 };
-  const seq = readU64(readLengthPrefixedSlice(payload, state, "envelope.seq"), 0, "envelope.seq");
+  const seq = decodeConnectU64(readLengthPrefixedSlice(payload, state, "envelope.seq"), "envelope.seq");
   const payloadBytes = readLengthPrefixedSlice(payload, state, "envelope.payload");
   if (state.offset !== payload.length) {
     throw new Error("Connect envelope length mismatch");
@@ -1172,6 +1184,9 @@ function decodeConnectPayload(bytes) {
       readLengthPrefixedSlice(body, state, "payload.signature"),
       "payload.signature",
     );
+    if (state.offset !== body.length) {
+      throw new Error("sign_result_ok length mismatch");
+    }
     return {
       kind: "sign_result_ok",
       signature,

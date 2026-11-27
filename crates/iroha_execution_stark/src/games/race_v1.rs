@@ -8,19 +8,30 @@
 //! Circuit layout (one row per tick): seven registers per car (progress, lateral, speed, lateral
 //! velocity, boost energy, finished flag, finish tick). Player controls, removals and weather are
 //! public columns. Removals are public, so they are not registers.
+//!
+//! Each track is a real road of 1986 at true scale: its three laps are one stretch of road drawn end to
+//! end, and the bend under every 5 m of it ([`race_v1_roads`](super::race_v1_roads)) pushes a car outward
+//! by `trunc(K * speed^2 / 2^24)` mm a tick. The circuit reads `K` from a fixed table keyed by the car's
+//! 5 m station. The road is walled by guard rails at [`RAIL_MM`]; roadside trees stand beyond them.
 
+use super::race_v1_roads::{FORCE_DIVISOR, LEAD_MM, STATION_MM};
 use crate::circuit::{Builder, Circuit, Expr, OneHot};
 
-/// Ticks in the longest race.
-pub const MAX_TICKS: u32 = 5_400;
+/// Ticks in the longest race: four and a half minutes, within the 2^13-row trace.
+pub const MAX_TICKS: u32 = 8_100;
 /// Cars in the largest grid.
 pub const MAX_PLAYERS: usize = 8;
 /// Laps per race.
 pub const LAPS: i64 = 3;
 /// Valid control bits: throttle, brake, left, right, drift, boost.
 pub const CONTROL_MASK: u16 = 0x3f;
-/// Trace height: 5,400 ticks plus the final state fit in 2^13 rows.
+/// Trace height: 8,100 ticks plus the final state fit in 2^13 rows.
 pub const LOG_ROWS: u32 = 13;
+const SUPPORTED_LOG_ROWS: std::ops::RangeInclusive<u32> = 8..=LOG_ROWS;
+/// The guard rails' faces, either side of the centre line: no car goes beyond them.
+pub const RAIL_MM: i64 = 6_520;
+/// Beyond the road's edge, on the verge, a car loses speed every tick.
+const VERGE_MM: i64 = 6_000;
 
 const TREE: i64 = 0;
 const SIGN: i64 = 1;
@@ -52,13 +63,27 @@ impl Track {
         }
     }
 
-    /// Twelve curvature cells.
-    pub const fn curvature(self) -> [i64; 12] {
+    /// The real road's bend coefficient for every 5 m station, from the lead-in 100 m before the start
+    /// line to the finish (see [`race_v1_roads`](super::race_v1_roads)).
+    pub const fn road(self) -> &'static [i16] {
         match self {
-            Self::NeonTokyo => [0, 1, 2, 1, 0, -1, -2, -1, 0, 2, -2, 0],
-            Self::Harbor => [0, -2, -2, 0, 1, 3, 1, 0, -1, -3, -1, 0],
-            Self::Sakura => [0, 1, 1, 0, -2, -1, 0, 2, 3, 1, -2, 0],
+            Self::NeonTokyo => &super::race_v1_roads::NEON_TOKYO,
+            Self::Harbor => &super::race_v1_roads::HARBOR,
+            Self::Sakura => &super::race_v1_roads::SAKURA,
         }
+    }
+
+    /// The bend coefficient under a progress (the 5 m station holding it).
+    ///
+    /// # Errors
+    /// Rejects progress off the road.
+    pub fn bend(self, progress: i64) -> Result<i64, RaceError> {
+        progress
+            .checked_add(LEAD_MM)
+            .and_then(|lead| usize::try_from(lead.div_euclid(STATION_MM)).ok())
+            .and_then(|station| self.road().get(station))
+            .map(|coefficient| i64::from(*coefficient))
+            .ok_or(RaceError::StateBounds)
     }
 
     /// Object kind per cell.
@@ -173,6 +198,9 @@ pub enum RaceError {
     /// Player count outside 1..=8.
     #[error("race requires between one and eight players")]
     PlayerCount,
+    /// Trace height outside the supported RaceV1 capacities.
+    #[error("race trace height must be between 8 and 13 (log2 rows)")]
+    Capacity,
     /// Wrong number of controls in a frame.
     #[error("race input frame does not match the participant count")]
     ControlCount,
@@ -254,22 +282,18 @@ fn lateral_velocity(
     velocity.clamp(-limit, limit)
 }
 
-fn impact(track: Track, old_progress: i64, progress: i64, lateral: i64, speed: i64) -> (i64, i64) {
+/// Crossing a sign's centre within its 1.3 m radius costs 260 mm/tick once. Trees stand beyond the
+/// rails and oil is driven through, so neither is hit.
+fn impact(track: Track, old_progress: i64, progress: i64, lateral: i64, speed: i64) -> i64 {
     let (wrapped, center, kind, x) = object(track, old_progress);
-    let radius = if kind == TREE { 1_400 } else { 1_300 };
-    if kind == OIL
+    if kind != SIGN
         || wrapped >= center
         || wrapped + (progress - old_progress) < center
-        || (lateral - x).abs() >= radius
+        || (lateral - x).abs() >= 1_300
     {
-        return (lateral, speed);
+        return speed;
     }
-    if kind == TREE {
-        let pushed = x + if lateral > x { 1_800 } else { -1_800 };
-        (pushed.clamp(-9_000, 9_000), (speed - 600).max(0))
-    } else {
-        (lateral, (speed - 260).max(0))
-    }
+    (speed - 260).max(0)
 }
 
 fn validate(state: &RaceState) -> Result<(), RaceError> {
@@ -280,7 +304,7 @@ fn validate(state: &RaceState) -> Result<(), RaceError> {
     if state.tick > MAX_TICKS
         || state.cars.iter().any(|car| {
             !(-12_000..=finish).contains(&car.progress)
-                || !(-16_200..=16_200).contains(&car.lateral)
+                || !(-RAIL_MM..=RAIL_MM).contains(&car.lateral)
                 || !(0..=3_000).contains(&car.speed)
                 || !(-320..=320).contains(&car.lateral_velocity)
                 || !(0..=1_000).contains(&car.energy)
@@ -330,7 +354,6 @@ pub fn step(state: &mut RaceState, controls: &[u16]) -> Result<(), RaceError> {
     }
     let track = state.track;
     let length = track.length();
-    let curves = track.curvature();
     let (_, wind) = track.weather(state.tick);
     for (car, control) in state.cars.iter_mut().zip(controls) {
         if car.finish_tick.is_some() || car.dnf_tick.is_some() {
@@ -361,16 +384,16 @@ pub fn step(state: &mut RaceState, controls: &[u16]) -> Result<(), RaceError> {
             car.lateral_velocity,
             steer * steering_force,
         );
-        let segment = (car.progress.rem_euclid(length) * 12 / length) as usize;
-        let curvature_force = curves[segment] * car.speed / 120 + wind * car.speed / 2400;
-        car.lateral = (car.lateral + car.lateral_velocity + curvature_force).clamp(-9_000, 9_000);
-        if car.lateral.abs() > 6_000 {
+        // The real road's bend under the car pushes it outward with the square of its speed.
+        let bend_force = track.bend(car.progress)? * car.speed * car.speed / FORCE_DIVISOR;
+        let force = bend_force + wind * car.speed / 2400;
+        car.lateral = (car.lateral + car.lateral_velocity + force).clamp(-RAIL_MM, RAIL_MM);
+        if car.lateral.abs() > VERGE_MM {
             car.speed = (car.speed - 90).max(0);
         }
         let old_progress = car.progress;
         car.progress += car.speed;
-        (car.lateral, car.speed) =
-            impact(track, old_progress, car.progress, car.lateral, car.speed);
+        car.speed = impact(track, old_progress, car.progress, car.lateral, car.speed);
     }
     for left_slot in 0..state.cars.len() {
         for right_slot in left_slot + 1..state.cars.len() {
@@ -397,6 +420,10 @@ pub fn step(state: &mut RaceState, controls: &[u16]) -> Result<(), RaceError> {
             a.speed = (a.speed - 120).max(0);
             b.speed = (b.speed - 120).max(0);
         }
+    }
+    // A contact cannot push a car through the rail.
+    for car in &mut state.cars {
+        car.lateral = car.lateral.clamp(-RAIL_MM, RAIL_MM);
     }
     state.tick += 1;
     let finish = length * LAPS;
@@ -543,29 +570,11 @@ struct Moved {
     energy: Expr,
 }
 
-fn cell_tables(track: Track) -> ([i64; 12], [i64; 12], [i64; 12], [i64; 12]) {
-    let laterals = track.laterals();
-    let push_left = std::array::from_fn(|c| (laterals[c] - 1_800).clamp(-9_000, 9_000));
-    let push_right = std::array::from_fn(|c| (laterals[c] + 1_800).clamp(-9_000, 9_000));
-    let radius = std::array::from_fn(|c| {
-        if track.kinds()[c] == TREE {
-            1_400
-        } else {
-            1_300
-        }
-    });
-    let penalty = std::array::from_fn(|c| match track.kinds()[c] {
-        TREE => 600,
-        SIGN => 260,
-        _ => 0,
-    });
-    (push_left, push_right, radius, penalty)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn motion(
     b: &mut Builder,
     track: Track,
+    road: usize,
     car: &CarExprs,
     input: &CarPublic,
     rain: &Expr,
@@ -604,7 +613,7 @@ fn motion(
         &label("speed clamp"),
     );
 
-    // Position decomposition: lap = floor(p / L), cell = floor(12 * wrapped / L).
+    // Position decomposition for the roadside objects: lap = floor(p / L), cell = floor(12 * wrapped / L).
     // The lap index is pinned by the cell's remainder check: 0 <= 12*wrapped - L*cell < L with
     // cell in 0..=11 forces 0 <= wrapped < L, hence lap = floor(p / L).
     let lap = b.one_hot_quotient_unchecked(&car.progress, length, -1, 3, &label("lap"));
@@ -613,13 +622,9 @@ fn motion(
     let wrapped = b.assume_interval(&wrapped, 0, length - 1, &label("wrapped"));
     let center = cell.select_table(&track.centers());
     let object_x = cell.select_table(&track.laterals());
-    let curvature = cell.select_table(&track.curvature());
     let kinds = track.kinds();
     let is_oil = cell.indicator(|c| kinds[c as usize] == OIL);
-    let is_tree = cell.indicator(|c| kinds[c as usize] == TREE);
-    let is_solid = is_oil.not();
-    let curvature_negative = cell.indicator(|c| track.curvature()[c as usize] < 0);
-    let (push_left, push_right, radius, penalty) = cell_tables(track);
+    let is_sign = cell.indicator(|c| kinds[c as usize] == SIGN);
 
     // Oil at the old position and lateral.
     let along = wrapped.sub(&center);
@@ -643,72 +648,55 @@ fn motion(
     let limit = Expr::constant(320).sub(&rain.scale(40));
     let velocity = b.clamp(&damped, &limit.neg(), &limit, &label("velocity clamp"));
 
-    // Curvature and wind.
-    let curve_term = b.mul(&curvature, &speed1, &label("curve * speed"));
-    let curve_force =
-        b.div_trunc_with_sign(&curve_term, 120, &curvature_negative, &label("curve /120"));
+    // The real road's bend under the old position: station = floor((p + lead) / 5 m), whose remainder
+    // check pins it inside the table, then K * speed^2 / 2^24 truncated toward zero.
+    let station = b.div_floor(&car.progress.offset(LEAD_MM), STATION_MM, &label("station"));
+    let coefficient = b.lookup_table(road, &station, &label("bend coefficient"));
+    let speed_squared = b.mul(&speed1, &speed1, &label("speed^2"));
+    let bend_term = b.mul(&coefficient, &speed_squared, &label("bend * speed^2"));
+    let bend_force = b.div_trunc(&bend_term, FORCE_DIVISOR, &label("bend force"));
     let wind_term = b.mul(wind, &speed1, &label("wind * speed"));
     let wind_force = b.div_trunc_with_sign(&wind_term, 2_400, wind_negative, &label("wind /2400"));
-    let drift = car
-        .lateral
-        .add(&velocity)
-        .add(&curve_force)
-        .add(&wind_force);
+    let drift = car.lateral.add(&velocity).add(&bend_force).add(&wind_force);
     let lateral2 = b.clamp(
         &drift,
-        &Expr::constant(-9_000),
-        &Expr::constant(9_000),
-        &label("lateral clamp"),
+        &Expr::constant(-RAIL_MM),
+        &Expr::constant(RAIL_MM),
+        &label("rail clamp"),
     );
 
-    // Off-road slowdown.
-    let off_right = b.gt(&lateral2, &Expr::constant(6_000), &label("off right"));
-    let off_left = b.lt(&lateral2, &Expr::constant(-6_000), &label("off left"));
-    let off_road = b.assume_boolean(&off_right.add(&off_left), &label("off road"));
+    // On the verge between the road's edge and the rail.
+    let off_right = b.gt(&lateral2, &Expr::constant(VERGE_MM), &label("verge right"));
+    let off_left = b.lt(&lateral2, &Expr::constant(-VERGE_MM), &label("verge left"));
+    let off_road = b.assume_boolean(&off_right.add(&off_left), &label("on the verge"));
     let slowed = b.max(
         &speed1.offset(-90),
         &Expr::constant(0),
-        &label("off-road slow"),
+        &label("verge slow"),
     );
-    let speed2 = b.select(&off_road, &slowed, &speed1, &label("speed after off-road"));
+    let speed2 = b.select(&off_road, &slowed, &speed1, &label("speed after verge"));
     let progress = car.progress.add(&speed2);
 
-    // Solid objects: swept crossing of the old cell's centre.
+    // Signs: swept crossing of the old cell's centre within 1.3 m. Trees stand beyond the rails.
     let before_center = b.lt(&wrapped, &center, &label("before centre"));
     let reaches_center = b.ge(&wrapped.add(&speed2), &center, &label("reaches centre"));
     let side_offset = lateral2.sub(&object_x);
-    let radius_expr = cell.select_table(&radius);
-    let close_right = b.lt(&side_offset, &radius_expr, &label("radius right"));
-    let close_left = b.lt(&radius_expr.neg(), &side_offset, &label("radius left"));
+    let close_right = b.lt(&side_offset, &Expr::constant(1_300), &label("radius right"));
+    let close_left = b.lt(&Expr::constant(-1_300), &side_offset, &label("radius left"));
     let crossing = b.and(&before_center, &reaches_center, &label("crossing"));
     let close = b.and(&close_right, &close_left, &label("close"));
     let crossing_close = b.and(&crossing, &close, &label("crossing close"));
-    let hit = b.and(&crossing_close, &is_solid, &label("hit"));
-    let tree_hit = b.and(&hit, &is_tree, &label("tree hit"));
-    let right_side = b.lt(&object_x, &lateral2, &label("right of object"));
-    let pushed = b.select(
-        &right_side,
-        &cell.select_table(&push_right),
-        &cell.select_table(&push_left),
-        &label("tree push"),
-    );
-    let lateral3 = b.select(
-        &tree_hit,
-        &pushed,
-        &lateral2,
-        &label("lateral after impact"),
-    );
+    let hit = b.and(&crossing_close, &is_sign, &label("hit"));
     let penalized = b.max(
-        &speed2.sub(&cell.select_table(&penalty)),
+        &speed2.offset(-260),
         &Expr::constant(0),
         &label("impact slow"),
     );
     let speed3 = b.select(&hit, &penalized, &speed2, &label("speed after impact"));
-    let _ = slot;
     Moved {
         live,
         progress,
-        lateral: lateral3,
+        lateral: lateral2,
         speed: speed3,
         velocity,
         energy,
@@ -726,7 +714,7 @@ fn within(b: &mut Builder, value: &Expr, bound: i64, label: &str) -> Expr {
     b.and(&below, &above, label)
 }
 
-/// The canonical RaceV1 circuit for one track and grid size (capacity 5,400 ticks).
+/// The canonical RaceV1 circuit for one track and grid size (capacity 8,191 ticks; races stop at 8,100).
 ///
 /// # Panics
 /// Panics if `players` is outside 1..=8.
@@ -741,18 +729,20 @@ pub fn circuit(track: Track, players: usize) -> Circuit {
 /// Panics if `players` is outside 1..=8 or `log_rows` outside 8..=13.
 pub fn circuit_with_capacity(track: Track, players: usize, log_rows: u32) -> Circuit {
     assert!((1..=MAX_PLAYERS).contains(&players));
-    assert!((8..=LOG_ROWS).contains(&log_rows));
+    assert!(SUPPORTED_LOG_ROWS.contains(&log_rows));
     let name = if log_rows == LOG_ROWS {
-        format!("sora-cars RaceV1 stock {} x{players} v1", track.name())
+        format!("sora-cars RaceV1 real road {} x{players} v1", track.name())
     } else {
         format!(
-            "sora-cars RaceV1 stock {} x{players} v1 capacity 2^{log_rows}",
+            "sora-cars RaceV1 real road {} x{players} v1 capacity 2^{log_rows}",
             track.name()
         )
     };
     let mut b = Builder::new(name, log_rows);
     b.set_lookups_per_helper(4);
     let finish = track.length() * LAPS;
+    let road_values: Vec<i64> = track.road().iter().map(|k| i64::from(*k)).collect();
+    let road = b.fixed_table(format!("{} road", track.name()), &road_values);
     let rain = b.public("rain", 0, 1);
     let wind = b.public("wind", -32, 32);
     let wind_negative = b.public("wind < 0", 0, 1);
@@ -769,7 +759,7 @@ pub fn circuit_with_capacity(track: Track, players: usize, log_rows: u32) -> Cir
     let cars: Vec<CarExprs> = (0..players)
         .map(|slot| CarExprs {
             progress: b.register(format!("car {slot}: progress"), -12_000, finish),
-            lateral: b.register(format!("car {slot}: lateral"), -16_200, 16_200),
+            lateral: b.register(format!("car {slot}: lateral"), -RAIL_MM, RAIL_MM),
             speed: b.register(format!("car {slot}: speed"), 0, 3_000),
             velocity: b.register(format!("car {slot}: lateral velocity"), -320, 320),
             energy: b.register(format!("car {slot}: energy"), 0, 1_000),
@@ -787,6 +777,7 @@ pub fn circuit_with_capacity(track: Track, players: usize, log_rows: u32) -> Cir
             motion(
                 &mut b,
                 track,
+                road,
                 car,
                 input,
                 &rain,
@@ -874,8 +865,14 @@ pub fn circuit_with_capacity(track: Track, players: usize, log_rows: u32) -> Cir
         let live_and_active = b.and(&m.live, &active, &label("live and active"));
         let crossed = b.and(&live_and_active, &below_finish.not(), &label("crossed"));
         let next_progress = b.select(&m.live, &capped, &car.progress, &label("progress"));
-        let next_lateral = b.select(&m.live, lateral, &car.lateral, &label("lateral"));
-        let next_lateral = b.narrow(&next_lateral, -16_200, 16_200, &label("lateral bound"));
+        // A contact cannot push a car through the rail.
+        let railed = b.clamp(
+            lateral,
+            &Expr::constant(-RAIL_MM),
+            &Expr::constant(RAIL_MM),
+            &label("rail after contacts"),
+        );
+        let next_lateral = b.select(&m.live, &railed, &car.lateral, &label("lateral"));
         let next_speed = b.select(&m.live, &speed, &car.speed, &label("speed"));
         let next_velocity = b.select(&m.live, &m.velocity, &car.velocity, &label("velocity"));
         let next_energy = b.select(&m.live, &m.energy, &car.energy, &label("energy"));
@@ -916,6 +913,9 @@ pub fn public_columns_with_capacity(
     replay: &Replay,
     log_rows: u32,
 ) -> Result<Vec<Vec<i64>>, RaceError> {
+    if !SUPPORTED_LOG_ROWS.contains(&log_rows) {
+        return Err(RaceError::Capacity);
+    }
     let rows = 1usize << log_rows;
     if replay.frames.len() >= rows {
         return Err(RaceError::Terminal);
@@ -987,7 +987,7 @@ pub fn register_states(replay: &Replay) -> Result<Vec<Vec<i64>>, RaceError> {
 pub type CellSelector = OneHot;
 
 /// Checks everything about a replay that does not need the simulation: grid size, frame shapes and
-/// control bits, `T <= 5400`, removal events (ascending ticks `<= T`, nonempty ascending in-range
+/// control bits, `T <= 8100`, removal events (ascending ticks `<= T`, nonempty ascending in-range
 /// slots, no slot removed twice), and the public half of the six-tick terminal rule (with two or
 /// more cars, at least two must remain unremoved at every six-tick boundary that is stepped). The
 /// proof covers the rest: the integer simulation and the "every car finished or removed" rule.
@@ -1069,6 +1069,9 @@ pub enum RaceProofError {
     /// The replay is invalid.
     #[error(transparent)]
     Replay(#[from] RaceError),
+    /// The chosen parameters do not meet the RaceV1 security budget.
+    #[error(transparent)]
+    Security(#[from] crate::params::SecurityError),
     /// Proving failed.
     #[error(transparent)]
     Prove(#[from] crate::ProveError),
@@ -1080,10 +1083,23 @@ pub enum RaceProofError {
     FinalState,
 }
 
+fn proof_circuit(
+    replay: &Replay,
+    log_rows: u32,
+    params: &crate::Params,
+) -> Result<Circuit, RaceProofError> {
+    if !SUPPORTED_LOG_ROWS.contains(&log_rows) {
+        return Err(RaceError::Capacity.into());
+    }
+    let circuit = circuit_with_capacity(replay.track, replay.players, log_rows);
+    params.check_security(&circuit, crate::params::TARGET_SECURITY_BITS)?;
+    Ok(circuit)
+}
+
 /// Proves a replay with the canonical circuit for its track and grid.
 ///
 /// # Errors
-/// Fails if the replay is invalid or proving fails.
+/// Fails if the replay or capacity is invalid, the parameters miss the RaceV1 target, or proving fails.
 pub fn prove_replay(
     replay: &Replay,
     params: &crate::Params,
@@ -1094,14 +1110,14 @@ pub fn prove_replay(
 /// [`prove_replay`] with the circuit of `2^log_rows` rows.
 ///
 /// # Errors
-/// Fails if the replay is invalid or proving fails.
+/// Fails if the replay or capacity is invalid, the parameters miss the RaceV1 target, or proving fails.
 pub fn prove_replay_with_capacity(
     replay: &Replay,
     params: &crate::Params,
     log_rows: u32,
 ) -> Result<(crate::Statement, crate::Proof), RaceProofError> {
     validate_replay(replay)?;
-    let circuit = circuit_with_capacity(replay.track, replay.players, log_rows);
+    let circuit = proof_circuit(replay, log_rows, params)?;
     let public = public_columns_with_capacity(replay, log_rows)?;
     let states = register_states(replay)?;
     let statement = statement(replay)?;
@@ -1114,7 +1130,7 @@ pub fn prove_replay_with_capacity(
 /// whether the state must be terminal (settlement) and derives the outcome from it.
 ///
 /// # Errors
-/// Fails on an invalid replay, malformed claim or invalid proof.
+/// Fails on an invalid replay or capacity, insufficient security budget, malformed claim or invalid proof.
 pub fn verify_replay(
     replay: &Replay,
     final_registers: &[i64],
@@ -1127,7 +1143,7 @@ pub fn verify_replay(
 /// [`verify_replay`] against the circuit of `2^log_rows` rows.
 ///
 /// # Errors
-/// Fails on an invalid replay, malformed claim or invalid proof.
+/// Fails on an invalid replay or capacity, insufficient security budget, malformed claim or invalid proof.
 pub fn verify_replay_with_capacity(
     replay: &Replay,
     final_registers: &[i64],
@@ -1139,7 +1155,7 @@ pub fn verify_replay_with_capacity(
     if final_registers.len() != REGISTERS_PER_CAR * replay.players {
         return Err(RaceProofError::FinalState);
     }
-    let circuit = circuit_with_capacity(replay.track, replay.players, log_rows);
+    let circuit = proof_circuit(replay, log_rows, params)?;
     let initial = registers(&initial_state(replay.track, replay.players)?);
     let steps = replay.frames.len();
     let statement = crate::Statement {
@@ -1301,6 +1317,23 @@ mod tests {
     }
 
     #[test]
+    fn bends_are_read_by_station_and_refuse_progress_off_the_road() {
+        for track in TRACKS {
+            let road = track.road();
+            assert_eq!(track.bend(-100_000), Ok(i64::from(road[0])));
+            assert_eq!(track.bend(-95_001), Ok(i64::from(road[0])));
+            assert_eq!(track.bend(-95_000), Ok(i64::from(road[1])));
+            assert_eq!(
+                track.bend(track.length() * LAPS),
+                Ok(i64::from(road[road.len() - 1]))
+            );
+            for off in [-100_001, track.length() * LAPS + 5_000, i64::MAX, i64::MIN] {
+                assert_eq!(track.bend(off), Err(RaceError::StateBounds), "{off}");
+            }
+        }
+    }
+
+    #[test]
     fn native_port_runs_full_races() {
         for (i, track) in TRACKS.iter().enumerate() {
             for players in 1..=MAX_PLAYERS {
@@ -1378,8 +1411,17 @@ mod tests {
             ("second car", 500, 7, 1),
         ] {
             let mut forged = states.clone();
+            // A lateral forgery pushes toward the centre line so it stays between the rails.
+            let delta = if register == 1 && states[row + 1][1] > 0 {
+                -delta
+            } else {
+                delta
+            };
             for state in &mut forged[row + 1..] {
-                state[register] += delta;
+                state[register] = (state[register] + delta).clamp(
+                    circuit.registers[register].lo,
+                    circuit.registers[register].hi,
+                );
             }
             let trace =
                 crate::trace::generate_inner(&circuit, &engine_public, steps, &forged, false)
@@ -1439,17 +1481,22 @@ mod tests {
         while race.tick < MAX_TICKS {
             let remaining = i64::from(MAX_TICKS - race.tick);
             let car = race.cars[0];
-            let target = finish - 1_200 - car.progress;
+            // Pace to end 0.4 m short of the line, still rolling.
+            let target = finish - 400 - car.progress;
             let wanted = target / remaining.max(1);
             let control: u16 = if car.speed < wanted { 1 } else { 2 };
-            let steer = if car.lateral > 1_500 {
+            // Steer against the bend's push, drifting when the wheel alone cannot hold it.
+            let push = track.bend(car.progress).unwrap() * car.speed * car.speed / FORCE_DIVISOR;
+            let heading = car.lateral + 6 * car.lateral_velocity + 7 * push;
+            let steer = if heading > 400 {
                 4
-            } else if car.lateral < -1_500 {
+            } else if heading < -400 {
                 8
             } else {
                 0
             };
-            let controls = vec![control | steer];
+            let drift = if push.abs() > 126 { 16 } else { 0 };
+            let controls = vec![control | steer | drift];
             step(&mut race, &controls).unwrap();
             frames.push(controls);
         }
@@ -1486,11 +1533,44 @@ mod tests {
     fn adapter_round_trip_and_public_terminal_rule() {
         let replay = sample_replay(Track::Sakura, 4, 3, 90, 600);
         let params = Params {
-            queries: 20,
             grinding_bits: 2,
             ..Params::standard()
         };
         let (statement, proof) = prove_replay_with_capacity(&replay, &params, 10).unwrap();
+        let weak = Params {
+            queries: 20,
+            ..params
+        };
+        let insufficient =
+            RaceProofError::Security(crate::params::SecurityError::InsufficientSecurity);
+        assert_eq!(
+            prove_replay_with_capacity(&replay, &weak, 10).unwrap_err(),
+            insufficient
+        );
+        assert_eq!(
+            verify_replay_with_capacity(&replay, &statement.final_state, &proof, &weak, 10),
+            Err(insufficient)
+        );
+        for log_rows in [7, LOG_ROWS + 1, u32::MAX] {
+            assert_eq!(
+                public_columns_with_capacity(&replay, log_rows),
+                Err(RaceError::Capacity)
+            );
+            assert_eq!(
+                prove_replay_with_capacity(&replay, &params, log_rows).unwrap_err(),
+                RaceProofError::Replay(RaceError::Capacity)
+            );
+            assert_eq!(
+                verify_replay_with_capacity(
+                    &replay,
+                    &statement.final_state,
+                    &proof,
+                    &params,
+                    log_rows
+                ),
+                Err(RaceProofError::Replay(RaceError::Capacity))
+            );
+        }
         let state =
             verify_replay_with_capacity(&replay, &statement.final_state, &proof, &params, 10)
                 .unwrap();

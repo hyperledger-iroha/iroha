@@ -570,8 +570,8 @@ pub struct DaIngestAuthorizationV1 {
     pub payload_hash: BlobDigest,
     /// Exact canonical payload length charged to the owner's quota.
     pub payload_bytes: u64,
-    /// Exact BLAKE3 digest of every remaining signed request field.
-    pub request_content_hash: BlobDigest,
+    /// Commitment to every remaining signed request field.
+    pub request_content_hash: Hash,
     /// Canonically signer-key-ordered account-controller witnesses.
     pub signatures: Vec<DaIngestSignatureV1>,
 }
@@ -593,7 +593,7 @@ impl DaIngestAuthorizationV1 {
         hasher.update(&self.sequence.to_le_bytes());
         hasher.update(self.payload_hash.as_bytes());
         hasher.update(&self.payload_bytes.to_le_bytes());
-        hasher.update(self.request_content_hash.as_bytes());
+        hasher.update(self.request_content_hash.as_ref());
         *hasher.finalize().as_bytes()
     }
     /// Return whether witnesses are non-empty, strictly signer ordered, and individually valid.
@@ -619,6 +619,12 @@ impl DaIngestAuthorizationV1 {
 /// scope exists. The producer signs the returned scope and retries the same
 /// ingest request with those witnesses, preventing a block proposer from
 /// substituting any index-bearing pin field.
+///
+/// This is the frozen stored layout of the baseline `world.da_pin_intents_by_ticket`
+/// value. The witnesses also cover the digest of the complete paired commitment
+/// ([`DaCommitmentRecord::pin_scope_digest`](super::commitment::DaCommitmentRecord::pin_scope_digest)),
+/// which is not stored here: every verifier supplies it from the paired record. Torii hands
+/// producers the scope together with that digest as a [`DaPinScopeProposalV1`].
 #[derive(
     Clone,
     Debug,
@@ -654,8 +660,6 @@ pub struct DaPinScopeV1 {
     pub storage_ticket: StorageTicketId,
     /// Exact digest of the durable canonical manifest.
     pub manifest_hash: ManifestDigest,
-    /// Digest of the complete proposed on-chain commitment, including negotiated retention and acknowledgement.
-    pub commitment_digest: BlobDigest,
     /// Exact normalized registry alias, when requested.
     #[norito(required)]
     pub alias: Option<String>,
@@ -667,7 +671,6 @@ impl DaPinScopeV1 {
         authorization: &DaIngestAuthorizationV1,
         storage_ticket: StorageTicketId,
         manifest_hash: ManifestDigest,
-        commitment_digest: BlobDigest,
         alias: Option<String>,
     ) -> Self {
         Self {
@@ -679,7 +682,6 @@ impl DaPinScopeV1 {
             sequence: authorization.sequence,
             storage_ticket,
             manifest_hash,
-            commitment_digest,
             alias,
         }
     }
@@ -696,8 +698,13 @@ impl DaPinScopeV1 {
     }
 
     /// Compute the domain-separated digest signed by every pin-scope witness.
+    ///
+    /// `commitment_digest` is the paired record's
+    /// [`DaCommitmentRecord::pin_scope_digest`](super::commitment::DaCommitmentRecord::pin_scope_digest).
+    /// It binds the complete proposed commitment, including negotiated retention and the
+    /// service acknowledgement, without becoming part of this stored scope.
     #[must_use]
-    pub fn signing_digest(&self) -> [u8; 32] {
+    pub fn signing_digest(&self, commitment_digest: &BlobDigest) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(DA_PIN_SCOPE_SIGNING_DOMAIN_V1);
         hasher.update(self.network_id.as_bytes());
@@ -713,7 +720,7 @@ impl DaPinScopeV1 {
         hasher.update(&self.sequence.to_le_bytes());
         hasher.update(self.storage_ticket.as_ref());
         hasher.update(self.manifest_hash.as_bytes());
-        hasher.update(self.commitment_digest.as_bytes());
+        hasher.update(commitment_digest.as_bytes());
         match &self.alias {
             Some(alias) => {
                 hasher.update(&[1]);
@@ -724,6 +731,110 @@ impl DaPinScopeV1 {
             }
         }
         *hasher.finalize().as_bytes()
+    }
+}
+/// Pin scope that Torii hands a producer for approval, with the digest it must also sign.
+///
+/// The JSON keys and binary field order are those of the pin scope Torii returns to
+/// producers: the [`DaPinScopeV1`] fields with `commitment_digest` after `manifest_hash`.
+/// Only the [`DaPinScopeV1`] projection is stored; verifiers recompute the digest from
+/// the paired [`DaCommitmentRecord`](super::commitment::DaCommitmentRecord).
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeProposalV1")]
+pub struct DaPinScopeProposalV1 {
+    /// Exact genesis-derived network identity of the original ingest authorization.
+    pub network_id: NetworkId,
+    /// Account that signed the original request and must sign this exact pin scope.
+    pub owner: AccountId,
+    /// Exact raw BLAKE3 digest signed by the original ingest authorization witnesses.
+    pub request_authorization_digest: BlobDigest,
+    /// Nexus lane carried by both the request and resulting pin intent.
+    pub lane_id: LaneId,
+    /// Epoch carried by both the request and resulting pin intent.
+    pub epoch: u64,
+    /// Sequence carried by both the request and resulting pin intent.
+    pub sequence: u64,
+    /// Exact durable storage ticket assigned by Torii.
+    pub storage_ticket: StorageTicketId,
+    /// Exact digest of the durable canonical manifest.
+    pub manifest_hash: ManifestDigest,
+    /// Digest of the complete proposed on-chain commitment, including negotiated retention
+    /// and acknowledgement ([`DaCommitmentRecord::pin_scope_digest`](super::commitment::DaCommitmentRecord::pin_scope_digest)).
+    pub commitment_digest: BlobDigest,
+    /// Exact normalized registry alias, when requested.
+    #[norito(required)]
+    pub alias: Option<String>,
+}
+impl DaPinScopeProposalV1 {
+    /// Offer one stored scope together with the digest of its paired commitment.
+    #[must_use]
+    pub fn new(scope: DaPinScopeV1, commitment_digest: BlobDigest) -> Self {
+        let DaPinScopeV1 {
+            network_id,
+            owner,
+            request_authorization_digest,
+            lane_id,
+            epoch,
+            sequence,
+            storage_ticket,
+            manifest_hash,
+            alias,
+        } = scope;
+        Self {
+            network_id,
+            owner,
+            request_authorization_digest,
+            lane_id,
+            epoch,
+            sequence,
+            storage_ticket,
+            manifest_hash,
+            commitment_digest,
+            alias,
+        }
+    }
+
+    /// The stored scope projection, without the commitment digest.
+    #[must_use]
+    pub fn scope(&self) -> DaPinScopeV1 {
+        DaPinScopeV1 {
+            network_id: self.network_id,
+            owner: self.owner.clone(),
+            request_authorization_digest: self.request_authorization_digest,
+            lane_id: self.lane_id,
+            epoch: self.epoch,
+            sequence: self.sequence,
+            storage_ticket: self.storage_ticket,
+            manifest_hash: self.manifest_hash,
+            alias: self.alias.clone(),
+        }
+    }
+
+    /// Return whether this proposal names the exact original ingest authorization.
+    #[must_use]
+    pub fn matches_authorization(&self, authorization: &DaIngestAuthorizationV1) -> bool {
+        self.scope().matches_authorization(authorization)
+    }
+
+    /// Digest every producer witness signs for this proposal.
+    #[must_use]
+    pub fn signing_digest(&self) -> [u8; 32] {
+        self.scope().signing_digest(&self.commitment_digest)
     }
 }
 /// Producer authorization over one exact durable DA pin scope.
@@ -751,13 +862,20 @@ pub struct DaPinScopeAuthorizationV1 {
     pub signatures: Vec<DaPinScopeSignatureV1>,
 }
 impl DaPinScopeAuthorizationV1 {
-    /// Sign one exact scope with an account-controller key.
+    /// Sign one exact scope and its paired commitment digest with an account-controller key.
     ///
     /// # Errors
     ///
     /// Returns an error when the signing backend rejects the key.
-    pub fn try_sign(scope: DaPinScopeV1, key_pair: &KeyPair) -> Result<Self, iroha_crypto::Error> {
-        let signature = Signature::try_new(key_pair.private_key(), &scope.signing_digest())?;
+    pub fn try_sign(
+        scope: DaPinScopeV1,
+        commitment_digest: &BlobDigest,
+        key_pair: &KeyPair,
+    ) -> Result<Self, iroha_crypto::Error> {
+        let signature = Signature::try_new(
+            key_pair.private_key(),
+            &scope.signing_digest(commitment_digest),
+        )?;
         Ok(Self {
             scope,
             signatures: vec![DaPinScopeSignatureV1 {
@@ -772,7 +890,11 @@ impl DaPinScopeAuthorizationV1 {
     /// # Errors
     ///
     /// Returns an error when signing fails or the signer is already present.
-    pub fn try_add_signature(&mut self, key_pair: &KeyPair) -> Result<(), iroha_crypto::Error> {
+    pub fn try_add_signature(
+        &mut self,
+        commitment_digest: &BlobDigest,
+        key_pair: &KeyPair,
+    ) -> Result<(), iroha_crypto::Error> {
         let signer = key_pair.public_key();
         if self
             .signatures
@@ -783,7 +905,10 @@ impl DaPinScopeAuthorizationV1 {
                 "duplicate DA pin-scope authorization signer".to_owned(),
             ));
         }
-        let signature = Signature::try_new(key_pair.private_key(), &self.scope.signing_digest())?;
+        let signature = Signature::try_new(
+            key_pair.private_key(),
+            &self.scope.signing_digest(commitment_digest),
+        )?;
         self.signatures.push(DaPinScopeSignatureV1 {
             signer: signer.clone(),
             signature,
@@ -793,9 +918,10 @@ impl DaPinScopeAuthorizationV1 {
         Ok(())
     }
 
-    /// Return whether witnesses are non-empty, strictly ordered, and individually valid.
+    /// Return whether witnesses are non-empty, strictly ordered, and individually valid
+    /// over this scope and the digest of its paired commitment.
     #[must_use]
-    pub fn has_valid_canonical_signatures(&self) -> bool {
+    pub fn has_valid_canonical_signatures(&self, commitment_digest: &BlobDigest) -> bool {
         if self.signatures.is_empty()
             || self
                 .signatures
@@ -804,7 +930,7 @@ impl DaPinScopeAuthorizationV1 {
         {
             return false;
         }
-        let digest = self.scope.signing_digest();
+        let digest = self.scope.signing_digest(commitment_digest);
         self.signatures
             .iter()
             .all(|witness| witness.signature.verify(&witness.signer, &digest).is_ok())
@@ -1007,7 +1133,7 @@ fn hash_tagged_u16(hasher: &mut blake3::Hasher, tag: u8, value: u16) {
     hasher.update(&[tag]);
     hasher.update(&value.to_le_bytes());
 }
-fn da_ingest_request_content_hash(intent: &DaIngestRequestIntentRefV1<'_>) -> BlobDigest {
+fn da_ingest_request_content_hash(intent: &DaIngestRequestIntentRefV1<'_>) -> Hash {
     let mut hasher = blake3::Hasher::new();
     hasher.update(DA_INGEST_REQUEST_CONTENT_DOMAIN_V1);
     hasher.update(intent.client_blob_id.as_bytes());
@@ -1088,7 +1214,7 @@ fn da_ingest_request_content_hash(intent: &DaIngestRequestIntentRefV1<'_>) -> Bl
             }
         }
     }
-    BlobDigest::from_hash(hasher.finalize())
+    Hash::prehashed(*hasher.finalize().as_bytes())
 }
 impl DaIngestRequestIntentV1 {
     fn unsigned_authorization(&self) -> DaIngestAuthorizationV1 {
@@ -1189,7 +1315,9 @@ impl DaIngestRequest {
             .sort_by(|left, right| left.signer.cmp(&right.signer));
         Ok(())
     }
-    /// Add one witness approving an exact scope returned for this request.
+    /// Add one witness approving an exact scope proposal returned for this request.
+    ///
+    /// The witness covers the stored scope and the proposal's commitment digest.
     ///
     /// # Errors
     ///
@@ -1197,7 +1325,7 @@ impl DaIngestRequest {
     /// fails, or the signer is already present.
     pub fn try_add_pin_scope_signature(
         &mut self,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
         key_pair: &KeyPair,
     ) -> Result<(), iroha_crypto::Error> {
         if !scope.matches_authorization(&self.authorization()) {
@@ -1304,6 +1432,12 @@ struct DaReceiptSigningPayload {
 }
 
 impl DaIngestReceipt {
+    /// Version of the operator-signed receipt preimage.
+    ///
+    /// Version 2 is the receipt that carries `retention_policy`. Version 1 signed the
+    /// earlier 12-field receipt and is never produced or verified.
+    pub const SIGNING_PAYLOAD_VERSION: u16 = 2;
+
     /// Canonical signature slot before the service signs a receipt or a local assignment.
     #[must_use]
     pub fn signature_placeholder() -> Signature {
@@ -1318,7 +1452,7 @@ impl DaIngestReceipt {
         let mut receipt = self.clone();
         receipt.operator_signature = Self::signature_placeholder();
         norito::encode_canonical(&DaReceiptSigningPayload {
-            version: 1,
+            version: Self::SIGNING_PAYLOAD_VERSION,
             sequence,
             receipt,
         })
@@ -1356,14 +1490,17 @@ impl DaIngestReceipt {
         self.operator_signature.verify(operator, &bytes)
     }
 
-    /// Check the receipt against the original payload and the complete record named by a pin scope.
-    /// The caller also authenticates the scope against the producer's signed request.
+    /// Check the receipt against the original payload and the complete record named by a
+    /// pin-scope proposal. The caller also authenticates the scope against the producer's
+    /// signed request.
     #[must_use]
     pub fn matches_request_and_pin_scope(
         &self,
         request: &DaIngestRequest,
-        scope: &DaPinScopeV1,
+        scope: &DaPinScopeProposalV1,
     ) -> bool {
+        // The receipt's blob hash is the digest of the request's canonical payload.
+        let same_payload = self.blob_hash == request.payload_hash;
         request
             .metadata
             .registry_alias()
@@ -1371,7 +1508,7 @@ impl DaIngestReceipt {
             && self.client_blob_id == request.client_blob_id
             && self.lane_id == request.lane_id
             && self.epoch == request.epoch
-            && self.blob_hash == request.payload_hash
+            && same_payload
             && self.storage_ticket == scope.storage_ticket
             && self.manifest_hash.as_bytes() == scope.manifest_hash.as_bytes()
             && self
@@ -1404,16 +1541,28 @@ impl DaIngestReceipt {
             self.operator_signature.clone(),
         )
     }
+
+    /// Digest of the complete commitment this receipt proposes, as producers sign it in
+    /// their pin scope ([`DaPinScopeV1::signing_digest`]).
+    #[must_use]
+    pub fn pin_scope_commitment_digest(&self, sequence: u64) -> BlobDigest {
+        self.commitment_record(sequence, super::commitment::DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest()
+    }
 }
 
 /// Durable DA spool record written by Torii and read by Core block assembly.
 ///
 /// Both consumers use this single declared frame owner. The embedded receipt
 /// remains a payload field; its API frame is not a spool-record envelope.
-/// The canonical identity retains the original Torii producer's name independently
-/// of this type's physical Rust module, preserving the durable spool contract.
+///
+/// Version 2 carries the receipt with `retention_policy`; its nominal identity
+/// `iroha_torii::da::persistence::StoredDaReceiptV2` makes the Norito header declare
+/// that layout. The retired version-1 frame (`iroha_torii::da::persistence::StoredDaReceipt`,
+/// a 12-field receipt) is refused by its exact header identity in [`Self::decode_frame`];
+/// it is never decoded.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::persistence::StoredDaReceipt")]
+#[norito_schema(name = "iroha_torii::da::persistence::StoredDaReceiptV2")]
 pub struct StoredDaReceipt {
     /// Exact supported spool payload version.
     pub version: u16,
@@ -1424,7 +1573,56 @@ pub struct StoredDaReceipt {
 }
 impl StoredDaReceipt {
     /// The only supported durable receipt payload version.
-    pub const VERSION: u16 = 1;
+    pub const VERSION: u16 = 2;
+
+    /// Nominal frame identity of the retired version-1 spool record.
+    pub const RETIRED_V1_FRAME_NAME: &'static str = "iroha_torii::da::persistence::StoredDaReceipt";
+
+    /// Decode one durable spool frame of the supported version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoredDaReceiptFrameError::RetiredVersion1`] for a frame whose header
+    /// names the retired version-1 record, without decoding its body;
+    /// [`StoredDaReceiptFrameError::UnsupportedVersion`] for any other version; and
+    /// [`StoredDaReceiptFrameError::Codec`] for every malformed or foreign frame.
+    pub fn decode_frame(bytes: &[u8]) -> Result<Self, StoredDaReceiptFrameError> {
+        if norito::core::Header::read(bytes).is_ok_and(|header| {
+            header.schema == norito::core::schema_hash_for_name(Self::RETIRED_V1_FRAME_NAME)
+        }) {
+            return Err(StoredDaReceiptFrameError::RetiredVersion1);
+        }
+        let stored = norito::decode_from_bytes::<Self>(bytes)?;
+        if stored.version != Self::VERSION {
+            return Err(StoredDaReceiptFrameError::UnsupportedVersion {
+                found: stored.version,
+                expected: Self::VERSION,
+            });
+        }
+        Ok(stored)
+    }
+}
+
+/// Refusal of a durable DA receipt spool frame.
+#[derive(Debug, Error)]
+pub enum StoredDaReceiptFrameError {
+    /// The frame is the retired version-1 record written before receipts carried retention.
+    #[error(
+        "retired version-1 DA receipt frame (`iroha_torii::da::persistence::StoredDaReceipt`); \
+         this build reads only version 2, so drain or archive the spool written by the earlier build"
+    )]
+    RetiredVersion1,
+    /// The frame decoded but declares another payload version.
+    #[error("unsupported DA receipt version {found} (expected {expected})")]
+    UnsupportedVersion {
+        /// Version carried by the frame.
+        found: u16,
+        /// The only supported version.
+        expected: u16,
+    },
+    /// The frame is malformed, truncated, non-canonical or names another owner.
+    #[error("malformed DA receipt frame: {0}")]
+    Codec(#[from] norito::Error),
 }
 
 #[cfg(test)]
@@ -1446,7 +1644,7 @@ mod pin_scope_tests {
             sequence: 7,
             payload_hash: BlobDigest::new([0x93; 32]),
             payload_bytes: 11,
-            request_content_hash: BlobDigest::new([0x94; 32]),
+            request_content_hash: Hash::prehashed([0x94; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -1456,6 +1654,8 @@ mod pin_scope_tests {
         });
         (key_pair, authorization)
     }
+
+    const COMMITMENT: BlobDigest = BlobDigest::new([0xC7; 32]);
 
     #[test]
     fn pin_scope_preserves_every_authorization_digest_bit() {
@@ -1472,7 +1672,6 @@ mod pin_scope_tests {
                 &authorization,
                 StorageTicketId::new([0xA1; 32]),
                 ManifestDigest::new([0xA2; 32]),
-                Default::default(),
                 None,
             );
             assert_eq!(scope.request_authorization_digest.as_bytes(), &digest);
@@ -1494,12 +1693,12 @@ mod pin_scope_tests {
                 assert_eq!(decoded, scope);
             }
 
-            let mut signed = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+            let mut signed = DaPinScopeAuthorizationV1::try_sign(scope, &COMMITMENT, &key_pair)
                 .expect("sign exact pin scope");
-            assert!(signed.has_valid_canonical_signatures());
+            assert!(signed.has_valid_canonical_signatures(&COMMITMENT));
             signed.scope.request_authorization_digest.0[31] ^= 1;
             assert!(!signed.scope.matches_authorization(&authorization));
-            assert!(!signed.has_valid_canonical_signatures());
+            assert!(!signed.has_valid_canonical_signatures(&COMMITMENT));
         }
         assert_eq!(covered_low_bits, [true, true]);
     }
@@ -1511,25 +1710,86 @@ mod pin_scope_tests {
             &authorization,
             StorageTicketId::new([0xA1; 32]),
             ManifestDigest::new([0xA2; 32]),
-            Default::default(),
             Some("video.example".to_owned()),
         );
         assert!(scope.matches_authorization(&authorization));
-        let signed = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+        let signed = DaPinScopeAuthorizationV1::try_sign(scope, &COMMITMENT, &key_pair)
             .expect("sign deterministic pin scope");
-        assert!(signed.has_valid_canonical_signatures());
+        assert!(signed.has_valid_canonical_signatures(&COMMITMENT));
 
         let mut mutated_ticket = signed.clone();
         mutated_ticket.scope.storage_ticket = StorageTicketId::new([0xB1; 32]);
-        assert!(!mutated_ticket.has_valid_canonical_signatures());
+        assert!(!mutated_ticket.has_valid_canonical_signatures(&COMMITMENT));
 
         let mut mutated_manifest = signed.clone();
         mutated_manifest.scope.manifest_hash = ManifestDigest::new([0xB2; 32]);
-        assert!(!mutated_manifest.has_valid_canonical_signatures());
+        assert!(!mutated_manifest.has_valid_canonical_signatures(&COMMITMENT));
 
         let mut mutated_alias = signed;
         mutated_alias.scope.alias = Some("other.example".to_owned());
-        assert!(!mutated_alias.has_valid_canonical_signatures());
+        assert!(!mutated_alias.has_valid_canonical_signatures(&COMMITMENT));
+    }
+
+    #[test]
+    fn pin_scope_signatures_bind_the_supplied_commitment_digest() {
+        let (key_pair, authorization) = signed_authorization();
+        let scope = DaPinScopeV1::new(
+            &authorization,
+            StorageTicketId::new([0xA1; 32]),
+            ManifestDigest::new([0xA2; 32]),
+            Some("video.example".to_owned()),
+        );
+        let signed = DaPinScopeAuthorizationV1::try_sign(scope.clone(), &COMMITMENT, &key_pair)
+            .expect("sign deterministic pin scope");
+        let mut other = COMMITMENT;
+        other.0[31] ^= 1;
+        assert!(signed.has_valid_canonical_signatures(&COMMITMENT));
+        assert!(!signed.has_valid_canonical_signatures(&other));
+        assert_ne!(
+            scope.signing_digest(&COMMITMENT),
+            scope.signing_digest(&other)
+        );
+
+        // The proposal handed to producers signs the same digest, and its stored
+        // projection is exactly the scope: the digest never enters the stored layout.
+        let proposal = DaPinScopeProposalV1::new(scope.clone(), COMMITMENT);
+        assert_eq!(proposal.scope(), scope);
+        assert_eq!(proposal.signing_digest(), scope.signing_digest(&COMMITMENT));
+        assert!(proposal.matches_authorization(&authorization));
+        let offered = norito::encode_canonical(&proposal).expect("scope proposal");
+        assert!(norito::decode_canonical::<DaPinScopeV1>(&offered).is_err());
+        let json = norito::json::to_value(&proposal).expect("proposal JSON");
+        let object = json.as_object().expect("proposal object");
+        assert_eq!(
+            object
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "network_id",
+                "owner",
+                "request_authorization_digest",
+                "lane_id",
+                "epoch",
+                "sequence",
+                "storage_ticket",
+                "manifest_hash",
+                "commitment_digest",
+                "alias",
+            ]
+            .into_iter()
+            .collect()
+        );
+        let decoded: DaPinScopeProposalV1 =
+            norito::json::from_value(json).expect("decode proposal JSON");
+        assert_eq!(decoded, proposal);
+        let stored_json = norito::json::to_value(&scope).expect("scope JSON");
+        assert!(
+            !stored_json
+                .as_object()
+                .expect("scope object")
+                .contains_key("commitment_digest")
+        );
     }
 
     #[test]
@@ -1541,17 +1801,16 @@ mod pin_scope_tests {
             &authorization,
             StorageTicketId::new([0xA3; 32]),
             ManifestDigest::new([0xA4; 32]),
-            Default::default(),
             None,
         );
-        let mut signed = DaPinScopeAuthorizationV1::try_sign(scope, &key_pair)
+        let mut signed = DaPinScopeAuthorizationV1::try_sign(scope, &COMMITMENT, &key_pair)
             .expect("sign deterministic pin scope");
         signed
-            .try_add_signature(&second)
+            .try_add_signature(&COMMITMENT, &second)
             .expect("add second deterministic pin-scope witness");
-        assert!(signed.has_valid_canonical_signatures());
+        assert!(signed.has_valid_canonical_signatures(&COMMITMENT));
         assert!(signed.signatures[0].signer < signed.signatures[1].signer);
-        assert!(signed.try_add_signature(&second).is_err());
+        assert!(signed.try_add_signature(&COMMITMENT, &second).is_err());
     }
 }
 
@@ -1723,21 +1982,18 @@ mod stored_receipt_frame_tests {
         let stored = fixture(None);
         assert_eq!(
             <StoredDaReceipt as norito::NoritoSchema>::nominal_name(),
-            "iroha_torii::da::persistence::StoredDaReceipt"
+            "iroha_torii::da::persistence::StoredDaReceiptV2"
         );
         assert_eq!(
             <StoredDaReceipt as norito::NoritoSchema>::frame_name(),
-            "iroha_torii::da::persistence::StoredDaReceipt"
+            "iroha_torii::da::persistence::StoredDaReceiptV2"
         );
         let bytes = norito::encode_canonical(&stored).expect("shared receipt frame");
-        // The source-bound original producer capture independently confirms
-        // this sole frame identity and the complete root/container frames.
+        // The version-2 writer's captured frames (`fixtures/da/stored_receipt_frames.v2.json`)
+        // independently confirm this sole frame identity and the root/container frames.
         assert_eq!(
             norito::schema::identity::frame_hash::<StoredDaReceipt>(),
-            [
-                0xf4, 0xb0, 0x55, 0xd4, 0xb6, 0xa0, 0x6e, 0xd2, 0xff, 0x40, 0xfb, 0x14, 0xe1, 0x40,
-                0x0f, 0xb3,
-            ]
+            norito::core::schema_hash_for_name("iroha_torii::da::persistence::StoredDaReceiptV2")
         );
         assert_eq!(
             bytes[6..22],
@@ -1745,6 +2001,33 @@ mod stored_receipt_frame_tests {
         );
         let decoded: StoredDaReceipt = norito::decode_canonical(&bytes).expect("exact roundtrip");
         assert_eq!(decoded, stored);
+        assert_eq!(
+            StoredDaReceipt::decode_frame(&bytes).expect("supported spool frame"),
+            stored
+        );
+        // The retired version-1 owner is refused by its exact header identity, before
+        // any body decoding, even though this envelope and payload are otherwise valid.
+        let retired_v1 = [
+            0xf4, 0xb0, 0x55, 0xd4, 0xb6, 0xa0, 0x6e, 0xd2, 0xff, 0x40, 0xfb, 0x14, 0xe1, 0x40,
+            0x0f, 0xb3,
+        ];
+        assert_eq!(
+            norito::core::schema_hash_for_name(StoredDaReceipt::RETIRED_V1_FRAME_NAME),
+            retired_v1
+        );
+        let mut relabelled = bytes.clone();
+        relabelled[6..22].copy_from_slice(&retired_v1);
+        assert!(matches!(
+            StoredDaReceipt::decode_frame(&relabelled),
+            Err(StoredDaReceiptFrameError::RetiredVersion1)
+        ));
+        let mut future = stored.clone();
+        future.version = StoredDaReceipt::VERSION + 1;
+        assert!(matches!(
+            StoredDaReceipt::decode_frame(&norito::encode_canonical(&future).unwrap()),
+            Err(StoredDaReceiptFrameError::UnsupportedVersion { found, expected })
+                if found == StoredDaReceipt::VERSION + 1 && expected == StoredDaReceipt::VERSION
+        ));
         assert_eq!(
             norito::encode_canonical(&decoded).expect("re-encode"),
             bytes

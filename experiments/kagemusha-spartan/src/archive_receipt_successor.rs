@@ -295,7 +295,10 @@ impl ReceiverReceipt {
         // statement's kind is the form's and its credit is the public subject. Its scheme and
         // asset are the quoted credential's, which the retained Request carries.
         let kind = (
-            plus(&constant(vec![receive]), &scaled(&own(form, 1), send - receive)),
+            plus(
+                &constant(vec![receive]),
+                &scaled(&own(form, 1), send - receive),
+            ),
             if self.send { send } else { receive },
         );
         let scheme = quoted.scheme();
@@ -386,13 +389,9 @@ impl ReceiverReceipt {
             source(local, evidence),
         );
         let (evidence, opening) = match &self.opening {
-            Some(opening) => opening.append(
-                w,
-                family,
-                credit,
-                source(local, expected[4]),
-                evidence,
-            ),
+            Some(opening) => {
+                opening.append(w, family, credit, source(local, expected[4]), evidence)
+            }
             None => (evidence, Vec::new()),
         };
         let ports: [usize; 15] = std::array::from_fn(|i| match i {

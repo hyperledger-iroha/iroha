@@ -43,7 +43,17 @@ fn program(kind: u64) -> (UniformCircuit<Fq>, Instance<Fq>, Witness<Fq>) {
         values: vec![values],
     });
     let (a, p, n, t, c) = w.finish();
-    UniformCircuit::build_with_copies("kind key program", a, p, n, t, c, 10, 4, b"kind key program")
+    UniformCircuit::build_with_copies(
+        "kind key program",
+        a,
+        p,
+        n,
+        t,
+        c,
+        10,
+        4,
+        b"kind key program",
+    )
 }
 
 struct Kinds {
@@ -53,7 +63,9 @@ struct Kinds {
 }
 
 fn kinds() -> Kinds {
-    let programs: Vec<_> = (0..crate::deferral::MAX_KINDS as u64).map(program).collect();
+    let programs: Vec<_> = (0..crate::deferral::MAX_KINDS as u64)
+        .map(program)
+        .collect();
     let gens = Gens::<Pallas>::new(programs[0].0.shape.cols());
     for (c, _, _) in &programs {
         assert_eq!(c.layout(), programs[0].0.layout(), "one layout");
@@ -146,7 +158,15 @@ fn slot_holds(
     let _ = pb.build(&mut w, gfam, shared_a, false);
     let (arrays, pi, counts, tables, copies) = w.finish();
     let (c, inst, wit) = UniformCircuit::build_with_copies(
-        "key-select", arrays, pi, counts, tables, copies, 14, 4, b"key select",
+        "key-select",
+        arrays,
+        pi,
+        counts,
+        tables,
+        copies,
+        14,
+        4,
+        b"key select",
     );
     let mut prng = SpikeRng::new(b"key select challenges");
     let ch: Vec<Fp> = vec![prng.scalar(), prng.scalar()];
@@ -162,7 +182,8 @@ fn five_key_slot_authenticates_archive_sent_exactly() {
     let k = kinds();
     let five = &k.keys[..];
     let four = &k.keys[..4];
-    let corner = |kind: usize| crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind).unwrap();
+    let corner =
+        |kind: usize| crate::deferral::kind_corner(crate::deferral::MAX_KINDS, kind).unwrap();
     let archive = proved(&k, crate::full::ARCHIVE_SENT);
     let control = proved(&k, crate::full::CONTROL);
     let receive = proved(&k, crate::full::RECEIVE);
@@ -195,5 +216,8 @@ fn five_key_slot_authenticates_archive_sent_exactly() {
         .cloned()
         .or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default();
-    assert!(why.contains("the proof's key is one of the slot's"), "{why}");
+    assert!(
+        why.contains("the proof's key is one of the slot's"),
+        "{why}"
+    );
 }

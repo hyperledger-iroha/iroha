@@ -342,6 +342,14 @@ final class ToriiDaClientTests: XCTestCase {
         }
     }
 
+    func testCommitmentRetentionClassPreservesReplicaCountAndGovernanceTag() throws {
+        for (replicas, tag) in [(UInt16(1), "da.default"), (0, "da.default"), (1, ""), (0, "")] {
+            let proof = try sampleCommitmentProof(replicas: replicas, governanceTag: tag)
+            XCTAssertEqual(proof.commitment.retentionClass.requiredReplicas, replicas)
+            XCTAssertEqual(proof.commitment.retentionClass.governanceTag, tag)
+        }
+    }
+
     func testTypedDaModelsRejectBadHashPathAndVerifyInvariant() throws {
         let badChecksum = String(canonicalDaHash.dropLast()) + "A"
         XCTAssertThrowsError(try ToriiDaHash(badChecksum))
@@ -637,7 +645,7 @@ final class ToriiDaClientTests: XCTestCase {
         )
     }
 
-    private func sampleCommitmentProof() throws -> ToriiDaCommitmentProof {
+    private func sampleCommitmentProof(replicas: UInt16 = 1, governanceTag: String = "da.default") throws -> ToriiDaCommitmentProof {
         let digest = [Array(repeating: 0x11, count: 32)]
         let record: [String: Any] = [
             "lane_id": 1,
@@ -651,9 +659,9 @@ final class ToriiDaClientTests: XCTestCase {
             "retention_class": [
                 "hot_retention_secs": 10,
                 "cold_retention_secs": 20,
-                "required_replicas": 1,
+                "required_replicas": replicas,
                 "storage_class": ["type": "Hot", "value": NSNull()],
-                "governance_tag": ["da.default"],
+                "governance_tag": [governanceTag],
             ],
             "storage_ticket": digest,
             "acknowledgement_sig": String(repeating: "A", count: 128),

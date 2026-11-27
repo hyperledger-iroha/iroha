@@ -20,7 +20,10 @@ const SEQUENCE: usize = 11;
 const PENDING: usize = 18;
 const NONCE: usize = 29;
 
-use crate::native::engine::transfers::archive_sent::relation::{append, ArchiveInputs, ArchiveState, State, Case, source, credit_opening, receiver_signature, request_original};
+use crate::native::engine::transfers::archive_sent::relation::{
+    ArchiveInputs, ArchiveState, Case, State, append, credit_opening, receiver_signature,
+    request_original, source,
+};
 
 impl Case {
     fn credited() -> Self {

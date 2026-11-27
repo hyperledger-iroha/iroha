@@ -18,6 +18,14 @@ struct Event {
     phase_peak_rss_bytes: Option<u64>,
     process_lifetime_peak_rss_bytes: Option<u64>,
     current_process_threads: Option<u32>,
+    /// Apple physical footprint (`task_vm_info.phys_footprint`, the measure
+    /// jetsam enforces) when the phase started. It leaves out pages the
+    /// allocator has freed and marked reusable, which the resident set still
+    /// counts. None off Apple platforms.
+    phase_start_footprint_bytes: Option<u64>,
+    /// Peak physical footprint during this phase, sampled like the resident
+    /// set (`phase_peak_method`). None off Apple platforms.
+    phase_peak_footprint_bytes: Option<u64>,
 }
 
 #[derive(norito::JsonSerialize)]
@@ -37,6 +45,11 @@ pub(super) struct Measurements {
     receive_instrumentation_us: Option<u64>,
     receive_normal_flow_us: Option<u64>,
     process_lifetime_peak_rss_bytes: Option<u64>,
+    /// The kernel's lifetime peak physical footprint
+    /// (`task_vm_info.ledger_phys_footprint_peak`, the jetsam measure), or
+    /// the largest sampled footprint where the ledger is unavailable. None
+    /// off Apple platforms.
+    process_lifetime_peak_footprint_bytes: Option<u64>,
     current_process_threads: Option<u32>,
     /// How each event's phase peak was observed: "linux-vmhwm-reset" (exact)
     /// or "sampled-5ms" (a lower bound; one extra fixture thread).
@@ -68,6 +81,7 @@ impl Measurements {
             receive_instrumentation_us: None,
             receive_normal_flow_us: None,
             process_lifetime_peak_rss_bytes: None,
+            process_lifetime_peak_footprint_bytes: None,
             current_process_threads: None,
             phase_peak_method: None,
             peak_method: None,
@@ -87,8 +101,11 @@ impl Measurements {
         // unmeasured gap) before the reset discards it.
         let gap = self.phase_peak();
         self.observe_peak(gap);
+        let gap_footprint = sampler::peak_footprint();
+        self.observe_footprint(gap_footprint);
         let reset_ok = self.begin_phase();
         let start_rss = current_rss_bytes();
+        let start_footprint = footprint::current();
         self.instrumentation_us = self.instrumentation_us.saturating_add(micros(reset));
         let start = Instant::now();
         let result = run();
@@ -98,6 +115,12 @@ impl Measurements {
         let phase_peak = if reset_ok { self.phase_peak() } else { None };
         self.observe_peak(phase_peak);
         self.observe_peak(process.peak_rss_bytes);
+        let phase_peak_footprint = if reset_ok {
+            sampler::peak_footprint()
+        } else {
+            None
+        };
+        self.observe_footprint(phase_peak_footprint);
         self.events.push(Event {
             operation: operation.into(),
             phase: phase.into(),
@@ -107,6 +130,8 @@ impl Measurements {
             phase_peak_rss_bytes: phase_peak,
             process_lifetime_peak_rss_bytes: self.process_lifetime_peak_rss_bytes,
             current_process_threads: process.process_threads,
+            phase_start_footprint_bytes: start_footprint,
+            phase_peak_footprint_bytes: phase_peak_footprint,
         });
         self.instrumentation_us = self.instrumentation_us.saturating_add(micros(observation));
         result
@@ -144,6 +169,17 @@ impl Measurements {
                 Some(self.process_lifetime_peak_rss_bytes.unwrap_or(0).max(bytes));
         }
     }
+    /// The lifetime footprint peak: the kernel ledger's when it reports one,
+    /// never below any sampled footprint.
+    fn observe_footprint(&mut self, sampled: Option<u64>) {
+        for bytes in [sampled, footprint::lifetime_peak()].into_iter().flatten() {
+            self.process_lifetime_peak_footprint_bytes = Some(
+                self.process_lifetime_peak_footprint_bytes
+                    .unwrap_or(0)
+                    .max(bytes),
+            );
+        }
+    }
     pub fn instrumentation_us(&self) -> u64 {
         self.instrumentation_us
     }
@@ -151,7 +187,9 @@ impl Measurements {
         self.retained_operations.push(operation.into());
     }
     pub fn was_retained(&self, operation: &str) -> bool {
-        self.retained_operations.iter().any(|name| name == operation)
+        self.retained_operations
+            .iter()
+            .any(|name| name == operation)
     }
     pub fn test_drill_us(&self, operation: &str) -> u64 {
         self.events
@@ -201,6 +239,8 @@ impl Measurements {
         let last = self.phase_peak();
         self.observe_peak(last);
         self.observe_peak(process.peak_rss_bytes);
+        let last_footprint = sampler::peak_footprint();
+        self.observe_footprint(last_footprint);
         self.current_process_threads = process.process_threads;
         let report = norito::json::to_json(self).map_err(fail)?;
         std::fs::write(root.join("device-measurements.json"), &report).map_err(fail)?;
@@ -306,6 +346,49 @@ fn current_rss_bytes() -> Option<u64> {
     None
 }
 
+/// Apple physical footprint from `task_info(TASK_VM_INFO)`: the jetsam
+/// measure, which excludes freed reusable pages the resident set includes.
+mod footprint {
+    #[cfg(target_vendor = "apple")]
+    fn vm_info() -> Option<([u64; 48], u32)> {
+        // <mach/task_info.h>: TASK_VM_INFO is flavor 22; `task_vm_info_data_t`
+        // is a sequence of 64-bit fields (with two 32-bit fields packed into
+        // the second word). `count` is in 32-bit words.
+        const TASK_VM_INFO: u32 = 22;
+        unsafe extern "C" {
+            static mach_task_self_: u32;
+            fn task_info(task: u32, flavor: u32, info: *mut u64, count: *mut u32) -> i32;
+        }
+        let mut info = [0u64; 48];
+        let mut count = (info.len() * 2) as u32;
+        // SAFETY: task_info writes at most `count` 32-bit words into `info`;
+        // the task port names this process.
+        let status =
+            unsafe { task_info(mach_task_self_, TASK_VM_INFO, info.as_mut_ptr(), &mut count) };
+        (status == 0).then_some((info, count))
+    }
+    /// `phys_footprint` (field 18, revision 1 and later).
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn current() -> Option<u64> {
+        let (info, count) = vm_info()?;
+        (count >= 38).then_some(info[18])
+    }
+    /// `ledger_phys_footprint_peak` (field 21, revision 3 and later).
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn lifetime_peak() -> Option<u64> {
+        let (info, count) = vm_info()?;
+        (count >= 44).then_some(info[21])
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    pub(super) fn current() -> Option<u64> {
+        None
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    pub(super) fn lifetime_peak() -> Option<u64> {
+        None
+    }
+}
+
 /// Phase peaks where no exact reset exists: one fixture thread folds the
 /// resident size into a running maximum every 5 ms.
 mod sampler {
@@ -314,6 +397,7 @@ mod sampler {
         atomic::{AtomicU64, Ordering},
     };
     static PEAK: AtomicU64 = AtomicU64::new(0);
+    static PEAK_FOOTPRINT: AtomicU64 = AtomicU64::new(0);
     static START: Once = Once::new();
     pub(super) fn reset() -> bool {
         let Some(now) = super::current_rss_bytes() else {
@@ -328,16 +412,25 @@ mod sampler {
                         if let Some(now) = super::current_rss_bytes() {
                             PEAK.fetch_max(now, Ordering::Relaxed);
                         }
+                        if let Some(now) = super::footprint::current() {
+                            PEAK_FOOTPRINT.fetch_max(now, Ordering::Relaxed);
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(5));
                     }
                 });
         });
         PEAK.store(now, Ordering::Relaxed);
+        PEAK_FOOTPRINT.store(super::footprint::current().unwrap_or(0), Ordering::Relaxed);
         true
     }
     pub(super) fn peak() -> Option<u64> {
         let now = super::current_rss_bytes()?;
         Some(PEAK.fetch_max(now, Ordering::Relaxed).max(now))
+    }
+    /// The phase's largest sampled physical footprint (Apple only).
+    pub(super) fn peak_footprint() -> Option<u64> {
+        let now = super::footprint::current()?;
+        Some(PEAK_FOOTPRINT.fetch_max(now, Ordering::Relaxed).max(now))
     }
 }
 

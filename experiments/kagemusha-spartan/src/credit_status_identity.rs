@@ -23,27 +23,35 @@ fn integer<T: TryFrom<u128>>(value: Fp) -> Result<T> {
 }
 
 fn commitment(value: Fp) -> KagemushaWalletStateCommitmentV1 {
-    KagemushaWalletStateCommitmentV1 { value: value.to_repr() }
+    KagemushaWalletStateCommitmentV1 {
+        value: value.to_repr(),
+    }
 }
 
 impl VerifiedSentDelivery<'_> {
     /// Hash the wire object's exact statement, proof digest, receipt, lineage and opening.
     /// Both compact transports restore the selected public words and original proof bytes.
     pub(crate) fn status_digest(&self) -> Result<[u8; 32]> {
-        self.wire_status()?.credit_status_digest()
+        self.wire_status()?
+            .credit_status_digest()
             .map_err(|_| Error::AuthorityMismatch("verified CreditStatus wire identity"))
     }
 
     pub(in crate::native) fn wire_status(&self) -> Result<KagemushaWalletCreditStatusV1> {
         self.receiver_evidence().wire_status(
-            self.payment().statement()[17], self.payment().digest(), self.outcome(),
+            self.payment().statement()[17],
+            self.payment().digest(),
+            self.outcome(),
         )
     }
 }
 
 impl crate::native::sent_delivery::ReceiverEvidence {
     pub(in crate::native) fn wire_status(
-        &self, credit: Fp, payment: Fp, outcome: VerifiedCreditStatus,
+        &self,
+        credit: Fp,
+        payment: Fp,
+        outcome: VerifiedCreditStatus,
     ) -> Result<KagemushaWalletCreditStatusV1> {
         let e = self;
         let s = &e.statement;
@@ -113,7 +121,10 @@ impl crate::native::sent_delivery::ReceiverEvidence {
             statement,
             proof_digest: body[242..274].try_into().expect("fixed proof digest"),
             receipt,
-            lineage: KagemushaWalletLineageV1 { public, proof: e.exact_pair.clone() },
+            lineage: KagemushaWalletLineageV1 {
+                public,
+                proof: e.exact_pair.clone(),
+            },
             opening: KagemushaWalletCreditOpeningV1 {
                 credit_id: credit.to_repr(),
                 payment_digest: payment.to_repr(),

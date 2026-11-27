@@ -18,7 +18,8 @@ use crate as norito;
 use norito_derive::{NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    borrow::Cow,
+    collections::BTreeMap,
     convert::TryInto,
     fs,
     path::Path,
@@ -29,11 +30,14 @@ use toml::Value as TomlValue;
 pub(crate) const BLOCK_SIZE: usize = 8;
 pub(crate) const BLOCK_PIXELS: usize = BLOCK_SIZE * BLOCK_SIZE;
 pub(crate) const FRAME_HEADER_LEN: usize = 16;
+pub(super) const FRAME_ZSTD: u8 = 0x80;
+// Avoid starting a compressor for tiny plane payloads.
+const MIN_FRAME_COMPRESSION_BYTES: usize = 256;
 const RLE_EOB: u8 = 0xFF;
 const MAX_ZERO_RUN: usize = 254;
 const RLE_TOKEN_BITS: u64 = 24;
-const RLE_TOKEN_BITS_F: f32 = 24.0;
-const RLE_EOB_BITS_F: f32 = 24.0;
+// One AC run always fits in the byte that accompanies its nonzero level.
+const _: () = assert!(BLOCK_PIXELS - 1 <= MAX_ZERO_RUN);
 const RDO_ENERGY_BUCKETS: [u32; RDO_BUCKET_COUNT - 1] = [64, 256, 1024, 4096];
 const NEURAL_FEATURES: usize = 8;
 const NEURAL_HIDDEN: usize = 32;
@@ -551,11 +555,40 @@ const BASELINE_QUANT_MATRIX: [u8; 64] = [
     14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113,
     92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
 ];
+const MIN_AC_WEIGHT: u8 = {
+    let mut min = u8::MAX;
+    let mut i = 1;
+    while i < BLOCK_PIXELS {
+        if BASELINE_QUANT_MATRIX[i] < min {
+            min = BASELINE_QUANT_MATRIX[i];
+        }
+        i += 1;
+    }
+    min
+};
 const ZIG_ZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
+const ZIGZAG_BIT: [u64; BLOCK_PIXELS] = {
+    let mut bits = [0; BLOCK_PIXELS];
+    let mut order = 1;
+    while order < BLOCK_PIXELS {
+        bits[ZIG_ZAG[order]] = 1 << order;
+        order += 1;
+    }
+    bits
+};
+
+fn ac_support(levels: &[i16; BLOCK_PIXELS]) -> u64 {
+    levels
+        .iter()
+        .zip(ZIGZAG_BIT)
+        .fold(0, |bits, (&level, flag)| {
+            bits | (u64::from(level != 0) * flag)
+        })
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub(crate) enum FrameType {
@@ -570,10 +603,10 @@ impl FrameType {
         }
     }
     pub(crate) fn from_byte(byte: u8) -> Result<Self, CodecError> {
-        match byte {
+        match byte & !FRAME_ZSTD {
             0 => Ok(Self::Intra),
             1 => Ok(Self::Predicted),
-            other => Err(CodecError::UnknownFrameType(other)),
+            _ => Err(CodecError::UnknownFrameType(byte)),
         }
     }
     pub(crate) fn reset_dc(self) -> bool {
@@ -1297,13 +1330,20 @@ impl Chroma420Frame {
     pub fn new(dimensions: FrameDimensions, u: Bytes, v: Bytes) -> Result<Self, CodecError> {
         ensure_chroma_even_dimensions(dimensions)?;
         let expected = usize::from(dimensions.width / 2) * usize::from(dimensions.height / 2);
-        if u.len() != expected || v.len() != expected {
-            return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
-                expected: saturating_usize_to_u32(expected),
-                actual: saturating_usize_to_u32(u.len().max(v.len())),
-            }));
+        let frame = Self { u, v };
+        frame.validate_plane_lengths(expected)?;
+        Ok(frame)
+    }
+    fn validate_plane_lengths(&self, expected: usize) -> Result<(), CodecError> {
+        for actual in [self.u.len(), self.v.len()] {
+            if actual != expected {
+                return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
+                    expected: saturating_usize_to_u32(expected),
+                    actual: saturating_usize_to_u32(actual),
+                }));
+            }
         }
-        Ok(Self { u, v })
+        Ok(())
     }
     /// Build a neutral 4:2:0 chroma frame (U/V filled with 128).
     pub fn neutral(dimensions: FrameDimensions) -> Self {
@@ -1353,9 +1393,12 @@ struct AudioEncoderState {
 pub struct BaselineEncoder {
     config: BaselineEncoderConfig,
     audio: Option<AudioEncoderState>,
-    bundled_telemetry: Option<BundledTelemetry>,
+    bundled_telemetry: Option<RecordedSegment>,
+    context_slots: Vec<u32>,
+    // Allocation can survive a call. Predictor validity is local to its segment.
+    reconstruction: [Vec<u8>; 3],
+    sparse_prefixes: SparsePrefixes,
     bundle_tables: Arc<BundleAnsTables>,
-    rdo_lambda: f32,
     neural_predictor: Option<NeuralPredictor>,
 }
 pub(crate) fn pad_frame_luma(
@@ -1427,20 +1470,21 @@ impl BaselineEncoder {
         let neural_seed = config.rdo_neural_seed.unwrap_or(DEFAULT_NEURAL_SEED);
         let neural_predictor =
             (config.rdo_mode == RdoMode::Neural).then(|| NeuralPredictor::from_seed(neural_seed));
-        let rdo_lambda = rdo_lambda_for_mode(config.rdo_mode, config.quantizer);
         Self {
             bundle_tables,
             config,
             audio: None,
             bundled_telemetry: None,
-            rdo_lambda,
+            context_slots: Vec::new(),
+            reconstruction: Default::default(),
+            sparse_prefixes: Default::default(),
             neural_predictor,
         }
     }
     /// Latest bundled entropy telemetry (stats + token stream) recorded by the encoder.
     #[must_use]
     pub fn bundled_telemetry(&self) -> Option<&BundledTelemetry> {
-        self.bundled_telemetry.as_ref()
+        self.bundled_telemetry.as_ref().map(|r| &r.telemetry)
     }
     fn ensure_audio_state(
         &mut self,
@@ -1617,16 +1661,15 @@ impl BaselineEncoder {
         let chroma_dims = FrameDimensions::new(dims.width / 2, dims.height / 2);
         let chroma_aligned = chroma_dims.align_to_block();
         let mut chunks = Vec::with_capacity(frames.len());
-        let mut reconstructed_prev: Option<Vec<u8>> = None;
-        let mut previous_chroma_u: Option<Vec<u8>> = None;
-        let mut previous_chroma_v: Option<Vec<u8>> = None;
-        let mut bundler = self.config.entropy_mode.is_bundled().then(|| {
+        let [luma_ref, u_ref, v_ref] = &mut self.reconstruction;
+        let mut bundler = {
             let width = self
                 .config
                 .bundle_width
                 .min(self.bundle_tables.max_width())
                 .max(1);
             BundleStreamRecorder::new(
+                &mut self.context_slots,
                 width,
                 aligned_dims,
                 self.config.quantizer,
@@ -1635,10 +1678,17 @@ impl BaselineEncoder {
                 self.config.bundle_prefetch_distance,
                 self.config.bundle_context_remap.clone(),
             )
-        });
-        let mut rdo_builder =
-            RdoTelemetryBuilder::new(self.config.rdo_mode, self.rdo_lambda, NEURAL_OUTPUT);
+        };
+        bundler.cached_prefixes = Some(&mut self.sparse_prefixes);
+        let mut rdo = BlockRdo::new(
+            self.config.rdo_mode,
+            self.config.quantizer,
+            self.config.bundle_width,
+            self.neural_predictor.as_ref(),
+        );
         let mut noop_hooks = NoopBundledHooks;
+        let mut chunk = Vec::new();
+        let mut compressor = None;
         for (idx, frame) in frames.iter().enumerate() {
             if frame.luma.len() != frame_len {
                 return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
@@ -1646,20 +1696,30 @@ impl BaselineEncoder {
                     actual: saturating_usize_to_u32(frame.luma.len()),
                 }));
             }
-            let padded_storage = if dims == aligned_dims {
-                None
-            } else {
-                Some(pad_frame_luma(&frame.luma, dims, aligned_dims))
-            };
-            let frame_slice: &[u8] = if let Some(ref buf) = padded_storage {
-                buf.as_slice()
-            } else {
-                frame.luma.as_slice()
-            };
+            let luma = padded_plane(&frame.luma, dims, aligned_dims);
+            let chroma = chroma_frames
+                .get(idx)
+                .map(|planes| -> Result<_, CodecError> {
+                    planes.validate_plane_lengths(chroma_dims.pixel_count())?;
+                    Ok((
+                        padded_plane(&planes.u, chroma_dims, chroma_aligned),
+                        padded_plane(&planes.v, chroma_dims, chroma_aligned),
+                    ))
+                })
+                .transpose()?;
+            // Plane storage survives the call. Prediction starts with frame 1 of each segment.
             let frame_type = if idx == 0 {
                 FrameType::Intra
-            } else {
+            } else if self.config.quantizer == 0 {
                 FrameType::Predicted
+            } else {
+                let mut costs = PredictionEnergy::default();
+                costs.add_plane(&luma, luma_ref, aligned_dims);
+                if let Some((u, v)) = &chroma {
+                    costs.add_plane(u, u_ref, chroma_aligned);
+                    costs.add_plane(v, v_ref, chroma_aligned);
+                }
+                costs.frame_type()
             };
             let idx_delta = frame_step
                 .checked_mul(idx as u64)
@@ -1667,102 +1727,72 @@ impl BaselineEncoder {
             let pts = timeline_start_ns
                 .checked_add(idx_delta)
                 .ok_or(CodecError::FramePtsOverflow(saturating_usize_to_u32(idx)))?;
-            let prev_ref = reconstructed_prev.as_deref();
-            let hooks: &mut dyn BundledHooks = bundler
-                .as_mut()
-                .map(|rec| rec as &mut dyn BundledHooks)
-                .unwrap_or(&mut noop_hooks);
-            let (payload, recon) = Self::encode_frame_payload(
-                frame_slice,
-                frame_type,
-                prev_ref,
-                aligned_dims,
-                self.config.quantizer,
-                hooks,
-                rdo_builder.as_mut(),
-                self.neural_predictor.as_ref(),
-                self.config.bundle_width,
-                self.config.rdo_mode,
-            )?;
-            let chroma_planes = chroma_frames.get(idx);
-            let mut chunk = Vec::with_capacity(
-                FRAME_HEADER_LEN
-                    + payload.len()
-                    + chroma_planes
-                        .map(|planes| planes.u.len().saturating_add(planes.v.len()) + 8)
-                        .unwrap_or(0),
-            );
+            // Prediction references live only until the next frame in this segment.
+            let retain_reference = idx + 1 < frames.len();
+            let plane_blocks = blocks_per_frame
+                + chroma
+                    .as_ref()
+                    .map_or(0, |_| 2 * chroma_aligned.block_count());
+            chunk.clear();
+            chunk.reserve(FRAME_HEADER_LEN + 8 + plane_blocks * 8);
             chunk.extend_from_slice(&(idx as u32).to_le_bytes());
             chunk.extend_from_slice(&pts.to_le_bytes());
             chunk.push(frame_type.as_byte());
             chunk.push(self.config.quantizer);
             chunk.extend_from_slice(&chunk_count_u16.to_le_bytes());
-            chunk.extend_from_slice(&payload);
-            if let Some(planes) = chroma_planes {
-                let expected_chroma_len = chroma_dims.pixel_count();
-                if planes.u.len() != expected_chroma_len || planes.v.len() != expected_chroma_len {
-                    return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
-                        expected: saturating_usize_to_u32(expected_chroma_len),
-                        actual: saturating_usize_to_u32(planes.u.len().max(planes.v.len())),
-                    }));
-                }
-                let padded_u = if chroma_dims == chroma_aligned {
-                    None
-                } else {
-                    Some(pad_frame_luma(&planes.u, chroma_dims, chroma_aligned))
-                };
-                let padded_v = if chroma_dims == chroma_aligned {
-                    None
-                } else {
-                    Some(pad_frame_luma(&planes.v, chroma_dims, chroma_aligned))
-                };
-                let (u_payload, u_recon) = Self::encode_frame_payload(
-                    padded_u
-                        .as_ref()
-                        .map_or_else(|| planes.u.as_slice(), Vec::as_slice),
+            Self::encode_frame_payload(
+                &mut chunk,
+                &luma,
+                frame_type,
+                luma_ref,
+                aligned_dims,
+                self.config.quantizer,
+                retain_reference,
+                &mut bundler,
+                rdo.as_mut(),
+            );
+            if let Some((u, v)) = chroma {
+                // The wire format places both plane lengths before either payload.
+                let lengths = chunk.len();
+                chunk.extend_from_slice(&[0; 8]);
+                let u_start = chunk.len();
+                Self::encode_frame_payload(
+                    &mut chunk,
+                    &u,
                     frame_type,
-                    previous_chroma_u.as_deref(),
+                    u_ref,
                     chroma_aligned,
                     self.config.quantizer,
+                    retain_reference,
                     &mut noop_hooks,
                     None,
-                    None,
-                    1,
-                    RdoMode::None,
-                )?;
-                let (v_payload, v_recon) = Self::encode_frame_payload(
-                    padded_v
-                        .as_ref()
-                        .map_or_else(|| planes.v.as_slice(), Vec::as_slice),
+                );
+                let v_start = chunk.len();
+                Self::encode_frame_payload(
+                    &mut chunk,
+                    &v,
                     frame_type,
-                    previous_chroma_v.as_deref(),
+                    v_ref,
                     chroma_aligned,
                     self.config.quantizer,
+                    retain_reference,
                     &mut noop_hooks,
                     None,
-                    None,
-                    1,
-                    RdoMode::None,
-                )?;
-                previous_chroma_u = Some(u_recon);
-                previous_chroma_v = Some(v_recon);
-                chunk.extend_from_slice(&(u_payload.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(&(v_payload.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(&u_payload);
-                chunk.extend_from_slice(&v_payload);
-            } else {
-                previous_chroma_u = None;
-                previous_chroma_v = None;
+                );
+                let u_len = (v_start - u_start) as u32;
+                let v_len = (chunk.len() - v_start) as u32;
+                chunk[lengths..lengths + 4].copy_from_slice(&u_len.to_le_bytes());
+                chunk[lengths + 4..u_start].copy_from_slice(&v_len.to_le_bytes());
             }
-            chunks.push(chunk);
-            reconstructed_prev = Some(recon);
+            chunks.push(compress_frame_body(&mut chunk, &mut compressor)?);
+            #[cfg(feature = "streaming-neural-filter")]
+            if retain_reference {
+                apply_neural_filter(luma_ref, aligned_dims);
+            }
         }
-        let rdo_report = rdo_builder.and_then(RdoTelemetryBuilder::finish);
-        self.bundled_telemetry = bundler.map(|rec| {
-            let mut telemetry = rec.finish();
-            telemetry.rdo = rdo_report;
-            telemetry
-        });
+        let mut recorded = bundler.finish_segment(self.bundled_telemetry.take());
+        recorded.telemetry.rdo = rdo.map(|optimizer| optimizer.telemetry);
+        self.bundled_telemetry = Some(recorded);
         let offsets_and_lengths = compute_offsets(&chunks);
         let chunk_ids: Vec<u16> = (0..frame_count).collect();
         let nonce_salt = derive_nonce_salt(segment_number, frames.len(), &chunks);
@@ -1828,55 +1858,311 @@ impl BaselineEncoder {
     }
     #[allow(clippy::too_many_arguments)]
     fn encode_frame_payload(
+        payload: &mut Vec<u8>,
         frame: &[u8],
         frame_type: FrameType,
-        prev_frame: Option<&[u8]>,
+        reference: &mut Vec<u8>,
         dims: FrameDimensions,
         quantizer: u8,
-        hooks: &mut dyn BundledHooks,
-        mut rdo: Option<&mut RdoTelemetryBuilder>,
-        neural_predictor: Option<&NeuralPredictor>,
-        bundle_width: u8,
-        rdo_mode: RdoMode,
-    ) -> Result<(Vec<u8>, Vec<u8>), CodecError> {
-        debug_assert_eq!(frame.len(), dims.pixel_count());
-        let mut payload = Vec::with_capacity(frame.len() / 2);
-        let mut reconstructed = vec![0u8; dims.pixel_count()];
-        let mut prev_dc = 0i16;
-        if frame_type.reset_dc() {
-            prev_dc = 0;
-        }
-        for block_index in 0..dims.block_count() {
-            let (residual, predictor) =
-                build_residual_block(frame, prev_frame, dims, block_index, frame_type);
-            let coeffs = forward_dct(&residual);
-            let mut quantized = quantize_coeffs(&coeffs, quantizer);
-            if let Some(builder) = rdo.as_deref_mut() {
-                let report = optimize_block_dp(
-                    &mut quantized,
-                    rdo_mode,
-                    builder.lambda_bits,
-                    neural_predictor,
-                    bundle_width,
-                    quantizer,
-                    frame_type,
-                    block_index,
-                );
-                builder.record(&report);
-            }
-            encode_block_rle(
-                &quantized,
-                &mut prev_dc,
-                &mut payload,
-                hooks,
-                block_index,
+        retain_reference: bool,
+        hooks: &mut impl BundledHooks,
+        rdo: Option<&mut BlockRdo<'_>>,
+    ) {
+        if quantizer == 16 && rdo.is_none() {
+            Self::encode_plane::<true>(
+                payload,
+                frame,
                 frame_type,
+                reference,
+                dims,
+                16,
+                retain_reference,
+                hooks,
+                None,
             );
-            let dequantized = dequantize_coeffs(&quantized, quantizer);
-            let spatial = inverse_dct(&dequantized);
-            write_reconstructed_block(&mut reconstructed, &spatial, &predictor, dims, block_index);
+        } else {
+            Self::encode_plane::<false>(
+                payload,
+                frame,
+                frame_type,
+                reference,
+                dims,
+                quantizer,
+                retain_reference,
+                hooks,
+                rdo,
+            );
         }
-        Ok((payload, reconstructed))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_plane<const DEFAULT_Q16: bool>(
+        payload: &mut Vec<u8>,
+        frame: &[u8],
+        frame_type: FrameType,
+        reference: &mut Vec<u8>,
+        dims: FrameDimensions,
+        quantizer: u8,
+        retain_reference: bool,
+        hooks: &mut impl BundledHooks,
+        rdo: Option<&mut BlockRdo<'_>>,
+    ) {
+        let quantizer = if DEFAULT_Q16 { 16 } else { quantizer };
+        let mut rdo = if DEFAULT_Q16 { None } else { rdo };
+        debug_assert_eq!(frame.len(), dims.pixel_count());
+        // Prediction reads only the collocated block. Once captured, its old
+        // pixels can be replaced in place, including on a scene refresh.
+        if retain_reference {
+            reference.resize(dims.pixel_count(), 0);
+        }
+        let mut prev_dc = 0i16;
+        let mut dc_levels = [0; BLOCK_PIXELS];
+        let geometry = BlockQuantization::new(quantizer);
+        let stride = usize::from(dims.width);
+        let blocks_per_row = stride / BLOCK_SIZE;
+        let mut moments = vec![(0, 0); blocks_per_row];
+        let mut next_block = 0;
+        for band in 0..usize::from(dims.height) / BLOCK_SIZE {
+            let band_start = band * BLOCK_SIZE * stride;
+            if quantizer != 0 {
+                let range = band_start..band_start + BLOCK_SIZE * stride;
+                let prediction =
+                    (frame_type == FrameType::Predicted).then_some(reference.as_slice());
+                let source = &frame[range.clone()];
+                let reference = prediction.map(|p| &p[range]);
+                #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+                let shortcut = if let Some(prev) = reference
+                    && std::arch::is_aarch64_feature_detected!("dotprod")
+                {
+                    // SAFETY: the CPU supports dotprod and the plane slices contain the whole band.
+                    unsafe {
+                        predicted_moments(
+                            source,
+                            prev,
+                            stride,
+                            geometry.zero_squares,
+                            &mut moments,
+                        );
+                    }
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+                let shortcut = false;
+                if !shortcut {
+                    row_moments(source, reference, stride, &mut moments);
+                }
+            }
+            let skip_zero = frame_type == FrameType::Predicted && quantizer != 0 && rdo.is_none();
+            for (chunk, positions) in moments.chunks(64).enumerate() {
+                let mut selected = if skip_zero {
+                    geometry.possible_residuals(positions)
+                } else {
+                    u64::MAX >> (64 - positions.len())
+                };
+                while selected != 0 {
+                    let position = selected.trailing_zeros() as usize;
+                    selected &= selected - 1;
+                    let column = chunk * 64 + position;
+                    let moments = positions[position];
+                    let block_index = band * blocks_per_row + column;
+                    let prediction =
+                        (frame_type == FrameType::Predicted).then_some(reference.as_slice());
+                    let decision = geometry.classify(frame, prediction, dims, block_index, moments);
+                    if matches!(decision, BlockSpectrum::DcLevel(0))
+                        && frame_type == FrameType::Predicted
+                        && rdo.is_none()
+                    {
+                        continue;
+                    }
+                    if next_block < block_index {
+                        emit_zero_run(next_block..block_index, &mut prev_dc, payload, hooks);
+                    }
+                    next_block = block_index + 1;
+                    match decision {
+                        BlockSpectrum::DcLevel(level) => {
+                            dc_levels[0] = level;
+                            // RDO observes certified blocks even when all AC levels are zero.
+                            if let Some(optimizer) = rdo.as_deref_mut() {
+                                optimizer.select_levels(
+                                    &[0; BLOCK_PIXELS],
+                                    &mut dc_levels,
+                                    frame_type,
+                                    block_index,
+                                );
+                            }
+                        }
+                        BlockSpectrum::WeightsThrough(limit) => {
+                            let start = band_start + column * BLOCK_SIZE;
+                            let rows = ResidualRows::new(frame, prediction, stride, start);
+                            let (quantized, active) = if let Some(optimizer) = rdo.as_deref_mut() {
+                                let coeffs = forward_dct(&rows.block(), limit, quantizer);
+                                let mut levels = quantize_coeffs(&coeffs, quantizer);
+                                optimizer.select_levels(
+                                    &coeffs,
+                                    &mut levels,
+                                    frame_type,
+                                    block_index,
+                                );
+                                (levels, ac_support(&levels))
+                            } else {
+                                geometry.quantize_rows(&rows, moments, limit)
+                            };
+                            if active != 0 {
+                                encode_active_block(
+                                    &quantized,
+                                    active,
+                                    &mut prev_dc,
+                                    payload,
+                                    hooks,
+                                    block_index,
+                                    frame_type,
+                                );
+                                if retain_reference {
+                                    let spatial =
+                                        inverse_dct_full(&dequantize_coeffs(&quantized, quantizer));
+                                    reconstruct_ac(reference, stride, start, frame_type, &spatial);
+                                }
+                                continue;
+                            }
+                            dc_levels[0] = quantized[0];
+                        }
+                    }
+                    emit_dc_block(
+                        &dc_levels,
+                        &mut prev_dc,
+                        payload,
+                        hooks,
+                        block_index,
+                        frame_type,
+                    );
+                    if retain_reference && (frame_type == FrameType::Intra || dc_levels[0] != 0) {
+                        let offset = inverse_dc_sample(i32::from(dc_levels[0]) * geometry.dc_step);
+                        reconstruct_dc(reference, dims, block_index, frame_type, offset);
+                    }
+                }
+            }
+        }
+        if next_block < dims.block_count() {
+            emit_zero_run(next_block..dims.block_count(), &mut prev_dc, payload, hooks);
+        }
+    }
+}
+/// Pack the whole plane payload before computing chunk offsets and commitments.
+fn compress_frame_body(
+    chunk: &mut Vec<u8>,
+    compressor: &mut Option<zstd::bulk::Compressor<'static>>,
+) -> Result<Vec<u8>, CodecError> {
+    let body = &chunk[FRAME_HEADER_LEN..];
+    if body.len() >= MIN_FRAME_COMPRESSION_BYTES {
+        let compressor = match compressor {
+            Some(compressor) => compressor,
+            None => compressor.insert(
+                zstd::bulk::Compressor::new(1).map_err(|_| CodecError::FrameCompressionFailed)?,
+            ),
+        };
+        // Write the independent Zstandard frame directly after its uncompressed header.
+        let mut packed =
+            Vec::with_capacity(FRAME_HEADER_LEN + zstd::zstd_safe::compress_bound(body.len()));
+        packed.extend_from_slice(&chunk[..FRAME_HEADER_LEN]);
+        let mut cursor = std::io::Cursor::new(&mut packed);
+        cursor.set_position(FRAME_HEADER_LEN as u64);
+        let written = compressor
+            .compress_to_buffer(body, &mut cursor)
+            .map_err(|_| CodecError::FrameCompressionFailed)?;
+        if written < body.len() {
+            packed[12] |= FRAME_ZSTD;
+            packed.shrink_to_fit();
+            return Ok(packed);
+        }
+    }
+    Ok(std::mem::take(chunk))
+}
+
+/// Open a single sized Zstandard frame within the geometry's largest possible RLE payload.
+pub(super) fn decompress_frame_body(
+    body: &[u8],
+    luma_blocks: usize,
+    chroma_blocks: usize,
+) -> Result<Vec<u8>, CodecError> {
+    // Each block holds a DC delta, up to 63 AC records and an end marker.
+    let max_bytes = (luma_blocks + 2 * chroma_blocks) * (2 + 3 * BLOCK_PIXELS) + 8;
+    let min_bytes = (5 * luma_blocks).max(1);
+    let size = zstd::decompressed_size(body)
+        .and_then(|size| usize::try_from(size).ok())
+        .filter(|size| (min_bytes..=max_bytes).contains(size))
+        .ok_or(CodecError::InvalidCompressedFrame)?;
+    if zstd::zstd_safe::find_frame_compressed_size(body) != Ok(body.len()) {
+        return Err(CodecError::InvalidCompressedFrame);
+    }
+    let decoded =
+        zstd::bulk::decompress(body, size).map_err(|_| CodecError::InvalidCompressedFrame)?;
+    if decoded.len() != size {
+        return Err(CodecError::InvalidCompressedFrame);
+    }
+    Ok(decoded)
+}
+
+/// Borrow an aligned input plane or extend its edge pixels once for analysis and encoding.
+fn padded_plane(input: &[u8], dims: FrameDimensions, aligned: FrameDimensions) -> Cow<'_, [u8]> {
+    if dims == aligned {
+        Cow::Borrowed(input)
+    } else {
+        Cow::Owned(pad_frame_luma(input, dims, aligned))
+    }
+}
+
+#[derive(Default)]
+struct PredictionEnergy {
+    intra: u64,
+    predicted: u64,
+}
+
+impl PredictionEnergy {
+    // The DC delta always costs two bytes. Estimate AC energy, i.e. variance
+    // about each block's own mean, for the source and previous-frame residual.
+    fn add_plane(&mut self, source: &[u8], previous: &[u8], dims: FrameDimensions) {
+        let stride = usize::from(dims.width);
+        let cols = stride / BLOCK_SIZE;
+        let rows = usize::from(dims.height) / BLOCK_SIZE;
+        let grid_x = cols.min(4);
+        let grid_y = rows.min(4);
+        for y in 0..grid_y {
+            let top = y * rows / grid_y;
+            let bottom = (y + 1) * rows / grid_y;
+            for x in 0..grid_x {
+                let left = x * cols / grid_x;
+                let right = (x + 1) * cols / grid_x;
+                let offset = ((top + bottom) / 2 * stride + (left + right) / 2) * BLOCK_SIZE;
+                let weight = ((right - left) * (bottom - top)) as u64;
+                let (mut sum, mut squares) = (0_i32, 0_i32);
+                let (mut diff_sum, mut diff_squares) = (0_i32, 0_i32);
+                for dy in 0..BLOCK_SIZE {
+                    let start = offset + dy * stride;
+                    for i in start..start + BLOCK_SIZE {
+                        let pixel = i32::from(source[i]);
+                        let diff = pixel - i32::from(previous[i]);
+                        sum += pixel;
+                        squares += pixel * pixel;
+                        diff_sum += diff;
+                        diff_squares += diff * diff;
+                    }
+                }
+                self.intra += weight * (BLOCK_PIXELS as i32 * squares - sum * sum) as u64;
+                self.predicted +=
+                    weight * (BLOCK_PIXELS as i32 * diff_squares - diff_sum * diff_sum) as u64;
+            }
+        }
+    }
+
+    fn frame_type(&self) -> FrameType {
+        // A margin avoids switching references on small changes in sampled texture.
+        if 5 * self.intra < 4 * self.predicted {
+            FrameType::Intra
+        } else {
+            FrameType::Predicted
+        }
     }
 }
 pub(crate) fn block_origin(dims: FrameDimensions, block_index: usize) -> (usize, usize) {
@@ -1885,32 +2171,169 @@ pub(crate) fn block_origin(dims: FrameDimensions, block_index: usize) -> (usize,
     let col = block_index % blocks_per_row;
     (col * BLOCK_SIZE, row * BLOCK_SIZE)
 }
-pub(crate) fn build_residual_block(
-    frame: &[u8],
-    prev_frame: Option<&[u8]>,
-    dims: FrameDimensions,
-    block_index: usize,
-    frame_type: FrameType,
-) -> ([i16; BLOCK_PIXELS], [i16; BLOCK_PIXELS]) {
-    let mut residual = [0i16; BLOCK_PIXELS];
-    let mut predictor = [0i16; BLOCK_PIXELS];
-    let (origin_x, origin_y) = block_origin(dims, block_index);
-    let stride = dims.width as usize;
-    for y in 0..BLOCK_SIZE {
-        for x in 0..BLOCK_SIZE {
-            let idx = (origin_y + y) * stride + (origin_x + x);
-            let pixel = frame[idx] as i16;
-            let pred = if let (FrameType::Predicted, Some(prev)) = (frame_type, prev_frame) {
-                prev[idx] as i16
-            } else {
-                0
-            };
-            predictor[y * BLOCK_SIZE + x] = pred;
-            residual[y * BLOCK_SIZE + x] = pixel - pred;
+/// A collocated 8×8 window in the source and optional prediction planes.
+struct ResidualRows<'a> {
+    source: &'a [u8],
+    reference: Option<&'a [u8]>,
+    stride: usize,
+}
+
+impl<'a> ResidualRows<'a> {
+    fn new(source: &'a [u8], reference: Option<&'a [u8]>, stride: usize, start: usize) -> Self {
+        let span = start..start + (BLOCK_SIZE - 1) * stride + BLOCK_SIZE;
+        Self {
+            source: &source[span.clone()],
+            reference: reference.map(|r| &r[span]),
+            stride,
         }
     }
-    (residual, predictor)
+
+    #[inline]
+    fn row(&self, y: usize) -> [i16; BLOCK_SIZE] {
+        let offset = y * self.stride;
+        let src = self.source[offset..]
+            .first_chunk::<BLOCK_SIZE>()
+            .expect("complete source row");
+        match self.reference {
+            Some(reference) => {
+                let pred = reference[offset..]
+                    .first_chunk::<BLOCK_SIZE>()
+                    .expect("complete reference row");
+                std::array::from_fn(|x| i16::from(src[x]) - i16::from(pred[x]))
+            }
+            None => src.map(i16::from),
+        }
+    }
+
+    #[cfg(all(
+        feature = "simd-accel",
+        target_arch = "aarch64",
+        not(feature = "streaming-fixed-point-dct")
+    ))]
+    #[target_feature(enable = "dotprod")]
+    unsafe fn narrow_q16(
+        &self,
+        moments: (i32, i32),
+        limit: u8,
+        geometry: &BlockQuantization,
+    ) -> ([i16; 64], u64) {
+        use std::arch::aarch64::*;
+        let (sum, squares) = moments;
+        let mut remaining = (64 * squares - sum * sum + 63) / 64 + 1;
+        let half = self.reference.is_some() && limit > 15;
+        let center = (sum / 64) as u8;
+        // SAFETY: each plane contains all eight rows established by new().
+        let pair = |p: &[u8], y: usize| unsafe {
+            vcombine_u8(
+                vld1_u8(p.as_ptr().add(2 * y * self.stride)),
+                vld1_u8(p.as_ptr().add((2 * y + 1) * self.stride)),
+            )
+        };
+        let samples: [_; 4] = std::array::from_fn(|i| {
+            let s = pair(self.source, i);
+            let v = if let Some(p) = self.reference {
+                let prev = pair(p, i);
+                if half {
+                    vsubq_u8(vhsubq_u8(s, prev), vdupq_n_u8(((sum / 64) >> 1) as u8))
+                } else {
+                    vsubq_u8(vsubq_u8(s, prev), vdupq_n_u8(center))
+                }
+            } else {
+                veorq_u8(s, vdupq_n_u8(128))
+            };
+            vreinterpretq_s8_u8(v)
+        });
+        let mut levels = [0; 64];
+        let mut active = 0;
+        for kernel in &NARROW_KERNELS {
+            if kernel.weight > limit || remaining <= (8 * i32::from(kernel.weight)).pow(2) {
+                break;
+            }
+            let mut d = vdupq_n_s32(0);
+            for (r, x) in kernel.rows.iter().zip(samples) {
+                // SAFETY: every pair contains sixteen signed byte weights.
+                d = vdotq_s32(d, x, unsafe { vld1q_s8(r.as_ptr()) });
+            }
+            let v = vaddvq_s32(d) << u32::from(half);
+            let mag = v.unsigned_abs();
+            let error =
+                32 * (u32::from(limit) + 1) + 1 + if half { kernel.l1.div_ceil(2) } else { 0 };
+            let lower = (mag.saturating_sub(error) >> 9) as i32;
+            remaining -= lower * lower;
+            let midpoint = u32::from(kernel.weight) * 4096 + 256;
+            if mag + error < midpoint {
+                continue;
+            }
+            let slot = kernel.slot;
+            let level = if mag > midpoint + error {
+                if v < 0 { -1 } else { 1 }
+            } else {
+                quantize_ac(
+                    direct_dct_coefficient(
+                        &self.block(),
+                        &DCT_FACTORS[slot / 8],
+                        &DCT_FACTORS[slot % 8],
+                    ),
+                    i32::from(kernel.weight) * 16,
+                )
+            };
+            levels[slot] = level;
+            active |= u64::from(level != 0) * ZIGZAG_BIT[slot];
+        }
+        levels[0] = geometry.quantized_dc(i64::from(sum), || self.block());
+        (levels, active)
+    }
+
+    fn folded(&self) -> FoldedBlock {
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        {
+            use std::arch::aarch64::*;
+            // SAFETY: ResidualRows::new checked both planes through the end of row seven.
+            // The fold requests exactly those eight complete rows.
+            let load =
+                |plane: &[u8], y: usize| unsafe { vld1_u8(plane.as_ptr().add(y * self.stride)) };
+            if let Some(reference) = self.reference {
+                fold_vectors(|y| unsafe {
+                    vreinterpretq_s16_u16(vsubl_u8(load(self.source, y), load(reference, y)))
+                })
+            } else {
+                fold_vectors(|y| unsafe { vreinterpretq_s16_u16(vmovl_u8(load(self.source, y))) })
+            }
+        }
+        #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+        {
+            fold_scalar(|y| self.row(y))
+        }
+    }
+
+    fn block(&self) -> [i16; BLOCK_PIXELS] {
+        let mut block = [0; BLOCK_PIXELS];
+        for (y, row) in block.as_chunks_mut::<BLOCK_SIZE>().0.iter_mut().enumerate() {
+            *row = self.row(y);
+        }
+        block
+    }
 }
+
+#[cfg(test)]
+fn build_residual_block(
+    frame: &[u8],
+    prev: Option<&[u8]>,
+    dims: FrameDimensions,
+    index: usize,
+    kind: FrameType,
+) -> ([i16; BLOCK_PIXELS], [i16; BLOCK_PIXELS]) {
+    let (x, y) = block_origin(dims, index);
+    let stride = usize::from(dims.width);
+    let rows = ResidualRows::new(
+        frame,
+        prev.filter(|_| kind == FrameType::Predicted),
+        stride,
+        y * stride + x,
+    );
+    (rows.block(), predictor_block(prev, dims, index, kind))
+}
+
 pub(crate) fn predictor_block(
     prev_frame: Option<&[u8]>,
     dims: FrameDimensions,
@@ -2047,116 +2470,1135 @@ mod block_tests {
         assert_ne!(frame, untouched, "neural filter should change the frame");
     }
 }
-/// Deterministic scalar fixed-point DCT used as the cross-hardware reference.
-/// Accelerated variants must prove bit-exact parity against this path.
 #[cfg(feature = "streaming-fixed-point-dct")]
-pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for u in 0..8 {
-        for v in 0..8 {
-            let mut sum: i64 = 0;
-            for x in 0..8 {
-                for y in 0..8 {
-                    let sample = i64::from(block[x * 8 + y]);
-                    let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
-                    let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
-                    sum = sum
-                        .saturating_add(sample.saturating_mul(factor_u).saturating_mul(factor_v));
-                }
-            }
-            let rounded = if sum >= 0 {
-                (sum + DCT_ROUND) >> DCT_SHIFT
-            } else {
-                (sum - DCT_ROUND) >> DCT_SHIFT
-            };
-            out[u * 8 + v] = rounded as i32;
-        }
+fn round_q30(sum: i64) -> i64 {
+    if sum >= 0 {
+        (sum + DCT_ROUND) >> DCT_SHIFT
+    } else {
+        (sum - DCT_ROUND) >> DCT_SHIFT
     }
-    out
 }
-#[cfg(not(feature = "streaming-fixed-point-dct"))]
-pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for u in 0..8 {
-        for v in 0..8 {
-            let mut sum = 0.0;
-            for x in 0..8 {
-                for y in 0..8 {
-                    let sample = block[x * 8 + y] as f64;
-                    sum += sample * DCT_FACTORS[u][x] * DCT_FACTORS[v][y];
-                }
-            }
-            out[u * 8 + v] = sum.round() as i32;
-        }
+
+pub(crate) fn forward_dct(
+    block: &[i16; BLOCK_PIXELS],
+    limit: u8,
+    quantizer: u8,
+) -> [i32; BLOCK_PIXELS] {
+    let mut coeffs = [0; BLOCK_PIXELS];
+    if quantizer == 0 && block.iter().all(|&sample| sample == 0) {
+        return coeffs;
     }
-    out
-}
-#[cfg(feature = "streaming-fixed-point-dct")]
-pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for x in 0..8 {
-        for y in 0..8 {
-            let mut sum: i64 = 0;
-            for u in 0..8 {
-                for v in 0..8 {
-                    let coeff = i64::from(coeffs[u * 8 + v]);
-                    let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
-                    let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
-                    sum =
-                        sum.saturating_add(coeff.saturating_mul(factor_u).saturating_mul(factor_v));
-                }
-            }
-            let rounded = if sum >= 0 {
-                (sum + DCT_ROUND) >> DCT_SHIFT
-            } else {
-                (sum - DCT_ROUND) >> DCT_SHIFT
-            };
-            out[x * 8 + y] = rounded.clamp(-32768, 32767) as i32;
-        }
-    }
-    out
-}
-#[cfg(not(feature = "streaming-fixed-point-dct"))]
-pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
-    let mut out = [0i32; BLOCK_PIXELS];
-    for x in 0..8 {
-        for y in 0..8 {
-            let mut sum = 0.0;
-            for u in 0..8 {
-                for v in 0..8 {
-                    let coeff = coeffs[u * 8 + v] as f64;
-                    sum += coeff * DCT_FACTORS[u][x] * DCT_FACTORS[v][y];
-                }
-            }
-            out[x * 8 + y] = sum.round().clamp(-32768.0, 32767.0) as i32;
-        }
-    }
-    out
-}
-fn qp_scale(quantizer: u8) -> i32 {
-    (quantizer as i32).max(1)
-}
-pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i16; BLOCK_PIXELS] {
-    let mut out = [0i16; BLOCK_PIXELS];
-    if quantizer == 0 {
-        for (idx, coeff) in coeffs.iter().enumerate() {
-            out[idx] = (*coeff).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        }
-        return out;
-    }
-    let scale = qp_scale(quantizer);
-    for (idx, coeff) in coeffs.iter().enumerate() {
-        let step = (i32::from(BASELINE_QUANT_MATRIX[idx]).max(1)) * scale;
-        let adjusted = if *coeff >= 0 {
-            coeff.saturating_add(step / 2)
+    let rows = block.as_chunks::<BLOCK_SIZE>().0;
+    let folded = fold_rows(|y| rows[y]);
+    let sum = folded_sum(&folded);
+    visit_ac(
+        &folded,
+        sum,
+        limit,
+        quantizer,
+        false,
+        || *block,
+        |slot, value, _| coeffs[slot] = value,
+    );
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    let dc = {
+        let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+        round_q30(i64::from(sum) * basis * basis) as i32
+    };
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    let dc = {
+        // The constant basis makes DC equal to sum/8 up to rounding. Only
+        // a half-integer can depend on the original table and addition order.
+        if sum & 7 == 4 {
+            direct_dct_coefficient(block, &DCT_FACTORS[0], &DCT_FACTORS[0])
         } else {
-            coeff.saturating_sub(step / 2)
+            (sum + 4) >> 3
+        }
+    };
+    coeffs[0] = dc;
+    coeffs
+}
+
+/// All 64 residuals lie in [-255, 255], so their squared sum fits in i32.
+fn block_moments(
+    samples: &[u8],
+    prediction: Option<&[u8]>,
+    stride: usize,
+    column: usize,
+) -> (i32, i32) {
+    let x = column * BLOCK_SIZE;
+    let mut sums = [0_i32; BLOCK_SIZE];
+    let mut squares = [0_i32; BLOCK_SIZE];
+    for dy in 0..BLOCK_SIZE {
+        let start = dy * stride + x;
+        let samples = samples[start..]
+            .first_chunk::<BLOCK_SIZE>()
+            .expect("complete block row");
+        let predictors = prediction.map_or(&[0; BLOCK_SIZE], |prev| {
+            prev[start..]
+                .first_chunk::<BLOCK_SIZE>()
+                .expect("complete prediction row")
+        });
+        for dx in 0..BLOCK_SIZE {
+            let delta = i32::from(samples[dx]) - i32::from(predictors[dx]);
+            sums[dx] += delta;
+            squares[dx] += delta * delta;
+        }
+    }
+    (sums.iter().sum(), squares.iter().sum())
+}
+
+/// Compute the moments before any collocated predictor in this band is overwritten.
+fn row_moments(
+    samples: &[u8],
+    prediction: Option<&[u8]>,
+    stride: usize,
+    output: &mut [(i32, i32)],
+) {
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    if std::arch::is_aarch64_feature_detected!("dotprod") {
+        // SAFETY: the selected CPU supports the integer dot-product instructions.
+        unsafe { dot_row_moments(samples, prediction, stride, output) };
+        return;
+    }
+    for (column, moments) in output.iter_mut().enumerate() {
+        *moments = block_moments(samples, prediction, stride, column);
+    }
+}
+
+/// Two adjacent 8×8 blocks occupy the two halves of each vector load. Dot the
+/// absolute differences with themselves, then add neighboring four-byte lanes.
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[target_feature(enable = "dotprod")]
+unsafe fn dot_row_moments(
+    samples: &[u8],
+    reference: Option<&[u8]>,
+    stride: usize,
+    row: &mut [(i32, i32)],
+) {
+    use std::arch::aarch64::*;
+    assert!(row.len() <= stride / BLOCK_SIZE);
+    let band_len = stride.checked_mul(BLOCK_SIZE).expect("valid band length");
+    let samples = &samples[..band_len];
+    let reference = reference.map(|p| &p[..band_len]);
+    let ones = vdupq_n_u8(1);
+    for (pair, dst) in row.chunks_exact_mut(2).enumerate() {
+        let mut sum = vdupq_n_u32(0);
+        let mut prev_sum = vdupq_n_u32(0);
+        let mut squares = vdupq_n_u32(0);
+        for y in 0..BLOCK_SIZE {
+            let offset = y * stride + pair * 2 * BLOCK_SIZE;
+            // SAFETY: the pair contains 16 bytes within a checked eight-row band.
+            let pixels = unsafe { vld1q_u8(samples.as_ptr().add(offset)) };
+            sum = vdotq_u32(sum, pixels, ones);
+            let magnitude = if let Some(previous) = reference {
+                // SAFETY: the reference band has the same checked length.
+                let predictors = unsafe { vld1q_u8(previous.as_ptr().add(offset)) };
+                prev_sum = vdotq_u32(prev_sum, predictors, ones);
+                vabdq_u8(pixels, predictors)
+            } else {
+                pixels
+            };
+            squares = vdotq_u32(squares, magnitude, magnitude);
+        }
+        let totals = vpaddq_s32(
+            vreinterpretq_s32_u32(vsubq_u32(sum, prev_sum)),
+            vreinterpretq_s32_u32(squares),
+        );
+        dst[0] = (vgetq_lane_s32::<0>(totals), vgetq_lane_s32::<2>(totals));
+        dst[1] = (vgetq_lane_s32::<1>(totals), vgetq_lane_s32::<3>(totals));
+    }
+    if row.len() % 2 != 0 {
+        let column = row.len() - 1;
+        row[column] = block_moments(samples, reference, stride, column);
+    }
+}
+
+/// A small uncentered squared norm certifies both zero AC and zero DC:
+/// E <= 64 * squares and sum² <= 64 * squares. Use zero moments as a
+/// representative only for those blocks, otherwise supply the exact moments.
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[target_feature(enable = "dotprod")]
+unsafe fn predicted_moments(
+    src: &[u8],
+    pred: &[u8],
+    stride: usize,
+    limit: u32,
+    out: &mut [(i32, i32)],
+) {
+    use std::arch::aarch64::*;
+    let span = stride.checked_mul(8).expect("band length");
+    let src = &src[..span];
+    let pred = &pred[..span];
+    assert!(out.len() <= stride / 8);
+    let ones = vdupq_n_u8(1);
+    for (pair, dst) in out.chunks_exact_mut(2).enumerate() {
+        let x = pair * 16;
+        // SAFETY: both bands contain eight rows and x..x+16 is inside each.
+        unsafe {
+            let current: [_; 8] =
+                std::array::from_fn(|y| vld1q_u8(src.as_ptr().add(y * stride + x)));
+            let old: [_; 8] = std::array::from_fn(|y| vld1q_u8(pred.as_ptr().add(y * stride + x)));
+            let mut squares = vdupq_n_u32(0);
+            for i in 0..8 {
+                let d = vabdq_u8(current[i], old[i]);
+                squares = vdotq_u32(squares, d, d);
+            }
+            let sq = vpaddq_u32(squares, squares);
+            let first = vgetq_lane_u32::<0>(sq);
+            let second = vgetq_lane_u32::<1>(sq);
+            if first <= limit && second <= limit {
+                dst.fill((0, 0));
+            } else {
+                let mut a = vdupq_n_u32(0);
+                let mut b = vdupq_n_u32(0);
+                for i in 0..8 {
+                    a = vdotq_u32(a, current[i], ones);
+                    b = vdotq_u32(b, old[i], ones);
+                }
+                let delta = vreinterpretq_s32_u32(vsubq_u32(a, b));
+                let sums = vpaddq_s32(delta, delta);
+                dst[0] = (vgetq_lane_s32::<0>(sums), first as i32);
+                dst[1] = (vgetq_lane_s32::<1>(sums), second as i32);
+            }
+        }
+    }
+    if out.len() % 2 != 0 {
+        let i = out.len() - 1;
+        out[i] = block_moments(src, Some(pred), stride, i);
+    }
+}
+
+enum BlockSpectrum {
+    DcLevel(i16),
+    WeightsThrough(u8),
+}
+
+struct BlockQuantization {
+    quantizer: u8,
+    dc_step: i32,
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    dc_reciprocal: u64,
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    zero_squares: u32,
+    zero_dc_sum: u64,
+    dc_only_energy: i64,
+}
+
+impl BlockQuantization {
+    fn new(quantizer: u8) -> Self {
+        let half_step = i64::from(MIN_AC_WEIGHT) * i64::from(quantizer) / 2;
+        let radius = (half_step - 2) * 64 / 65;
+        let dc_step = quantization_step(0, quantizer);
+        Self {
+            quantizer,
+            dc_step,
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            dc_reciprocal: (1_u64 << 32).div_ceil(dc_step as u64),
+            // DC is sum / 8 up to the table and signed rounding error.
+            zero_dc_sum: 8 * (dc_step as u64 / 2).saturating_sub(2),
+            #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+            zero_squares: (radius * radius).min((8 * (dc_step as i64 / 2 - 2).max(0)).pow(2) / 64)
+                as u32,
+            dc_only_energy: BLOCK_PIXELS as i64 * radius * radius,
+        }
+    }
+
+    /// Keep only collocated blocks whose exact moments can produce a level.
+    /// Pixel residuals fit in signed 32-bit lanes even after multiplying by 64.
+    fn possible_residuals(&self, moments: &[(i32, i32)]) -> u64 {
+        debug_assert!(moments.len() <= 64);
+        let mut result = 0;
+        for (i, chunk) in moments.chunks(8).enumerate() {
+            let mut lanes = [0u8; 8];
+            for (bit, (&(s, q), lane)) in chunk.iter().zip(&mut lanes).enumerate() {
+                let energy = 64 * q - s * s;
+                let keep = (energy as i64 > self.dc_only_energy)
+                    | (u64::from(s.unsigned_abs()) > self.zero_dc_sum);
+                *lane = u8::from(keep) << bit;
+            }
+            let packed = lanes.into_iter().fold(0, |a, b| a | b);
+            result |= u64::from(packed) << (8 * i);
+        }
+        result
+    }
+
+    #[inline(always)]
+    fn classify(
+        &self,
+        frame: &[u8],
+        prediction: Option<&[u8]>,
+        dims: FrameDimensions,
+        index: usize,
+        moments: (i32, i32),
+    ) -> BlockSpectrum {
+        if self.quantizer == 0 {
+            if let Some(prev) = prediction {
+                let (x, y) = block_origin(dims, index);
+                let stride = usize::from(dims.width);
+                if (0..BLOCK_SIZE).all(|dy| {
+                    let start = (y + dy) * stride + x;
+                    frame[start..start + BLOCK_SIZE] == prev[start..start + BLOCK_SIZE]
+                }) {
+                    return BlockSpectrum::DcLevel(0);
+                }
+            }
+            return BlockSpectrum::WeightsThrough(u8::MAX);
+        }
+        let (sum, squares) = (i64::from(moments.0), i64::from(moments.1));
+        match self.ac_limit(sum, squares) {
+            Some(limit) => BlockSpectrum::WeightsThrough(limit),
+            None if sum.unsigned_abs() <= self.zero_dc_sum => BlockSpectrum::DcLevel(0),
+            None => BlockSpectrum::DcLevel(self.quantized_dc(sum, || {
+                let (x, y) = block_origin(dims, index);
+                let stride = usize::from(dims.width);
+                ResidualRows::new(frame, prediction, stride, y * stride + x).block()
+            })),
+        }
+    }
+
+    #[inline(always)]
+    fn ac_limit(&self, sum: i64, squares: i64) -> Option<u8> {
+        if self.quantizer == 0 {
+            return Some(u8::MAX);
+        }
+        let energy = BLOCK_PIXELS as i64 * squares - sum * sum;
+        if energy <= self.dc_only_energy {
+            return None;
+        }
+        // ||x - mean(x)|| = sqrt(energy)/8; the basis norm is at most 65/64.
+        // E <= 2^42 for signed i16 input. Consecutive integer energies near
+        // a square have roots separated by more than 1/(2^22+1), well over one ulp.
+        let radius_upper = (energy as f64).sqrt() as u64 + 1;
+        let bound = (65 * radius_upper).div_ceil(512) + 2;
+        Some((2 * bound / u64::from(self.quantizer)).min(u64::from(u8::MAX)) as u8)
+    }
+
+    fn quantize_rows(
+        &self,
+        rows: &ResidualRows<'_>,
+        moments: (i32, i32),
+        limit: u8,
+    ) -> ([i16; BLOCK_PIXELS], u64) {
+        #[cfg(all(
+            feature = "simd-accel",
+            target_arch = "aarch64",
+            not(feature = "streaming-fixed-point-dct")
+        ))]
+        if self.quantizer == 16
+            && limit <= NARROW_LIMIT
+            && std::arch::is_aarch64_feature_detected!("dotprod")
+        {
+            // SAFETY: dotprod is detected. The centered energy cutoff is for these source rows.
+            return unsafe { rows.narrow_q16(moments, limit, self) };
+        }
+        let folded = rows.folded();
+        let sum = if self.quantizer == 0 {
+            folded_sum(&folded)
+        } else {
+            moments.0
         };
-        let quantized = adjusted / step;
-        out[idx] = quantized.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        self.quantize_folded(&folded, sum, limit, || rows.block())
+    }
+
+    /// Quantize visited projections directly. Reference-order evaluation only needs
+    /// the original residual at a rounding boundary.
+    fn quantize_folded(
+        &self,
+        folded: &FoldedBlock,
+        sum: i32,
+        limit: u8,
+        residual: impl Fn() -> [i16; BLOCK_PIXELS],
+    ) -> ([i16; BLOCK_PIXELS], u64) {
+        #[cfg(all(
+            feature = "simd-accel",
+            target_arch = "aarch64",
+            not(feature = "streaming-fixed-point-dct")
+        ))]
+        if self.quantizer != 0 && std::arch::is_aarch64_feature_detected!("dotprod") {
+            // SAFETY: the CPU advertises the integer dot-product instructions.
+            let (mut levels, active) =
+                unsafe { dot_ac_levels(folded, sum, limit, self.quantizer, &residual) };
+            levels[0] = self.quantized_dc(i64::from(sum), residual);
+            return (levels, active);
+        }
+        let mut levels = [0; BLOCK_PIXELS];
+        let mut active = 0;
+        if self.quantizer == 0 && *folded == [[[0; 4]; 4]; 4] {
+            return (levels, active);
+        }
+        visit_ac(
+            folded,
+            sum,
+            limit,
+            self.quantizer,
+            true,
+            &residual,
+            |slot, value, step| {
+                levels[slot] = if self.quantizer == 0 {
+                    value.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+                } else {
+                    quantize_ac(value, step as i32)
+                };
+                active |= u64::from(levels[slot] != 0) * ZIGZAG_BIT[slot];
+            },
+        );
+        levels[0] = self.quantized_dc(i64::from(sum), residual);
+        (levels, active)
+    }
+
+    #[inline(always)]
+    fn quantized_dc(&self, sum: i64, _residual: impl FnOnce() -> [i16; BLOCK_PIXELS]) -> i16 {
+        #[cfg(feature = "streaming-fixed-point-dct")]
+        {
+            let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+            quantize_level(round_q30(sum * basis * basis) as i32, self.dc_step)
+        }
+        #[cfg(not(feature = "streaming-fixed-point-dct"))]
+        {
+            let step = self.dc_step as u64;
+            let biased = (sum.unsigned_abs() + 4) / 8 + step / 2;
+            // For any i16 block, biased * step < 2^32. Rounding the reciprocal
+            // up therefore adds less than 1/step to the exact quotient.
+            let level = (biased * self.dc_reciprocal) >> 32;
+            // At a half-integer DC, the reference can round magnitude down by one.
+            // Only an exact quantizer boundary would then change the level.
+            if sum & 7 == 4 && biased == level * step {
+                let dc = direct_dct_coefficient(&_residual(), &DCT_FACTORS[0], &DCT_FACTORS[0]);
+                return quantize_level(dc, self.dc_step);
+            }
+            let signed = if sum < 0 {
+                -(level as i32)
+            } else {
+                level as i32
+            };
+            signed.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+        }
+    }
+}
+
+/// Prediction uses the pixel being replaced, so reconstruction needs no predictor block.
+fn reconstruct_ac(
+    frame: &mut [u8],
+    stride: usize,
+    start: usize,
+    kind: FrameType,
+    spatial: &[i32; BLOCK_PIXELS],
+) {
+    for (y, values) in spatial.as_chunks::<BLOCK_SIZE>().0.iter().enumerate() {
+        let offset = start + y * stride;
+        for (pixel, &value) in frame[offset..offset + BLOCK_SIZE].iter_mut().zip(values) {
+            let pred = if kind == FrameType::Predicted {
+                *pixel
+            } else {
+                0
+            };
+            *pixel = clamp_pixel(i32::from(pred) + value);
+        }
+    }
+}
+
+fn reconstruct_dc(
+    frame: &mut [u8],
+    dims: FrameDimensions,
+    index: usize,
+    kind: FrameType,
+    offset: i32,
+) {
+    let (x, y) = block_origin(dims, index);
+    let stride = usize::from(dims.width);
+    for dy in 0..BLOCK_SIZE {
+        let start = (y + dy) * stride + x;
+        let row = &mut frame[start..start + BLOCK_SIZE];
+        if kind == FrameType::Intra {
+            row.fill(clamp_pixel(offset));
+        } else {
+            for pixel in row {
+                *pixel = clamp_pixel(i32::from(*pixel) + offset);
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+use self::DCT_FACTORS as FORWARD_BASIS;
+#[cfg(feature = "streaming-fixed-point-dct")]
+use self::DCT_FACTORS_Q15 as FORWARD_BASIS;
+
+#[derive(Clone, Copy)]
+struct DctProjection {
+    slot: usize,
+    weight: u32,
+    factors: [i32; 16],
+    axis: [i32; 4],
+}
+
+/// Within each reflection group, sort the AC projections by quantization weight
+/// so that the first excluded entry also rules out every one that follows.
+static AC_PROJECTIONS: [[DctProjection; 16]; 4] = {
+    let empty = DctProjection {
+        slot: 0,
+        weight: 256,
+        factors: [0; 16],
+        axis: [0; 4],
+    };
+    // The even/even group has only 15 AC slots. Its last weight exceeds every u8 limit.
+    let mut groups = [[empty; 16]; 4];
+    let mut slot = 1;
+    while slot < BLOCK_PIXELS {
+        let (u, v) = (slot / 8, slot % 8);
+        let weight = BASELINE_QUANT_MATRIX[slot] as u32;
+        let group = &mut groups[(u % 2) * 2 + v % 2];
+        let mut index = 0;
+        while group[index].weight <= weight {
+            index += 1;
+        }
+        let mut end = 15;
+        while end > index {
+            group[end] = group[end - 1];
+            end -= 1;
+        }
+        let mut factors = [0; 16];
+        let mut i = 0;
+        while i < 16 {
+            let a = FORWARD_BASIS[u][i / 4];
+            let b = FORWARD_BASIS[v][i % 4];
+            #[cfg(feature = "streaming-fixed-point-dct")]
+            {
+                factors[i] = (a as i32) * (b as i32);
+            }
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            {
+                factors[i] = (a * b * 4_294_967_296.0).round() as i32;
+            }
+            i += 1;
+        }
+        group[index] = DctProjection {
+            slot,
+            weight,
+            axis: if v == 0 {
+                [factors[0], factors[4], factors[8], factors[12]]
+            } else {
+                [factors[0], factors[1], factors[2], factors[3]]
+            },
+            factors,
+        };
+        slot += 1;
+    }
+    groups
+};
+
+/// Four projections per dot-product lane group. Each group of four input
+/// samples multiplies four adjacent weights for each of the four frequencies.
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+static DOT_WEIGHTS: [[[[i8; 16]; 4]; 4]; 4] = {
+    let mut out = [[[[0; 16]; 4]; 4]; 4];
+    let mut g = 0;
+    while g < 4 {
+        let mut i = 0;
+        while i < 16 {
+            let p = AC_PROJECTIONS[g][i];
+            let mut s = 0;
+            while s < 16 {
+                let u = p.slot / 8;
+                let v = p.slot % 8;
+                let w = DCT_FACTORS[u][s / 4] * DCT_FACTORS[v][s % 4];
+                out[g][i / 4][s / 4][4 * (i % 4) + s % 4] = (w * 512.0).round() as i8;
+                s += 1;
+            }
+            i += 1;
+        }
+        g += 1;
     }
     out
+};
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+const BATCH_WEIGHTS: [[[u32; 4]; 4]; 4] = {
+    let mut weights = [[[0; 4]; 4]; 4];
+    let mut g = 0;
+    while g < 4 {
+        let mut i = 0;
+        while i < 16 {
+            weights[g][i / 4][i % 4] = AC_PROJECTIONS[g][i].weight;
+            i += 1;
+        }
+        g += 1;
+    }
+    weights
+};
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+#[target_feature(enable = "dotprod")]
+unsafe fn dot_ac_levels(
+    folded: &FoldedBlock,
+    sum: i32,
+    limit: u8,
+    qp: u8,
+    residual: &impl Fn() -> [i16; BLOCK_PIXELS],
+) -> ([i16; BLOCK_PIXELS], u64) {
+    use std::arch::aarch64::*;
+    let mut levels = [0; BLOCK_PIXELS];
+    let mut active = 0;
+    let scale = u32::from(qp);
+    for (g, samples) in folded.iter().enumerate() {
+        let projections = &AC_PROJECTIONS[g];
+        if projections[0].weight > u32::from(limit) {
+            continue;
+        }
+        let center = if g == 0 { sum / 16 } else { 0 };
+        // SAFETY: each of the four source rows and weight vectors is complete.
+        unsafe {
+            let rows = samples.map(|r| vsubq_s32(vld1q_s32(r.as_ptr()), vdupq_n_s32(center)));
+            let abs = rows.map(|r| vabsq_s32(r));
+            let l1 = vaddvq_s32(vaddq_s32(
+                vaddq_s32(abs[0], abs[1]),
+                vaddq_s32(abs[2], abs[3]),
+            )) as u32;
+            let threshold = (u32::from(limit) * scale).min(2 * (l1.div_ceil(4) + 2));
+            if projections[0].weight * scale > threshold {
+                continue;
+            }
+            let max = vmaxvq_s32(vmaxq_s32(
+                vmaxq_s32(abs[0], abs[1]),
+                vmaxq_s32(abs[2], abs[3]),
+            )) as u32;
+            // Shift by the minimum number of bits that leaves room for a sign.
+            let shift = (32 - max.leading_zeros()).saturating_sub(7);
+            let shrink = vdupq_n_s32(-(shift as i32));
+            let lo = vcombine_s16(
+                vmovn_s32(vshlq_s32(rows[0], shrink)),
+                vmovn_s32(vshlq_s32(rows[1], shrink)),
+            );
+            let hi = vcombine_s16(
+                vmovn_s32(vshlq_s32(rows[2], shrink)),
+                vmovn_s32(vshlq_s32(rows[3], shrink)),
+            );
+            let data = vcombine_s8(vmovn_s16(lo), vmovn_s16(hi));
+            // In Q9 units: rounded weights cost <= L1/2. Truncating each
+            // input costs at most 2^shift-1 samples at |weight| <= 128.
+            let error = l1.div_ceil(2) + 16 * 128 * ((1 << shift) - 1) + 1;
+            for (batch, weights) in DOT_WEIGHTS[g].iter().enumerate() {
+                let first = 4 * batch;
+                if projections[first].weight * scale > threshold {
+                    break;
+                }
+                let mut dots =
+                    vdotq_laneq_s32::<0>(vdupq_n_s32(0), vld1q_s8(weights[0].as_ptr()), data);
+                dots = vdotq_laneq_s32::<1>(dots, vld1q_s8(weights[1].as_ptr()), data);
+                dots = vdotq_laneq_s32::<2>(dots, vld1q_s8(weights[2].as_ptr()), data);
+                dots = vdotq_laneq_s32::<3>(dots, vld1q_s8(weights[3].as_ptr()), data);
+                // Compare four certified intervals to their quantizer cells
+                // before scattering only the lanes with a possible nonzero.
+                let weight = vld1q_u32(BATCH_WEIGHTS[g][batch].as_ptr());
+                let stepv = vmulq_n_u32(weight, scale);
+                let magnitude = vshlq_u32(
+                    vreinterpretq_u32_s32(vabsq_s32(dots)),
+                    vdupq_n_s32(shift as i32),
+                );
+                let high = vaddq_u32(magnitude, vdupq_n_u32(error));
+                let half = vshrq_n_u32::<1>(stepv);
+                let zero = vaddq_u32(vshlq_n_u32::<9>(half), vdupq_n_u32(256));
+                let possible = vandq_u32(
+                    vcleq_u32(stepv, vdupq_n_u32(threshold)),
+                    vcgeq_u32(high, zero),
+                );
+                if vmaxvq_u32(possible) == 0 {
+                    continue;
+                }
+                let unit_end = vsubq_u32(
+                    vshlq_n_u32::<9>(vsubq_u32(vaddq_u32(stepv, stepv), half)),
+                    vdupq_n_u32(256),
+                );
+                let unit = vandq_u32(
+                    vcgtq_u32(magnitude, vaddq_u32(zero, vdupq_n_u32(error))),
+                    vcltq_u32(high, unit_end),
+                );
+                let mut flags = [0; 4];
+                let mut signs = [0; 4];
+                vst1q_u32(
+                    flags.as_mut_ptr(),
+                    vandq_u32(possible, vorrq_u32(unit, vdupq_n_u32(1))),
+                );
+                vst1q_s32(signs.as_mut_ptr(), dots);
+                for (i, flag) in flags.into_iter().enumerate() {
+                    if flag == 0 {
+                        continue;
+                    }
+                    let p = &projections[first + i];
+                    let step = p.weight * scale;
+                    let level = if flag == u32::MAX {
+                        if signs[i] < 0 { -1 } else { 1 }
+                    } else {
+                        let wide = folded_dot(samples, &p.factors);
+                        let q = if (wide as u32).abs_diff(1 << 31) <= (1 << 20) + 128 {
+                            direct_dct_coefficient(
+                                &residual(),
+                                &FORWARD_BASIS[p.slot / 8],
+                                &FORWARD_BASIS[p.slot % 8],
+                            )
+                        } else {
+                            ((wide + (1 << 31)) >> 32) as i32
+                        };
+                        quantize_ac(q, step as i32)
+                    };
+                    levels[p.slot] = level;
+                    active |= u64::from(level != 0) * ZIGZAG_BIT[p.slot];
+                }
+            }
+        }
+    }
+    (levels, active)
 }
+
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+const NARROW_LIMIT: u8 = 29;
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+#[derive(Clone, Copy)]
+struct NarrowKernel {
+    slot: usize,
+    weight: u8,
+    l1: u32,
+    rows: [[i8; 16]; 4],
+}
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+const NARROW_COUNT: usize = {
+    let mut n = 0;
+    let mut i = 1;
+    while i < 64 {
+        if BASELINE_QUANT_MATRIX[i] <= NARROW_LIMIT {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+};
+#[cfg(all(
+    feature = "simd-accel",
+    target_arch = "aarch64",
+    not(feature = "streaming-fixed-point-dct")
+))]
+static NARROW_KERNELS: [NarrowKernel; NARROW_COUNT] = {
+    let mut ks = [NarrowKernel {
+        slot: 0,
+        weight: 0,
+        l1: 0,
+        rows: [[0; 16]; 4],
+    }; NARROW_COUNT];
+    let mut k = 0;
+    let mut w = MIN_AC_WEIGHT;
+    while w <= NARROW_LIMIT {
+        let mut slot = 1;
+        while slot < 64 {
+            if BASELINE_QUANT_MATRIX[slot] == w {
+                let mut sum = 0;
+                let mut i = 0;
+                while i < 64 {
+                    let x = (512.0 * DCT_FACTORS[slot / 8][i / 8] * DCT_FACTORS[slot % 8][i % 8])
+                        .round() as i8;
+                    ks[k].rows[i / 16][i % 16] = x;
+                    ks[k].l1 += x.unsigned_abs() as u32;
+                    sum += x as i32;
+                    i += 1;
+                }
+                assert!(sum == 0);
+                ks[k].slot = slot;
+                ks[k].weight = w;
+                k += 1;
+            }
+            slot += 1;
+        }
+        w += 1;
+    }
+    ks
+};
+
+type FoldedBlock = [[[i32; 4]; 4]; 4];
+
+#[cfg(any(test, not(all(feature = "simd-accel", target_arch = "aarch64"))))]
+fn fold_scalar(row: impl Fn(usize) -> [i16; BLOCK_SIZE]) -> FoldedBlock {
+    const HALF: usize = BLOCK_SIZE / 2;
+    let mut folded = [[[0_i32; HALF]; HALF]; 4];
+    for y in 0..HALF {
+        let upper = row(y);
+        let lower = row(BLOCK_SIZE - 1 - y);
+        for x in 0..HALF {
+            let mirror = BLOCK_SIZE - 1 - x;
+            let a = i32::from(upper[x]);
+            let b = i32::from(upper[mirror]);
+            let c = i32::from(lower[x]);
+            let d = i32::from(lower[mirror]);
+            let (top_sum, bottom_sum) = (a + b, c + d);
+            let (top_diff, bottom_diff) = (a - b, c - d);
+            folded[0][y][x] = top_sum + bottom_sum;
+            folded[1][y][x] = top_diff + bottom_diff;
+            folded[2][y][x] = top_sum - bottom_sum;
+            folded[3][y][x] = top_diff - bottom_diff;
+        }
+    }
+    folded
+}
+
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+fn fold_rows(row: impl Fn(usize) -> [i16; BLOCK_SIZE]) -> FoldedBlock {
+    use std::arch::aarch64::*;
+    fold_vectors(|y| unsafe { vld1q_s16(row(y).as_ptr()) })
+}
+
+#[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+#[inline(always)]
+fn fold_vectors(row: impl Fn(usize) -> std::arch::aarch64::int16x8_t) -> FoldedBlock {
+    use std::arch::aarch64::*;
+    let mut folded = [[[0; 4]; 4]; 4];
+    // SAFETY: AArch64 has baseline NEON. Each load covers a full eight-sample
+    // row, and each store writes one complete four-lane row of a parity group.
+    unsafe {
+        for y in 0..4 {
+            let upper = row(y);
+            let lower = row(7 - y);
+            let (a, b) = (vget_low_s16(upper), vrev64_s16(vget_high_s16(upper)));
+            let (c, d) = (vget_low_s16(lower), vrev64_s16(vget_high_s16(lower)));
+            let (upper_sum, lower_sum) = (vaddl_s16(a, b), vaddl_s16(c, d));
+            let (upper_diff, lower_diff) = (vsubl_s16(a, b), vsubl_s16(c, d));
+            vst1q_s32(folded[0][y].as_mut_ptr(), vaddq_s32(upper_sum, lower_sum));
+            vst1q_s32(folded[1][y].as_mut_ptr(), vaddq_s32(upper_diff, lower_diff));
+            vst1q_s32(folded[2][y].as_mut_ptr(), vsubq_s32(upper_sum, lower_sum));
+            vst1q_s32(folded[3][y].as_mut_ptr(), vsubq_s32(upper_diff, lower_diff));
+        }
+    }
+    folded
+}
+
+#[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+fn fold_rows(row: impl Fn(usize) -> [i16; BLOCK_SIZE]) -> FoldedBlock {
+    fold_scalar(row)
+}
+
+fn folded_sum(folded: &FoldedBlock) -> i32 {
+    folded[0].as_flattened().iter().sum()
+}
+
+/// Visit the retained AC coefficients of a folded block.
+fn visit_ac(
+    folded: &FoldedBlock,
+    sum: i32,
+    limit: u8,
+    quantizer: u8,
+    levels_only: bool,
+    _residual: impl Fn() -> [i16; BLOCK_PIXELS],
+    mut visit: impl FnMut(usize, i32, u32),
+) {
+    #[inline(always)]
+    fn group<const G: usize>(
+        folded: &FoldedBlock,
+        sum: i32,
+        limit: u8,
+        quantizer: u8,
+        _levels_only: bool,
+        _residual: &impl Fn() -> [i16; BLOCK_PIXELS],
+        visit: &mut impl FnMut(usize, i32, u32),
+    ) {
+        let scale = u32::from(quantizer.max(1));
+        let block_threshold = u32::from(limit) * scale;
+        let samples = &folded[G];
+        let projections = &AC_PROJECTIONS[G];
+        if projections[0].weight > u32::from(limit) {
+            return;
+        }
+        let mut threshold = block_threshold;
+        if quantizer != 0 {
+            let center = if G == 0 { sum / 16 } else { 0 };
+            let l1 = folded_l1(samples, center);
+            threshold = threshold.min(2 * (l1.div_ceil(4) + 2));
+        }
+        // Constant horizontal/vertical basis rows factor out of the dot
+        // product. Each collapsed axis needs four products instead of sixteen.
+        let horizontal: [i32; 4] = std::array::from_fn(|x| samples.iter().map(|row| row[x]).sum());
+        let vertical = samples.map(|row| row.iter().sum::<i32>());
+        for projection in projections {
+            let step = scale * projection.weight;
+            if step > threshold {
+                break;
+            }
+            let slot = projection.slot;
+            let value = if G < 2 && slot < BLOCK_SIZE {
+                dot_axis(&horizontal, &projection.axis)
+            } else if G % 2 == 0 && slot % BLOCK_SIZE == 0 {
+                dot_axis(&vertical, &projection.axis)
+            } else {
+                folded_dot(samples, &projection.factors)
+            };
+            #[cfg(feature = "streaming-fixed-point-dct")]
+            let coefficient = round_q30(value) as i32;
+            #[cfg(not(feature = "streaming-fixed-point-dct"))]
+            let coefficient = {
+                // Quantizing the weights costs at most half a Q32 unit per
+                // absolute folded sample. The extra 128 cover table asymmetry
+                // and binary64 summation for the full i16 input range.
+                let floor = (value >> 32) as i32;
+                if (value as u32).abs_diff(1 << 31) <= (1 << 20) + 128
+                    && !(_levels_only
+                        && quantizer != 0
+                        && quantize_ac(floor, step as i32) == quantize_ac(floor + 1, step as i32))
+                {
+                    direct_dct_coefficient(
+                        &_residual(),
+                        &FORWARD_BASIS[slot / 8],
+                        &FORWARD_BASIS[slot % 8],
+                    )
+                } else {
+                    ((value + (1 << 31)) >> 32) as i32
+                }
+            };
+            visit(slot, coefficient, step);
+        }
+    }
+    group::<0>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+    group::<1>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+    group::<2>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+    group::<3>(
+        folded,
+        sum,
+        limit,
+        quantizer,
+        levels_only,
+        &_residual,
+        &mut visit,
+    );
+}
+
+#[inline(always)]
+fn dot_axis(samples: &[i32; 4], weights: &[i32; 4]) -> i64 {
+    samples
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| i64::from(x) * i64::from(w))
+        .sum()
+}
+
+fn folded_l1(samples: &[[i32; 4]; 4], center: i32) -> u32 {
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    {
+        use std::arch::aarch64::*;
+        // SAFETY: all four elements of each row are initialized and in bounds.
+        unsafe {
+            let center = vdupq_n_s32(center);
+            let mut total = vdupq_n_s32(0);
+            for row in samples {
+                total = vabaq_s32(total, vld1q_s32(row.as_ptr()), center);
+            }
+            vaddvq_s32(total) as u32
+        }
+    }
+    #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+    {
+        samples
+            .as_flattened()
+            .iter()
+            .map(|&v| v.abs_diff(center))
+            .sum()
+    }
+}
+
+/// The product sum fits in i64 for all i16 blocks, so partial sums can be
+/// combined in any order. Widen before multiplication on every target.
+fn folded_dot(samples: &[[i32; 4]; 4], weights: &[i32; 16]) -> i64 {
+    #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+    {
+        use std::arch::aarch64::*;
+        // SAFETY: each row and its corresponding four weights are in bounds.
+        unsafe {
+            let mut low = vdupq_n_s64(0);
+            let mut high = vdupq_n_s64(0);
+            for (row, factors) in samples.iter().zip(weights.as_chunks::<4>().0) {
+                let x = vld1q_s32(row.as_ptr());
+                let w = vld1q_s32(factors.as_ptr());
+                low = vmlal_s32(low, vget_low_s32(x), vget_low_s32(w));
+                high = vmlal_high_s32(high, x, w);
+            }
+            vaddvq_s64(vaddq_s64(low, high))
+        }
+    }
+    #[cfg(not(all(feature = "simd-accel", target_arch = "aarch64")))]
+    {
+        samples
+            .as_flattened()
+            .iter()
+            .zip(weights)
+            .map(|(&x, &w)| i64::from(x) * i64::from(w))
+            .sum()
+    }
+}
+
+/// Preserve the reference multiplication and summation order at rounding boundaries.
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+fn direct_dct_coefficient(
+    block: &[i16; BLOCK_PIXELS],
+    basis_u: &[f64; BLOCK_SIZE],
+    basis_v: &[f64; BLOCK_SIZE],
+) -> i32 {
+    let mut sum = 0.0;
+    for (&factor_u, samples) in basis_u.iter().zip(block.chunks_exact(BLOCK_SIZE)) {
+        for (&sample, &factor_v) in samples.iter().zip(basis_v) {
+            sum += f64::from(sample) * factor_u * factor_v;
+        }
+    }
+    sum.round() as i32
+}
+
+fn inverse_dc_sample(dc: i32) -> i32 {
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    {
+        let basis = i64::from(DCT_FACTORS_Q15[0][0]);
+        round_q30(i64::from(dc) * basis * basis).clamp(-32768, 32767) as i32
+    }
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
+    {
+        let basis = DCT_FACTORS[0][0];
+        (f64::from(dc) * basis * basis)
+            .round()
+            .clamp(-32768.0, 32767.0) as i32
+    }
+}
+
+pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+    if coeffs[1..].iter().all(|&ac| ac == 0) {
+        return [inverse_dc_sample(coeffs[0]); BLOCK_PIXELS];
+    }
+    inverse_dct_full(coeffs)
+}
+
+#[cfg(feature = "streaming-fixed-point-dct")]
+fn inverse_dct_full(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+    let mut sums = [0_i64; BLOCK_PIXELS];
+    for (u, row) in coeffs.chunks_exact(BLOCK_SIZE).enumerate() {
+        for (v, &coeff) in row.iter().enumerate() {
+            if coeff != 0 {
+                for (samples, &factor_u) in
+                    sums.chunks_exact_mut(BLOCK_SIZE).zip(&DCT_FACTORS_Q15[u])
+                {
+                    // An i32 coefficient times two Q15 factors fits in i64.
+                    let scaled = i64::from(coeff) * i64::from(factor_u);
+                    for (sum, &factor_v) in samples.iter_mut().zip(&DCT_FACTORS_Q15[v]) {
+                        *sum = sum.saturating_add(scaled * i64::from(factor_v));
+                    }
+                }
+            }
+        }
+    }
+    std::array::from_fn(|i| round_q30(sums[i]).clamp(-32768, 32767) as i32)
+}
+#[cfg(not(feature = "streaming-fixed-point-dct"))]
+fn inverse_dct_full(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+    // Each coefficient contributes one scaled outer product. Visit only active
+    // coefficients, in the original raster order for every output sample.
+    let mut sums = [0.0; BLOCK_PIXELS];
+    for (u, row) in coeffs.chunks_exact(BLOCK_SIZE).enumerate() {
+        for (v, &coeff) in row.iter().enumerate() {
+            if coeff != 0 {
+                for (samples, &factor_u) in sums.chunks_exact_mut(BLOCK_SIZE).zip(&DCT_FACTORS[u]) {
+                    let scaled = f64::from(coeff) * factor_u;
+                    for (sum, &factor_v) in samples.iter_mut().zip(&DCT_FACTORS[v]) {
+                        *sum += scaled * factor_v;
+                    }
+                }
+            }
+        }
+    }
+    std::array::from_fn(|i| sums[i].round().clamp(-32768.0, 32767.0) as i32)
+}
+fn quantization_step(slot: usize, quantizer: u8) -> i32 {
+    if quantizer == 0 {
+        1
+    } else {
+        i32::from(BASELINE_QUANT_MATRIX[slot]) * i32::from(quantizer)
+    }
+}
+fn quantize_level(coeff: i32, step: i32) -> i16 {
+    let adjusted = if coeff >= 0 {
+        coeff.saturating_add(step / 2)
+    } else {
+        coeff.saturating_sub(step / 2)
+    };
+    (adjusted / step).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+}
+
+pub(crate) fn quantize_coeffs(coeffs: &[i32; BLOCK_PIXELS], quantizer: u8) -> [i16; BLOCK_PIXELS] {
+    std::array::from_fn(|slot| quantized_coefficient(slot, coeffs[slot], quantizer))
+}
+
+fn quantized_coefficient(slot: usize, coeff: i32, quantizer: u8) -> i16 {
+    if quantizer == 0 {
+        return coeff.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+    }
+    let step = quantization_step(slot, quantizer);
+    if slot == 0 {
+        quantize_level(coeff, step)
+    } else {
+        quantize_ac(coeff, step)
+    }
+}
+
+fn quantize_ac(coeff: i32, step: i32) -> i16 {
+    let magnitude = coeff.unsigned_abs();
+    // The midpoint at zero saves a token. Most surviving AC levels have magnitude one.
+    if magnitude <= (step / 2) as u32 {
+        0
+    } else if magnitude < (2 * step - step / 2) as u32 {
+        if coeff < 0 { -1 } else { 1 }
+    } else {
+        quantize_level(coeff, step)
+    }
+}
+
 pub(crate) fn dequantize_coeffs(
     coeffs: &[i16; BLOCK_PIXELS],
     quantizer: u8,
@@ -2168,9 +3610,8 @@ pub(crate) fn dequantize_coeffs(
         }
         return out;
     }
-    let scale = qp_scale(quantizer);
     for (idx, coeff) in coeffs.iter().enumerate() {
-        let step = (i32::from(BASELINE_QUANT_MATRIX[idx]).max(1)) * scale;
+        let step = quantization_step(idx, quantizer);
         out[idx] = i32::from(*coeff) * step;
     }
     out
@@ -2179,9 +3620,19 @@ pub(crate) trait BundledHooks {
     fn record_dc(&mut self, _diff: i16) {}
     fn record_ac(&mut self, _zeros: u8, _value: i16) {}
     fn record_eob(&mut self) {}
+    fn record_zero_run(&mut self, _blocks: std::ops::Range<usize>, _first_diff: i16) {}
+    fn record_dc_only(
+        &mut self,
+        _levels: &[i16; BLOCK_PIXELS],
+        _diff: i16,
+        _index: usize,
+        _kind: FrameType,
+    ) {
+    }
     fn record_block_coeffs(
         &mut self,
         _coeffs: &[i16; BLOCK_PIXELS],
+        _active: u64,
         _block_index: usize,
         _frame_type: FrameType,
     ) {
@@ -2216,16 +3667,16 @@ pub struct BundledStats {
     pub flush_end_of_block: u64,
 }
 impl BundledStats {
-    fn record_flush(&mut self, reason: BundleFlushReason) {
+    fn record_flush(&mut self, reason: BundleFlushReason, count: u64) {
         match reason {
             BundleFlushReason::TypeComplete => {
-                self.flush_type_complete = self.flush_type_complete.saturating_add(1);
+                self.flush_type_complete = self.flush_type_complete.saturating_add(count);
             }
             BundleFlushReason::ContextSwitch => {
-                self.flush_context_switch = self.flush_context_switch.saturating_add(1);
+                self.flush_context_switch = self.flush_context_switch.saturating_add(count);
             }
             BundleFlushReason::EndOfBlock => {
-                self.flush_end_of_block = self.flush_end_of_block.saturating_add(1);
+                self.flush_end_of_block = self.flush_end_of_block.saturating_add(count);
             }
         }
     }
@@ -2241,8 +3692,11 @@ pub struct RdoTelemetry {
     pub lambda_bits: f32,
     pub blocks_optimized: u64,
     pub energy_histogram: [u64; RDO_BUCKET_COUNT],
+    /// Luma block payload bits before AC selection, including DC and end markers.
     pub before_rate_bits: u64,
+    /// Luma RLE bits after AC selection, before frame compression and excluding chroma.
     pub after_rate_bits: u64,
+    /// Sum of squared discarded quantized levels.
     pub distortion_penalty: u64,
     pub neural_class_histogram: Vec<u64>,
 }
@@ -2463,107 +3917,145 @@ impl BundleContextStats {
             flush_end_of_block: 0,
         }
     }
-    fn record_bundle(&mut self, bundle_type: BundleType, flush: BundleFlushReason) {
-        self.bundles_total = self.bundles_total.saturating_add(1);
+    fn record_bundle(&mut self, bundle_type: BundleType, flush: BundleFlushReason, count: u64) {
+        self.bundles_total = self.bundles_total.saturating_add(count);
         match bundle_type {
             BundleType::SignificanceOnly => {
-                self.type_significance_only = self.type_significance_only.saturating_add(1);
+                self.type_significance_only = self.type_significance_only.saturating_add(count);
             }
             BundleType::SignAndMagnitude => {
-                self.type_sign_and_magnitude = self.type_sign_and_magnitude.saturating_add(1);
+                self.type_sign_and_magnitude = self.type_sign_and_magnitude.saturating_add(count);
             }
             BundleType::SignParity => {
-                self.type_sign_parity = self.type_sign_parity.saturating_add(1);
+                self.type_sign_parity = self.type_sign_parity.saturating_add(count);
             }
             BundleType::SignParityLevel => {
-                self.type_sign_parity_level = self.type_sign_parity_level.saturating_add(1);
+                self.type_sign_parity_level = self.type_sign_parity_level.saturating_add(count);
             }
             BundleType::SignificanceRle => {
-                self.type_significance_rle = self.type_significance_rle.saturating_add(1);
+                self.type_significance_rle = self.type_significance_rle.saturating_add(count);
             }
         }
-        self.record_flush(flush);
+        self.record_flush(flush, count);
     }
-    fn record_flush(&mut self, flush: BundleFlushReason) {
+    fn record_flush(&mut self, flush: BundleFlushReason, count: u64) {
         match flush {
             BundleFlushReason::TypeComplete => {
-                self.flush_type_complete = self.flush_type_complete.saturating_add(1);
+                self.flush_type_complete = self.flush_type_complete.saturating_add(count);
             }
             BundleFlushReason::ContextSwitch => {
-                self.flush_context_switch = self.flush_context_switch.saturating_add(1);
+                self.flush_context_switch = self.flush_context_switch.saturating_add(count);
             }
             BundleFlushReason::EndOfBlock => {
-                self.flush_end_of_block = self.flush_end_of_block.saturating_add(1);
+                self.flush_end_of_block = self.flush_end_of_block.saturating_add(count);
             }
         }
     }
 }
-#[derive(Clone, Copy)]
-struct DpReport {
-    energy: u32,
-    before_bits: u64,
-    after_bits: u64,
-    distortion_penalty: u64,
-    neural_class: Option<usize>,
+struct BlockRdo<'a> {
+    quantizer: u8,
+    bundle_width: u8,
+    predictor: Option<&'a NeuralPredictor>,
+    lambda_hundredths: u32,
+    telemetry: RdoTelemetry,
 }
-struct RdoTelemetryBuilder {
-    mode: RdoMode,
-    lambda_bits: f32,
-    energy_histogram: [u64; RDO_BUCKET_COUNT],
-    before_bits: u64,
-    after_bits: u64,
-    distortion_penalty: u64,
-    neural_histogram: Vec<u64>,
-    blocks: u64,
-}
-impl RdoTelemetryBuilder {
-    fn new(mode: RdoMode, lambda_bits: f32, neural_classes: usize) -> Option<Self> {
+impl<'a> BlockRdo<'a> {
+    fn new(
+        mode: RdoMode,
+        quantizer: u8,
+        bundle_width: u8,
+        predictor: Option<&'a NeuralPredictor>,
+    ) -> Option<Self> {
         if !mode.is_enabled() {
             return None;
         }
-        let mut neural_histogram = Vec::new();
-        if matches!(mode, RdoMode::Neural) && neural_classes > 0 {
-            neural_histogram.resize(neural_classes, 0);
-        }
-        Some(Self {
+        let lambda_hundredths = rdo_lambda_hundredths(mode, quantizer);
+        let telemetry = RdoTelemetry {
             mode,
-            lambda_bits,
-            energy_histogram: [0; RDO_BUCKET_COUNT],
-            before_bits: 0,
-            after_bits: 0,
-            distortion_penalty: 0,
-            neural_histogram,
-            blocks: 0,
+            lambda_bits: lambda_hundredths as f32 / 100.0,
+            neural_class_histogram: if predictor.is_some() {
+                vec![0; NEURAL_OUTPUT]
+            } else {
+                Vec::new()
+            },
+            ..Default::default()
+        };
+        Some(Self {
+            quantizer,
+            bundle_width,
+            predictor,
+            lambda_hundredths,
+            telemetry,
         })
     }
-    fn record(&mut self, report: &DpReport) {
-        let bucket = energy_bucket(report.energy);
-        if let Some(slot) = self.energy_histogram.get_mut(bucket) {
-            *slot = slot.saturating_add(1);
+    fn select_levels(
+        &mut self,
+        transform: &[i32; BLOCK_PIXELS],
+        levels: &mut [i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        block_index: usize,
+    ) {
+        let report = &mut self.telemetry;
+        let energy = block_energy(levels);
+        let bucket = energy_bucket(energy);
+        report.energy_histogram[bucket] = report.energy_histogram[bucket].saturating_add(1);
+        let class_scale = if let Some(net) = self.predictor {
+            let features = build_neural_features(
+                levels,
+                energy,
+                self.bundle_width,
+                self.quantizer,
+                frame_type,
+                block_index,
+            );
+            let class = net.predict(&features);
+            report.neural_class_histogram[class] =
+                report.neural_class_histogram[class].saturating_add(1);
+            [85, 100, 112, 128][class]
+        } else {
+            100
+        };
+        // The existing lambda schedule budgets one 24-bit token for each level
+        // whose squared magnitude warrants its rate. Price it in 1/10,000 units.
+        let token_cost = RLE_TOKEN_BITS * u64::from(self.lambda_hundredths * class_scale);
+        let mut candidates = [(0_i64, 0_usize); BLOCK_PIXELS - 1];
+        let mut count = 0;
+        let mut budget = 0;
+        for (slot, &level) in levels.iter().enumerate().skip(1) {
+            if level == 0 {
+                continue;
+            }
+            let magnitude = u64::from(level.unsigned_abs());
+            budget += usize::from(magnitude * magnitude * 10_000 > token_cost);
+            let reconstructed =
+                i64::from(level) * i64::from(quantization_step(slot, self.quantizer));
+            // c² - (c - reconstructed)² is the transform SSE saved by this token.
+            let gain = reconstructed * (2 * i64::from(transform[slot]) - reconstructed);
+            candidates[count] = (gain, slot);
+            count += 1;
         }
-        self.before_bits = self.before_bits.saturating_add(report.before_bits);
-        self.after_bits = self.after_bits.saturating_add(report.after_bits);
-        self.distortion_penalty = self
-            .distortion_penalty
-            .saturating_add(report.distortion_penalty);
-        if let Some(class) = report.neural_class
-            && let Some(slot) = self.neural_histogram.get_mut(class)
-        {
-            *slot = slot.saturating_add(1);
+
+        // All tokens cost the same. The largest gains minimize SSE at the given
+        // budget. Break equal gains by raster slot for reproducible selection.
+        if budget < count {
+            let candidates = &mut candidates[..count];
+            if budget != 0 {
+                candidates
+                    .select_nth_unstable_by(budget, |&(a, i), &(b, j)| b.cmp(&a).then(i.cmp(&j)));
+            }
+            for &(_, slot) in &candidates[budget..] {
+                let level = i64::from(levels[slot]);
+                report.distortion_penalty = report
+                    .distortion_penalty
+                    .saturating_add(level.pow(2) as u64);
+                levels[slot] = 0;
+            }
         }
-        self.blocks = self.blocks.saturating_add(1);
-    }
-    fn finish(self) -> Option<RdoTelemetry> {
-        Some(RdoTelemetry {
-            mode: self.mode,
-            lambda_bits: self.lambda_bits,
-            blocks_optimized: self.blocks,
-            energy_histogram: self.energy_histogram,
-            before_rate_bits: self.before_bits,
-            after_rate_bits: self.after_bits,
-            distortion_penalty: self.distortion_penalty,
-            neural_class_histogram: self.neural_histogram,
-        })
+        // The DC delta and end-of-block record are present even on a dense block.
+        let block_bits = |ac_count: usize| 16 + RLE_TOKEN_BITS * (1 + ac_count as u64);
+        report.before_rate_bits = report.before_rate_bits.saturating_add(block_bits(count));
+        report.after_rate_bits = report.after_rate_bits.saturating_add(block_bits(budget));
+        report.blocks_optimized = report.blocks_optimized.saturating_add(1);
     }
 }
 const fn energy_bucket(energy: u32) -> usize {
@@ -2576,28 +4068,11 @@ const fn energy_bucket(energy: u32) -> usize {
     }
     RDO_BUCKET_COUNT - 1
 }
-fn rdo_lambda_for_mode(mode: RdoMode, quantizer: u8) -> f32 {
+fn rdo_lambda_hundredths(mode: RdoMode, quantizer: u8) -> u32 {
+    let bucket = usize::from(quantizer_to_bucket(quantizer));
     match mode {
-        RdoMode::Perceptual => rdo_lambda_perceptual(quantizer),
-        _ => rdo_lambda_for_quantizer(quantizer),
-    }
-}
-fn rdo_lambda_for_quantizer(quantizer: u8) -> f32 {
-    match quantizer_to_bucket(quantizer) {
-        0 => 0.45,
-        1 => 0.75,
-        2 => 1.1,
-        _ => 1.35,
-    }
-}
-fn rdo_lambda_perceptual(quantizer: u8) -> f32 {
-    // Slightly soften lambda at mid/high Q to favour structure (SSIM proxy) while
-    // keeping low-Q output close to the rate-focused schedule.
-    match quantizer_to_bucket(quantizer) {
-        0 => 0.42,
-        1 => 0.65,
-        2 => 0.95,
-        _ => 1.15,
+        RdoMode::Perceptual => [42, 65, 95, 115][bucket],
+        _ => [45, 75, 110, 135][bucket],
     }
 }
 fn block_energy(coeffs: &[i16; BLOCK_PIXELS]) -> u32 {
@@ -2621,136 +4096,6 @@ fn max_zero_run_in_block(coeffs: &[i16; BLOCK_PIXELS]) -> u8 {
         }
     }
     max_run
-}
-fn estimate_rle_bits(coeffs: &[i16; BLOCK_PIXELS]) -> u64 {
-    let mut pos = 1usize;
-    let mut bits = 0u64;
-    while pos < BLOCK_PIXELS {
-        let mut zero_run = 0usize;
-        while pos < BLOCK_PIXELS && coeffs[ZIG_ZAG[pos]] == 0 {
-            zero_run = zero_run.saturating_add(1);
-            pos = pos.saturating_add(1);
-        }
-        if pos == BLOCK_PIXELS {
-            bits = bits.saturating_add(RLE_TOKEN_BITS);
-            break;
-        }
-        while zero_run > MAX_ZERO_RUN {
-            bits = bits.saturating_add(RLE_TOKEN_BITS);
-            zero_run = zero_run.saturating_sub(MAX_ZERO_RUN);
-        }
-        bits = bits.saturating_add(RLE_TOKEN_BITS);
-        pos = pos.saturating_add(1);
-    }
-    bits
-}
-fn token_rate_bits(zero_run: usize) -> f32 {
-    let mut tokens = 1u32;
-    let mut run = zero_run;
-    while run > MAX_ZERO_RUN {
-        tokens = tokens.saturating_add(1);
-        run = run.saturating_sub(MAX_ZERO_RUN);
-    }
-    tokens as f32 * RLE_TOKEN_BITS_F
-}
-#[allow(clippy::too_many_arguments)]
-fn optimize_block_dp(
-    coeffs: &mut [i16; BLOCK_PIXELS],
-    mode: RdoMode,
-    lambda_bits: f32,
-    predictor: Option<&NeuralPredictor>,
-    bundle_width: u8,
-    quantizer: u8,
-    frame_type: FrameType,
-    block_index: usize,
-) -> DpReport {
-    let original = *coeffs;
-    let energy = block_energy(&original);
-    if !mode.is_enabled() {
-        return DpReport {
-            energy,
-            before_bits: estimate_rle_bits(&original),
-            after_bits: estimate_rle_bits(coeffs),
-            distortion_penalty: 0,
-            neural_class: None,
-        };
-    }
-    let mut lambda = lambda_bits;
-    let mut neural_class = None;
-    if matches!(mode, RdoMode::Neural)
-        && let Some(net) = predictor
-    {
-        let features = build_neural_features(
-            &original,
-            energy,
-            bundle_width,
-            quantizer,
-            frame_type,
-            block_index,
-        );
-        let class_idx = net.predict(&features);
-        neural_class = Some(class_idx);
-        lambda *= match class_idx {
-            0 => 0.85,
-            1 => 1.0,
-            2 => 1.12,
-            _ => 1.28,
-        };
-    }
-    let ac_len = BLOCK_PIXELS - 1;
-    let mut best = vec![vec![f32::INFINITY; ac_len + 1]; ac_len + 1];
-    let mut keep = vec![vec![false; ac_len + 1]; ac_len];
-    for slot in best[ac_len].iter_mut().take(ac_len + 1) {
-        *slot = RLE_EOB_BITS_F;
-    }
-    for idx in (0..ac_len).rev() {
-        let coeff = original[ZIG_ZAG[idx + 1]];
-        let distortion_zero = f32::from(coeff) * f32::from(coeff);
-        for run in 0..=ac_len {
-            let next_run = (run + 1).min(ac_len);
-            let zero_cost = distortion_zero + best[idx + 1][next_run];
-            let keep_cost = if coeff == 0 {
-                f32::INFINITY
-            } else {
-                lambda * token_rate_bits(run) + best[idx + 1][0]
-            };
-            if keep_cost < zero_cost {
-                keep[idx][run] = true;
-                best[idx][run] = keep_cost;
-            } else {
-                best[idx][run] = zero_cost;
-            }
-        }
-    }
-    let mut run = 0usize;
-    for idx in 0..ac_len {
-        let slot = ZIG_ZAG[idx + 1];
-        if keep[idx][run] {
-            run = 0;
-        } else {
-            coeffs[slot] = 0;
-            run = (run + 1).min(ac_len);
-        }
-    }
-    coeffs[0] = original[0];
-    let before_bits = estimate_rle_bits(&original);
-    let after_bits = estimate_rle_bits(coeffs);
-    let distortion_penalty: u64 = original
-        .iter()
-        .zip(coeffs.iter())
-        .skip(1)
-        .map(|(&before, &after)| {
-            let diff = i64::from(before) - i64::from(after);
-            diff.saturating_mul(diff) as u64
-        })
-        .sum();
-    DpReport {
-        energy,
-        before_bits,
-        after_bits,
-        distortion_penalty,
-        neural_class,
-    }
 }
 struct TinyPrng(u64);
 impl TinyPrng {
@@ -2876,34 +4221,35 @@ fn build_neural_features(
 mod rdo_tests {
     use super::*;
     #[test]
-    fn dp_optimizer_reduces_rate_on_sparse_block() {
-        let mut coeffs = [0i16; BLOCK_PIXELS];
-        coeffs[0] = 10;
-        coeffs[1] = 2;
-        coeffs[5] = -1;
-        coeffs[12] = 1;
-        let before_bits = estimate_rle_bits(&coeffs);
-        let mut working = coeffs;
-        let report = optimize_block_dp(
-            &mut working,
-            RdoMode::DynamicProgramming,
-            1.5,
-            None,
-            3,
-            10,
-            FrameType::Intra,
+    fn token_budget_spends_the_only_token_on_the_larger_reconstruction_gain() {
+        // Quantizer 1 gives steps 11 and 99. Magnitude alone would retain
+        // level 4, although the negative level 2 saves much more squared error.
+        let mut transform = [0; BLOCK_PIXELS];
+        transform[0] = 160;
+        transform[1] = 44;
+        transform[63] = -198;
+        let mut levels = quantize_coeffs(&transform, 1);
+        let mut optimizer = BlockRdo::new(RdoMode::DynamicProgramming, 1, 2, None).unwrap();
+        optimizer.select_levels(&transform, &mut levels, FrameType::Intra, 0);
+        assert_eq!((levels[0], levels[1], levels[63]), (10, 0, -2));
+        assert_eq!(
+            (
+                optimizer.telemetry.before_rate_bits,
+                optimizer.telemetry.after_rate_bits
+            ),
+            (88, 64)
+        );
+        assert_eq!(optimizer.telemetry.distortion_penalty, 16);
+        let mut block = Vec::new();
+        encode_block_rle(
+            &levels,
+            &mut 0,
+            &mut block,
+            &mut NoopBundledHooks,
             0,
+            FrameType::Intra,
         );
-        assert!(
-            report.after_bits <= before_bits,
-            "RDO must not increase rate"
-        );
-        assert!(
-            report.distortion_penalty > 0,
-            "zeroing must record distortion"
-        );
-        // ensure DC preserved
-        assert_eq!(working[0], coeffs[0]);
+        assert_eq!(optimizer.telemetry.after_rate_bits, block.len() as u64 * 8);
     }
     #[test]
     fn neural_predictor_is_deterministic() {
@@ -2918,8 +4264,17 @@ mod rdo_tests {
     fn context_frequency_records_symbols() {
         let dims = FrameDimensions::new(8, 8);
         let tables = default_bundle_tables();
-        let mut recorder =
-            BundleStreamRecorder::new(2, dims, 4, tables, BundleAcceleration::None, 0, None);
+        let mut slots = Vec::new();
+        let mut recorder = BundleStreamRecorder::new(
+            &mut slots,
+            2,
+            dims,
+            4,
+            tables,
+            BundleAcceleration::None,
+            0,
+            None,
+        );
         recorder.record_bundle(
             BundleType::SignAndMagnitude,
             BundleContextId::new(7),
@@ -2927,7 +4282,7 @@ mod rdo_tests {
             2,
             BundleFlushReason::TypeComplete,
         );
-        let telemetry = recorder.finish();
+        let telemetry = recorder.finish(None);
         let entry = telemetry
             .context_frequencies
             .iter()
@@ -2958,25 +4313,229 @@ mod rdo_tests {
         let _ = std::fs::remove_file(&path);
     }
 }
-struct BundleStreamRecorder {
+/// Literal range and counters for one frequently occurring low-frequency pattern.
+#[derive(Clone, Copy, Default)]
+struct SparseAcPattern {
+    // A restored prefix gets its first occurrence counted with the repeats.
+    deferred_prefix: bool,
+    key: u16,
+    last_slot: usize,
+    nonzero: u8,
+    negative: u8,
+    start: usize,
+    end: usize,
+    repeats: u64,
+}
+
+// For support inside the upper-left 3x3, orders 25 and 26 are zero, with
+// identical context inputs except for their zigzag order. Without a remap
+// they always end separate RLE records. Every subsequent context is neutral.
+const ZERO_TAIL_ORDER: usize = 26;
+// DC and the first horizontal and vertical AC levels cannot influence orders
+// 11 or later. Orders 11 and 12 have identical neutral inputs except for order.
+const FIRST_AC_TAIL_ORDER: usize = 12;
+const fn isolated_prefix(end: usize) -> u64 {
+    let mut mask = 0;
+    let mut z = 0;
+    while z < BLOCK_PIXELS {
+        let slot = ZIG_ZAG[z];
+        let x = slot % 8;
+        let y = slot / 8;
+        let mut clean = z + 1 < end - 1;
+        let mut w = end - 1;
+        while w < 64 && clean {
+            let s = ZIG_ZAG[w];
+            let (a, b) = (s % 8, s / 8);
+            if (a == x + 1 && b == y) || (b == y + 1 && a.abs_diff(x) <= 1) {
+                clean = false;
+            }
+            w += 1;
+        }
+        if clean {
+            mask |= 1 << z;
+        }
+        z += 1;
+    }
+    mask
+}
+
+const TILE_CLASSES: usize = 64 * 2;
+const FIRST_FIVE_CLASSES: usize = 3_usize.pow(5);
+// Suffix keys follow the 256 tile/frame/DC keys per class. u16::MAX marks an unkeyed span.
+const TAIL_KEY: u16 = (FIRST_FIVE_CLASSES * 256) as u16;
+// Internal repeat tape instruction, followed by a starting tile key and run length.
+const DC_RUN_KEY: u16 = u16::MAX - 1;
+const _: () = assert!(FIRST_FIVE_CLASSES * 256 + 2 * TILE_CLASSES <= u16::MAX as usize);
+
+/// Both full pattern keys and standalone suffix keys name the same neutral tails.
+fn pattern_tail(key: u16) -> usize {
+    if key >= TAIL_KEY {
+        usize::from(key - TAIL_KEY)
+    } else {
+        // The low seven bits identify tile and frame. Classes 0..9 use only H and V.
+        usize::from(key & 127) + if key >> 8 >= 9 { TILE_CLASSES } else { 0 }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct ZeroTail {
+    start: usize,
+    end: usize,
+    last_slot: usize,
+    repeats: u64,
+}
+
+// For ternary levels the occupied positions determine all context IDs.
+// Signs affect only the sign bit in the corresponding nonzero records.
+const SPARSE_MASKS: [(u8, u8); FIRST_FIVE_CLASSES] = {
+    let mut masks = [(0, 0); FIRST_FIVE_CLASSES];
+    let mut class = 0;
+    while class < masks.len() {
+        let mut digits = class;
+        let mut order = 0;
+        while order < 5 {
+            let trit = digits % 3;
+            masks[class].0 |= ((trit != 0) as u8) << order;
+            masks[class].1 |= ((trit == 2) as u8) << order;
+            digits /= 3;
+            order += 1;
+        }
+        class += 1;
+    }
+    masks
+};
+
+#[derive(Clone, Copy, Default)]
+struct PrefixSpan {
+    start: u32,
+    len: u8,
+    signs: u8,
+    sign_positions: [u8; 5],
+}
+
+#[derive(Default)]
+struct SparsePrefixes {
+    // At most 32 support masks × 256 tile/frame/DC combinations per encoder.
+    pages: [Vec<PrefixSpan>; 32],
+    records: Vec<BundleRecord>,
+}
+
+impl SparsePrefixes {
+    fn append(
+        &self,
+        key: usize,
+        signs: u8,
+        width: u8,
+        dest: &mut Vec<BundleRecord>,
+    ) -> Option<BundleContextId> {
+        let span = self.pages[key / 256].get(key % 256)?;
+        if span.len == 0 {
+            return None;
+        }
+        let start = span.start as usize;
+        let prefix = &self.records[start..start + usize::from(span.len)];
+        let out = dest.len();
+        dest.extend_from_slice(prefix);
+        if width >= 2 {
+            let mut changed = signs ^ span.signs;
+            while changed != 0 {
+                let position = span.sign_positions[changed.trailing_zeros() as usize];
+                dest[out + usize::from(position)].bits ^= 1 << (width - 2);
+                changed &= changed - 1;
+            }
+        }
+        Some(prefix[prefix.len() - 1].context)
+    }
+
+    fn insert(&mut self, key: usize, signs: u8, prefix: &[BundleRecord]) {
+        let page = &mut self.pages[key / 256];
+        if page.is_empty() {
+            page.resize(256, PrefixSpan::default());
+        }
+        let mut span = PrefixSpan {
+            start: self.records.len() as u32,
+            len: prefix.len() as u8,
+            signs,
+            sign_positions: [0; 5],
+        };
+        let mut active = key / 256;
+        for (index, record) in prefix.iter().enumerate() {
+            if !matches!(record.bundle_type, BundleType::SignificanceRle) {
+                span.sign_positions[active.trailing_zeros() as usize] = index as u8;
+                active &= active - 1;
+            }
+        }
+        debug_assert_eq!(active, 0);
+        self.records.extend_from_slice(prefix);
+        page[key % 256] = span;
+    }
+}
+
+/// Exact sparse-pattern keys for aligned spans in this encoder's completed report.
+struct RecordedSegment {
+    telemetry: BundledTelemetry,
+    repeat_keys: Vec<u16>,
+}
+
+/// Reuse a completed report's allocation when it fits this segment at its exact size.
+fn telemetry_buffer<T>(mut previous: Vec<T>, len: usize) -> Vec<T> {
+    if previous.capacity() == len {
+        previous.clear();
+        previous
+    } else {
+        Vec::with_capacity(len)
+    }
+}
+
+/// Most AC records describe a single zero. Keep its multiplicity and the
+/// inter-record transitions together; allocate a full histogram only for exceptions.
+#[derive(Default)]
+struct ContextTally {
+    stays: u64,
+    ends: u64,
+    detail: Option<std::num::NonZeroU32>,
+}
+
+struct DcSpan {
+    start: usize,
+    end: usize,
+    kind: FrameType,
+    significant: bool,
+}
+
+struct BundleStreamRecorder<'a> {
     stats: BundledStats,
     tokens: Vec<BundledToken>,
     bundles: Vec<BundleRecord>,
-    context_stats: BTreeMap<BundleContextId, BundleContextStats>,
-    context_frequency: BTreeMap<BundleContextId, ContextFrequency>,
+    // Singleton counts use wire IDs directly. Only exceptional transitions need a tally slot.
+    context_slots: &'a mut [u32],
+    active_contexts: Vec<u64>,
+    singleton_counts: Vec<u64>,
+    contexts: Vec<ContextTally>,
+    details: Vec<(BundleContextStats, ContextFrequency)>,
+    // Tile, frame class, DC significance and five ternary AC levels identify the records.
+    sparse_patterns: Vec<SparseAcPattern>,
+    pattern_pages: [Vec<u16>; FIRST_FIVE_CLASSES],
+    cached_prefixes: Option<&'a mut SparsePrefixes>,
+    zero_tails: Vec<ZeroTail>,
+    omitted_tail_records: usize,
+    // Template keys and compact raster DC runs. Literal spans mark the gaps between repeats.
+    repeats: Vec<u16>,
+    literal_spans: Vec<(usize, usize)>,
     width: u8,
     blocks_per_row: usize,
     quantizer_bucket: u8,
     tables: Arc<BundleAnsTables>,
     acceleration: BundleAcceleration,
     prefetch_distance: u16,
-    pending_blocks: VecDeque<BlockBundleState>,
-    current_block: Option<BlockBundleState>,
-    last_context: Option<BundleContextId>,
+    pending_dc: Option<DcSpan>,
+    last_context_slot: Option<usize>,
     context_remap: Option<Arc<BundleContextRemap>>,
 }
-impl BundleStreamRecorder {
+impl<'a> BundleStreamRecorder<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        context_slots: &'a mut Vec<u32>,
         bundle_width: u8,
         dims: FrameDimensions,
         quantizer: u8,
@@ -2985,31 +4544,56 @@ impl BundleStreamRecorder {
         prefetch_distance: u16,
         context_remap: Option<Arc<BundleContextRemap>>,
     ) -> Self {
+        context_slots.clear();
+        context_slots.resize(usize::from(u16::MAX) + 1, 0);
         Self {
             stats: BundledStats {
                 bundle_width,
                 ..BundledStats::default()
             },
-            tokens: Vec::new(),
+            tokens: Vec::with_capacity(dims.block_count() * 3),
             bundles: Vec::new(),
-            context_stats: BTreeMap::new(),
-            context_frequency: BTreeMap::new(),
+            singleton_counts: vec![0; 1 << 16],
+            active_contexts: vec![0; (usize::from(u16::MAX) + 1) / 64],
+            context_slots,
+            contexts: Vec::with_capacity(dims.block_count().min(8192)),
+            details: Vec::new(),
+            sparse_patterns: vec![SparseAcPattern::default(); 64 * 2 * 2],
+            pattern_pages: std::array::from_fn(|_| Vec::new()),
+            cached_prefixes: None,
+            zero_tails: vec![ZeroTail::default(); 2 * TILE_CLASSES],
+            omitted_tail_records: 0,
+            repeats: Vec::with_capacity(dims.block_count()),
+            literal_spans: Vec::new(),
             width: bundle_width.clamp(1, 4),
             blocks_per_row: (dims.width as usize / BLOCK_SIZE).max(1),
             quantizer_bucket: quantizer_to_bucket(quantizer),
             tables,
             acceleration,
             prefetch_distance,
-            pending_blocks: VecDeque::new(),
-            current_block: None,
-            last_context: None,
+            pending_dc: None,
+            last_context_slot: None,
             context_remap,
         }
     }
-    fn context_stats_entry(&mut self, context: BundleContextId) -> &mut BundleContextStats {
-        self.context_stats
-            .entry(context)
-            .or_insert_with(|| BundleContextStats::new(context))
+    #[inline(always)]
+    fn context_slot(&mut self, context: BundleContextId) -> usize {
+        let id = usize::from(context.0);
+        self.active_contexts[id / 64] |= 1_u64 << (id % 64);
+        id
+    }
+
+    fn exceptional_slot(&mut self, id: usize) -> usize {
+        let slot = &mut self.context_slots[id];
+        if *slot == 0 {
+            self.contexts.push(ContextTally::default());
+            *slot = self.contexts.len() as u32;
+        }
+        (*slot - 1) as usize
+    }
+    fn exceptional(&mut self, id: usize) -> &mut ContextTally {
+        let slot = self.exceptional_slot(id);
+        &mut self.contexts[slot]
     }
     fn map_context(&self, context: BundleContextId) -> BundleContextId {
         if let Some(remap) = self.context_remap.as_ref() {
@@ -3018,31 +4602,457 @@ impl BundleStreamRecorder {
             context
         }
     }
-    fn finish(self) -> BundledTelemetry {
-        let (ans_stream, used_acceleration) = encode_bundle_stream_with_opts(
-            self.tables.as_ref(),
-            &self.bundles,
-            self.acceleration,
-            self.prefetch_distance,
-        );
+    #[cfg(test)]
+    fn finish(self, previous: Option<BundledTelemetry>) -> BundledTelemetry {
+        self.finish_segment(previous.map(|telemetry| RecordedSegment {
+            telemetry,
+            repeat_keys: Vec::new(),
+        }))
+        .telemetry
+    }
+
+    fn count_repeated_patterns(&mut self) {
+        for index in 0..self.sparse_patterns.len() {
+            let pattern = self.sparse_patterns[index];
+            let count = pattern.repeats + u64::from(pattern.deferred_prefix);
+            if count == 0 {
+                continue;
+            }
+            let nonzero = u64::from(pattern.nonzero);
+            let negative = u64::from(pattern.negative);
+            self.stats.significance_one = self
+                .stats
+                .significance_one
+                .saturating_add(nonzero.saturating_mul(count));
+            // Repeated sparse blocks share their neutral suffix across all AC classes.
+            let (prefix_end, ac_slots) = if self.context_remap.is_none() {
+                let tail_index = pattern_tail(pattern.key);
+                let tail = &mut self.zero_tails[tail_index];
+                tail.repeats = tail.repeats.saturating_add(pattern.repeats);
+                (
+                    pattern.end - (tail.end - tail.start),
+                    if tail_index < TILE_CLASSES {
+                        FIRST_AC_TAIL_ORDER - 1
+                    } else {
+                        ZERO_TAIL_ORDER - 1
+                    } as u64,
+                )
+            } else {
+                (pattern.end, (BLOCK_PIXELS - 1) as u64)
+            };
+            self.stats.significance_zero = self
+                .stats
+                .significance_zero
+                .saturating_add((ac_slots - nonzero).saturating_mul(count));
+            self.stats.sign_negative = self
+                .stats
+                .sign_negative
+                .saturating_add(negative.saturating_mul(count));
+            self.stats.sign_positive = self
+                .stats
+                .sign_positive
+                .saturating_add((ac_slots - negative).saturating_mul(count));
+            if self.width >= 3 {
+                self.stats.parity_one = self
+                    .stats
+                    .parity_one
+                    .saturating_add(nonzero.saturating_mul(count));
+            }
+            // A block starts after EOB. Its internal context switches and histogram
+            // are additive; record_eob has already counted its terminal context.
+            self.last_context_slot = None;
+            for i in pattern.start..prefix_end {
+                self.count_bundle(self.bundles[i], count);
+            }
+        }
+        for i in 0..self.zero_tails.len() {
+            let tail = self.zero_tails[i];
+            if tail.repeats != 0 {
+                let start_order = if i < TILE_CLASSES {
+                    FIRST_AC_TAIL_ORDER
+                } else {
+                    ZERO_TAIL_ORDER
+                };
+                let zeros = ((BLOCK_PIXELS - start_order) as u64).saturating_mul(tail.repeats);
+                self.stats.significance_zero = self.stats.significance_zero.saturating_add(zeros);
+                self.stats.sign_positive = self.stats.sign_positive.saturating_add(zeros);
+                for record in &self.bundles[tail.start..tail.end] {
+                    let id = usize::from(record.context.0);
+                    self.active_contexts[id / 64] |= 1 << (id % 64);
+                    self.singleton_counts[id] =
+                        self.singleton_counts[id].saturating_add(tail.repeats);
+                }
+            }
+        }
+    }
+
+    fn context_reports(
+        &mut self,
+        previous: Option<&mut BundledTelemetry>,
+        unfinished: Option<usize>,
+    ) -> (Vec<BundleContextStats>, Vec<ContextFrequency>) {
+        let (mut context_stats, mut context_frequencies) = previous
+            .map(|p| {
+                (
+                    std::mem::take(&mut p.context_stats),
+                    std::mem::take(&mut p.context_frequencies),
+                )
+            })
+            .unwrap_or_default();
+        let live: usize = self
+            .active_contexts
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum();
+        // Most contexts contain only singleton zeros. Initialize their unused
+        // histogram bins together before writing the occupied bins in wire order.
+        context_stats.clear();
+        context_frequencies.clear();
+        if context_stats.capacity() < live {
+            // SAFETY: all fields are unsigned integers or a BundleContextId(u16).
+            context_stats =
+                unsafe { Box::<[BundleContextStats]>::new_zeroed_slice(live).assume_init() }
+                    .into_vec();
+        } else {
+            context_stats.resize(live, BundleContextStats::new(BundleContextId(0)));
+        }
+        if context_frequencies.capacity() < live {
+            // SAFETY: the ID, counts, and histogram elements all admit zero.
+            context_frequencies =
+                unsafe { Box::<[ContextFrequency]>::new_zeroed_slice(live).assume_init() }
+                    .into_vec();
+        } else {
+            context_frequencies.resize(live, ContextFrequency::default());
+        }
+        let mut reports = context_stats.iter_mut().zip(&mut context_frequencies);
+        let empty = ContextTally::default();
+        // Visit only live contexts, in increasing wire-ID order.
+        for (word, &occupied) in self.active_contexts.iter().enumerate() {
+            let mut remaining = occupied;
+            while remaining != 0 {
+                let id = word * 64 + remaining.trailing_zeros() as usize;
+                remaining &= remaining - 1;
+                let slot = self.context_slots[id];
+                let context = BundleContextId(id as u16);
+                let tally = if slot == 0 {
+                    &empty
+                } else {
+                    &self.contexts[slot as usize - 1]
+                };
+                let (stats, freq) = reports.next().expect("one report per occupied context");
+                if let Some(entry) = tally.detail {
+                    (*stats, *freq) = self.details[entry.get() as usize - 1];
+                } else {
+                    stats.context = context;
+                    freq.context = context;
+                }
+                let zeros = self.singleton_counts[id];
+                stats.bundles_total = stats.bundles_total.saturating_add(zeros);
+                stats.type_significance_rle = stats.type_significance_rle.saturating_add(zeros);
+                stats.flush_type_complete = stats.flush_type_complete.saturating_add(zeros);
+                self.stats.bundles_total =
+                    self.stats.bundles_total.saturating_add(stats.bundles_total);
+                self.stats.significance_rle = self
+                    .stats
+                    .significance_rle
+                    .saturating_add(stats.type_significance_rle);
+                self.stats
+                    .record_flush(BundleFlushReason::TypeComplete, stats.flush_type_complete);
+                // The global EOB count already includes the explicit block terminators.
+                self.stats
+                    .record_flush(BundleFlushReason::EndOfBlock, stats.flush_end_of_block);
+                // Partition outgoing edges into switches, same-context edges and block ends.
+                // A final unterminated record has no outgoing edge either.
+                let switches = stats.bundles_total
+                    - tally.stays
+                    - tally.ends
+                    - u64::from(unfinished == Some(id));
+                stats.flush_context_switch = stats.flush_context_switch.saturating_add(switches);
+                self.stats
+                    .record_flush(BundleFlushReason::ContextSwitch, stats.flush_context_switch);
+                stats.flush_end_of_block = stats.flush_end_of_block.saturating_add(tally.ends);
+                freq.bundles = stats.bundles_total;
+                freq.total_bits = freq
+                    .total_bits
+                    .saturating_add(zeros.saturating_mul(u64::from(self.width.max(2))));
+                freq.symbol_counts[1] = freq.symbol_counts[1].saturating_add(zeros);
+            }
+        }
+        (context_stats, context_frequencies)
+    }
+
+    fn expand_repeats(
+        &self,
+        previous: Option<RecordedSegment>,
+    ) -> (Vec<BundleRecord>, Vec<u8>, Vec<u16>) {
+        // Each repeat contains SignificanceRle. Its entropy stream is the
+        // masked symbol projection, which distributes over concatenation.
+        let symbols: Vec<_> = self.bundles.iter().map(bundle_symbol).collect();
+        let total = self
+            .sparse_patterns
+            .iter()
+            .fold(self.bundles.len() + self.omitted_tail_records, |len, p| {
+                len.saturating_add((p.end - p.start).saturating_mul(p.repeats as usize))
+            });
+        let (old_records, old_stream, old_keys) = previous
+            .map(|r| (r.telemetry.bundles, r.telemetry.ans_stream, r.repeat_keys))
+            .unwrap_or_default();
+        let overwrite = old_records.len() == total
+            && old_stream.len() == total
+            && old_records.capacity() == total
+            && old_stream.capacity() == total;
+        let (mut records, mut stream) = if overwrite {
+            (old_records, old_stream)
+        } else {
+            (
+                telemetry_buffer(old_records, total),
+                telemetry_buffer(old_stream, total),
+            )
+        };
+        if !overwrite {
+            // In a full-length block each zero is one significance-RLE record for symbol 1.
+            stream.resize(total, 1);
+        }
+        const SLOTS: usize = BLOCK_PIXELS - 1;
+        // Each row covers the eight tile columns for one frame/DC class.
+        // Consecutive DC-only blocks can be copied from a contiguous period,
+        // even when a literal interrupts the run before it completes a cycle.
+        let mut dc_rows = [None; 32];
+        let mut periods = Vec::new();
+        for (group, row) in self.sparse_patterns[..256].chunks_exact(8).enumerate() {
+            if row.iter().all(|p| p.end - p.start == SLOTS)
+                && row.iter().map(|p| p.repeats).sum::<u64>() >= 16
+            {
+                dc_rows[group] = Some(periods.len());
+                if !overwrite {
+                    let start = periods.len();
+                    for p in row {
+                        periods.extend_from_slice(&self.bundles[p.start..p.end]);
+                    }
+                    // Keep a contiguous 32-block seed at each of the eight phases.
+                    for _ in 0..2 {
+                        periods.extend_from_within(start..);
+                    }
+                    periods.extend_from_within(start..start + 8 * SLOTS);
+                }
+            }
+        }
+        // These entries describe the old output until their block has been
+        // visited. Equal runs can retain both the records and their keys.
+        let reuse_keys = overwrite && old_keys.len() == total / SLOTS;
+        let mut repeat_keys = if reuse_keys {
+            old_keys
+        } else {
+            vec![u16::MAX; total / SLOTS]
+        };
+        let mut written = 0_usize;
+        enum Source {
+            Span(usize, usize, Option<u16>),
+            DcRun(u16, usize, usize),
+        }
+        let mut append = |source| {
+            let (start, end, key) = match source {
+                Source::Span(start, end, key) => (start, end, key),
+                Source::DcRun(key, len, row) => {
+                    let n = len * SLOTS;
+                    let aligned = written.is_multiple_of(SLOTS);
+                    let slot = written / SLOTS;
+                    let period: [u16; 8] =
+                        std::array::from_fn(|i| (key & !7) | ((key + i as u16) & 7));
+                    if overwrite {
+                        if !aligned
+                            || !reuse_keys
+                            || !repeat_keys.get(slot..slot + len).is_some_and(|prior| {
+                                prior.chunks(8).all(|chunk| chunk == &period[..chunk.len()])
+                            })
+                        {
+                            return false;
+                        }
+                    } else {
+                        let start = row + usize::from(key & 7) * SLOTS;
+                        let seed = n.min(32 * SLOTS);
+                        records.extend_from_slice(&periods[start..start + seed]);
+                        while records.len() < written + n {
+                            let len = (records.len() - written).min(written + n - records.len());
+                            records.extend_from_within(written..written + len);
+                        }
+                    }
+                    if aligned && !overwrite {
+                        for chunk in repeat_keys[slot..slot + len].chunks_mut(8) {
+                            chunk.copy_from_slice(&period[..chunk.len()]);
+                        }
+                    }
+                    written += n;
+                    return true;
+                }
+            };
+            let dest = written;
+            written += end - start;
+            let mut copy_end = written;
+            if let Some(key) = key
+                && written.is_multiple_of(SLOTS)
+                && written > 0
+                && (key >= TAIL_KEY || end - start == SLOTS)
+            {
+                let slot = written / SLOTS - 1;
+                let old_key = std::mem::replace(&mut repeat_keys[slot], key);
+                if reuse_keys {
+                    if key == old_key {
+                        return true;
+                    }
+                    if self.context_remap.is_none() && old_key != u16::MAX {
+                        let tail_id = pattern_tail(key);
+                        if tail_id == pattern_tail(old_key) {
+                            let tail = self.zero_tails[tail_id];
+                            copy_end -= tail.end - tail.start;
+                        }
+                    }
+                }
+            } else if reuse_keys {
+                repeat_keys[dest / SLOTS..written / SLOTS].fill(u16::MAX);
+            }
+            if overwrite {
+                let n = copy_end - dest;
+                records[dest..copy_end].copy_from_slice(&self.bundles[start..start + n]);
+                stream[dest..copy_end].copy_from_slice(&symbols[start..start + n]);
+            } else {
+                if end - start == SLOTS {
+                    let block = self.bundles[start..]
+                        .first_chunk::<SLOTS>()
+                        .expect("complete template");
+                    records.extend_from_slice(block);
+                } else {
+                    records.extend_from_slice(&self.bundles[start..end]);
+                }
+                let symbol_len = match key {
+                    Some(k) if k < TAIL_KEY && end - start == SLOTS => {
+                        // A sparse template can have nonzeros only in the first five AC orders.
+                        if k >> 8 == 0 { 0 } else { 5 }
+                    }
+                    Some(k) if k >= TAIL_KEY => {
+                        let order = if pattern_tail(k) < TILE_CLASSES {
+                            FIRST_AC_TAIL_ORDER
+                        } else {
+                            ZERO_TAIL_ORDER
+                        };
+                        if end - start == BLOCK_PIXELS - order {
+                            0
+                        } else {
+                            end - start
+                        }
+                    }
+                    _ => end - start,
+                };
+                stream[dest..dest + symbol_len]
+                    .copy_from_slice(&symbols[start..start + symbol_len]);
+            }
+            true
+        };
+        let (mut repeat_start, mut literal_start) = (0, 0);
+        for (repeat_end, literal_end) in self
+            .literal_spans
+            .iter()
+            .copied()
+            .chain(std::iter::once((self.repeats.len(), self.bundles.len())))
+        {
+            let mut keys = &self.repeats[repeat_start..repeat_end];
+            while let Some((&key, rest)) = keys.split_first() {
+                if key == DC_RUN_KEY {
+                    let (first, len) = (rest[0], usize::from(rest[1]));
+                    if !dc_rows[usize::from(first) / 8]
+                        .is_some_and(|row| append(Source::DcRun(first, len, row)))
+                    {
+                        for i in 0..len {
+                            let k = (first & !7) | ((first + i as u16) & 7);
+                            let p = self.sparse_patterns[usize::from(k)];
+                            append(Source::Span(p.start, p.end, Some(p.key)));
+                        }
+                    }
+                    keys = &rest[2..];
+                    continue;
+                }
+
+                if key < 256
+                    && keys.len() >= 4
+                    && let Some(row) = dc_rows[usize::from(key) / 8]
+                {
+                    let base = key & !7;
+                    let mut len = 1;
+                    while len < keys.len() && keys[len] == base | (key.wrapping_add(len as u16) & 7)
+                    {
+                        len += 1;
+                    }
+                    if len >= 4 && append(Source::DcRun(key, len, row)) {
+                        keys = &keys[len..];
+                        continue;
+                    }
+                    // A changed prior key requires the usual per-block suffix check.
+                    if len >= 4 {
+                        for &k in &keys[..len] {
+                            let p = self.sparse_patterns[usize::from(k)];
+                            append(Source::Span(p.start, p.end, Some(p.key)));
+                        }
+                        keys = &keys[len..];
+                        continue;
+                    }
+                }
+                {
+                    if key >= TAIL_KEY {
+                        let tail = self.zero_tails[usize::from(key - TAIL_KEY)];
+                        append(Source::Span(tail.start, tail.end, Some(key)));
+                    } else {
+                        let p = self.sparse_patterns[usize::from(key)];
+                        append(Source::Span(p.start, p.end, Some(p.key)));
+                    }
+                    keys = rest;
+                }
+            }
+            append(Source::Span(literal_start, literal_end, None));
+            (repeat_start, literal_start) = (repeat_end, literal_end);
+        }
+        (records, stream, repeat_keys)
+    }
+
+    fn finish_segment(mut self, mut previous: Option<RecordedSegment>) -> RecordedSegment {
+        self.flush_dc();
+        let unfinished = self.last_context_slot;
+        self.count_repeated_patterns();
+        let (context_stats, context_frequencies) =
+            self.context_reports(previous.as_mut().map(|p| &mut p.telemetry), unfinished);
+        let (bundles, ans_stream, repeat_keys, used_acceleration) = if self.repeats.is_empty() {
+            let (stream, acceleration) = encode_bundle_stream_with_opts(
+                &self.tables,
+                &self.bundles,
+                self.acceleration,
+                self.prefetch_distance,
+            );
+            (self.bundles, stream, Vec::new(), acceleration)
+        } else {
+            let (bundles, stream, keys) = self.expand_repeats(previous);
+            (bundles, stream, keys, BundleAcceleration::None)
+        };
         let remap = self.context_remap.as_ref().map(|map| ContextRemapSummary {
             escape_context: map.escape_context(),
             remapped: map.remapped_count(),
             dropped: map.dropped_count(),
         });
-        BundledTelemetry {
+        let telemetry = BundledTelemetry {
             stats: self.stats,
             tokens: self.tokens,
-            bundles: self.bundles,
-            context_frequencies: self.context_frequency.into_values().collect(),
+            bundles,
+            context_frequencies,
             ans_stream,
             ans_precision_bits: self.tables.precision_bits(),
             tables_checksum: self.tables.checksum(),
-            context_stats: self.context_stats.into_values().collect(),
+            context_stats,
             acceleration: used_acceleration,
             prefetch_distance: self.prefetch_distance,
             context_remap: remap,
             rdo: None,
+        };
+        RecordedSegment {
+            telemetry,
+            repeat_keys,
         }
     }
     fn record_bundle(
@@ -3053,160 +5063,504 @@ impl BundleStreamRecorder {
         bit_len: u8,
         flush: BundleFlushReason,
     ) {
-        if let Some(previous_context) = self.last_context
-            && previous_context != context
-        {
-            self.stats.record_flush(BundleFlushReason::ContextSwitch);
-            self.context_stats_entry(previous_context)
-                .record_flush(BundleFlushReason::ContextSwitch);
-        }
-        self.last_context = Some(context);
-        self.stats.bundles_total = self.stats.bundles_total.saturating_add(1);
-        self.stats.record_flush(flush);
-        if matches!(bundle_type, BundleType::SignificanceRle) {
-            self.stats.significance_rle = self.stats.significance_rle.saturating_add(1);
-        }
-        self.context_stats_entry(context)
-            .record_bundle(bundle_type, flush);
-        let freq = self
-            .context_frequency
-            .entry(context)
-            .or_insert_with(|| ContextFrequency {
-                context,
-                ..ContextFrequency::default()
-            });
-        freq.bundles = freq.bundles.saturating_add(1);
-        freq.total_bits = freq.total_bits.saturating_add(u64::from(bit_len));
-        let symbol_idx = usize::from(bits) & (RDO_MAX_SYMBOLS - 1);
-        freq.symbol_counts[symbol_idx] = freq.symbol_counts[symbol_idx].saturating_add(1);
-        self.bundles.push(BundleRecord {
+        let record = BundleRecord {
             bundle_type,
             context,
             bits,
             bit_len,
             flush,
+        };
+        self.count_bundle(record, 1);
+        self.bundles.push(record);
+    }
+    fn count_bundle(&mut self, record: BundleRecord, count: u64) {
+        let slot = self.context_slot(record.context);
+        self.count_transition(slot, count);
+        if matches!(record.bundle_type, BundleType::SignificanceRle)
+            && record.bits == 1
+            && record.bit_len == self.width.max(2)
+            && matches!(record.flush, BundleFlushReason::TypeComplete)
+        {
+            self.singleton_counts[slot] = self.singleton_counts[slot].saturating_add(count);
+        } else {
+            self.count_detail(slot, record, count);
+        }
+    }
+
+    #[inline]
+    fn count_transition(&mut self, slot: usize, count: u64) {
+        if self.last_context_slot.replace(slot) == Some(slot) {
+            let stays = &mut self.exceptional(slot).stays;
+            *stays = stays.saturating_add(count);
+        }
+    }
+
+    fn count_detail(&mut self, slot: usize, record: BundleRecord, count: u64) {
+        let slot = self.exceptional_slot(slot);
+        let tally = &mut self.contexts[slot];
+        let entry = *tally.detail.get_or_insert_with(|| {
+            self.details.push((
+                BundleContextStats::new(record.context),
+                ContextFrequency {
+                    context: record.context,
+                    ..ContextFrequency::default()
+                },
+            ));
+            std::num::NonZeroU32::new(self.details.len() as u32).expect("at most 65536 contexts")
         });
+        let (stats, freq) = &mut self.details[entry.get() as usize - 1];
+        stats.record_bundle(record.bundle_type, record.flush, count);
+        freq.total_bits = freq
+            .total_bits
+            .saturating_add(u64::from(record.bit_len).saturating_mul(count));
+        let symbol_idx = usize::from(record.bits) & (RDO_MAX_SYMBOLS - 1);
+        freq.symbol_counts[symbol_idx] = freq.symbol_counts[symbol_idx].saturating_add(count);
     }
-    fn accumulate_stats(&mut self, value: i16) {
-        let nonzero = value != 0;
-        if nonzero {
-            self.stats.significance_one = self.stats.significance_one.saturating_add(1);
-        } else {
-            self.stats.significance_zero = self.stats.significance_zero.saturating_add(1);
+    fn count_eob(&mut self) {
+        self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(1);
+        if let Some(slot) = self.last_context_slot.take() {
+            let tally = self.exceptional(slot);
+            tally.ends = tally.ends.saturating_add(1);
         }
-        let negative = value < 0;
-        if negative {
-            self.stats.sign_negative = self.stats.sign_negative.saturating_add(1);
-        } else {
-            self.stats.sign_positive = self.stats.sign_positive.saturating_add(1);
-        }
-        if self.width >= 3 && value != 0 {
-            let parity = (value.wrapping_abs() as u32 & 1) as u8;
-            if parity == 1 {
-                self.stats.parity_one = self.stats.parity_one.saturating_add(1);
-            }
-        }
-        if self.width >= 4 && value.abs() >= 2 {
-            self.stats.geq2_one = self.stats.geq2_one.saturating_add(1);
-        }
+        self.stats.record_flush(BundleFlushReason::EndOfBlock, 1);
     }
-    fn record_block(
+    #[cfg(test)]
+    fn record_block(&mut self, index: usize, coeffs: &[i16; BLOCK_PIXELS], kind: FrameType) {
+        self.record_masked_block(index, coeffs, kind, ac_support(coeffs))
+    }
+
+    fn record_masked_block(
         &mut self,
         block_index: usize,
         coeffs: &[i16; BLOCK_PIXELS],
         frame_type: FrameType,
+        active: u64,
     ) {
-        let mut prev_level_abs = 0u8;
-        let mut slots = Vec::with_capacity(BLOCK_PIXELS - 1);
-        for (order, &slot) in ZIG_ZAG.iter().enumerate().skip(1) {
-            let coeff = coeffs[slot];
-            self.accumulate_stats(coeff);
-            let (bundle_type, _, _) = bundle_bits(coeff, self.width);
-            let context = self.map_context(self.compute_context(
-                bundle_type,
-                block_index,
-                order,
-                slot,
-                coeff,
-                prev_level_abs,
-                frame_type,
-                coeffs,
-            ));
-            slots.push(SlotContext {
-                context,
-                is_non_zero: coeff != 0,
-            });
-            prev_level_abs = (coeff.saturating_abs() as u16).min(0xFF) as u8;
-        }
-        self.pending_blocks
-            .push_back(BlockBundleState::new(block_index, slots));
-    }
-    fn ensure_current_block(&mut self) {
-        if self.current_block.is_none()
-            && let Some(next) = self.pending_blocks.pop_front()
+        self.flush_dc();
+        let (h, v, vv, hv, hh) = (coeffs[1], coeffs[8], coeffs[16], coeffs[9], coeffs[2]);
+        if self.last_context_slot.is_some()
+            || [h, v, vv, hv, hh]
+                .iter()
+                .any(|level| level.unsigned_abs() > 1)
+            || active >= 1 << 6
         {
-            self.current_block = Some(next);
+            self.record_ac_slots(self.tile(block_index), coeffs, frame_type, active);
+            return;
+        }
+        // The first five zigzag AC levels form a base-three key.
+        let digit = |level: i16| usize::from(level != 0) + usize::from(level < 0);
+        let class = digit(h) + 3 * digit(v) + 9 * digit(vv) + 27 * digit(hv) + 81 * digit(hh);
+        self.record_pattern(block_index, coeffs, frame_type, class);
+    }
+    fn tile(&self, block_index: usize) -> u8 {
+        let (row, col) = (
+            block_index / self.blocks_per_row,
+            block_index % self.blocks_per_row,
+        );
+        ((col & 7) | ((row & 7) << 3)) as u8
+    }
+    fn mark_literals(&mut self) {
+        if self.literal_spans.last().map(|&(_, end)| end) != Some(self.bundles.len()) {
+            self.literal_spans
+                .push((self.repeats.len(), self.bundles.len()));
         }
     }
-    fn peek_slot(&mut self) -> Option<SlotContext> {
-        self.ensure_current_block();
-        self.current_block
-            .as_ref()
-            .and_then(BlockBundleState::peek_slot)
+
+    fn flush_dc(&mut self) {
+        if let Some(span) = self.pending_dc.take() {
+            self.record_dc_patterns(span);
+        }
     }
-    fn pop_slot(&mut self) -> Option<SlotContext> {
-        loop {
-            self.ensure_current_block();
+
+    fn queue_dc(&mut self, blocks: std::ops::Range<usize>, significant: bool, kind: FrameType) {
+        if let Some(span) = &mut self.pending_dc
+            && span.end == blocks.start
+            && span.kind == kind
+            && span.significant == significant
+        {
+            span.end = blocks.end;
+        } else {
+            self.flush_dc();
+            self.pending_dc = Some(DcSpan {
+                start: blocks.start,
+                end: blocks.end,
+                kind,
+                significant,
+            });
+        }
+    }
+
+    /// Within a raster row, the eight DC tile keys repeat. Count
+    /// each complete cycle once per tile and append its keys in raster order.
+    fn record_dc_patterns(&mut self, span: DcSpan) {
+        let blocks = span.start..span.end;
+        let count = blocks.len() as u64;
+        self.stats.dc_events = self.stats.dc_events.saturating_add(count);
+        self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(count);
+        self.stats
+            .record_flush(BundleFlushReason::EndOfBlock, count);
+        let mut levels = [0; BLOCK_PIXELS];
+        levels[0] = i16::from(span.significant);
+        let mut first = blocks.start;
+        while first < blocks.end {
+            let column = first % self.blocks_per_row;
+            let mut len = (self.blocks_per_row - column).min(blocks.end - first);
+            let base = (usize::from(span.significant) << 7)
+                | (usize::from(span.kind.as_byte()) << 6)
+                | (((first / self.blocks_per_row) & 7) << 3);
+            if len >= 16
+                && self.sparse_patterns[base..base + 8]
+                    .iter()
+                    .all(|p| p.end != 0)
             {
-                let block = self.current_block.as_mut()?;
-                if let Some(slot) = block.next_slot() {
-                    return Some(slot);
+                self.mark_literals();
+                self.repeats.extend_from_slice(&[
+                    DC_RUN_KEY,
+                    (base | (column & 7)) as u16,
+                    len as u16,
+                ]);
+                for phase in 0..8 {
+                    let times = ((len + 7 - phase) / 8) as u64;
+                    let p = &mut self.sparse_patterns[base | ((column + phase) & 7)];
+                    p.repeats += times;
+                    let last = p.last_slot;
+                    let tally = self.exceptional(last);
+                    tally.ends = tally.ends.saturating_add(times);
                 }
-                self.current_block = None;
+            } else {
+                // One tile period populates every missing template in this row.
+                len = len.min(8);
+                for i in first..first + len {
+                    self.record_pattern(i, &levels, span.kind, 0);
+                    let slot = self.last_context_slot.take().expect("completed AC pattern");
+                    let tally = self.exceptional(slot);
+                    tally.ends = tally.ends.saturating_add(1);
+                }
             }
+            first += len;
         }
     }
-    fn flush_pending_zero_slots(&mut self) {
-        while let Some(slot) = self.pop_slot() {
-            debug_assert!(!slot.is_non_zero);
-            let mut run = 1u16;
-            while let Some(next) = self.peek_slot() {
-                if next.is_non_zero || next.context != slot.context {
-                    break;
-                }
-                self.pop_slot()
-                    .expect("peeked slot should still be available");
-                run = run.saturating_add(1);
+
+    fn record_pattern(
+        &mut self,
+        block_index: usize,
+        coeffs: &[i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        class: usize,
+    ) {
+        let tile = usize::from(self.tile(block_index));
+        let key = (class << 8)
+            | tile
+            | (usize::from(frame_type.as_byte()) << 6)
+            | (usize::from(coeffs[0] != 0) << 7);
+        let slot = if class == 0 {
+            key
+        } else {
+            let page = &mut self.pattern_pages[class];
+            if page.is_empty() {
+                page.resize(256, 0);
             }
-            self.emit_zero_run_bundle(slot.context, run);
+            let entry = &mut page[key & 255];
+            if *entry == 0 {
+                *entry = self.sparse_patterns.len() as u16;
+                self.sparse_patterns.push(SparseAcPattern::default());
+            }
+            usize::from(*entry)
+        };
+        let pattern = &mut self.sparse_patterns[slot];
+        if pattern.end != 0 {
+            pattern.repeats += 1;
+            let last_slot = pattern.last_slot;
+            self.mark_literals();
+            self.repeats.push(slot as u16);
+            self.last_context_slot = Some(last_slot);
+        } else {
+            let start = self.bundles.len();
+            let (support, signs) = SPARSE_MASKS[class];
+            let mut deferred_prefix = false;
+            if self.context_remap.is_some() {
+                self.record_ac_range(tile as u8, coeffs, frame_type, 1..BLOCK_PIXELS);
+            } else {
+                let tail = pattern_tail(key as u16);
+                let end = if tail < TILE_CLASSES {
+                    FIRST_AC_TAIL_ORDER
+                } else {
+                    ZERO_TAIL_ORDER
+                };
+                let structural_key = usize::from(support) * 256 + (key & 255);
+                let context = self
+                    .cached_prefixes
+                    .as_deref()
+                    .and_then(|cache| {
+                        cache.append(structural_key, signs, self.width, &mut self.bundles)
+                    })
+                    .unwrap_or_else(|| {
+                        self.write_sparse_prefix(
+                            tile as u8,
+                            frame_type,
+                            support,
+                            signs,
+                            coeffs[0] != 0,
+                            end,
+                        );
+                        let prefix = &self.bundles[start..];
+                        if let Some(cache) = self.cached_prefixes.as_deref_mut() {
+                            cache.insert(structural_key, signs, prefix);
+                        }
+                        prefix.last().expect("nonempty sparse prefix").context
+                    });
+                self.last_context_slot = Some(self.context_slot(context));
+                deferred_prefix = true;
+                self.record_neutral_tail(tile as u8, frame_type, end, tail, true);
+            }
+            self.sparse_patterns[slot] = SparseAcPattern {
+                deferred_prefix,
+                key: key as u16,
+                last_slot: self
+                    .last_context_slot
+                    .expect("every AC block emits a bundle"),
+                nonzero: support.count_ones() as u8,
+                negative: signs.count_ones() as u8,
+                start,
+                end: self.bundles.len(),
+                repeats: 0,
+            };
         }
     }
-    fn record_zero_run(&mut self, zeros: u8) {
-        let mut remaining = zeros;
-        while remaining > 0 {
-            let slot = self
-                .pop_slot()
-                .expect("zero slot must exist before nonzero run");
-            debug_assert!(!slot.is_non_zero);
-            let context = slot.context;
-            let mut run: u16 = 1;
-            while run < u16::from(remaining) {
-                if let Some(next) = self.peek_slot() {
-                    if next.is_non_zero || next.context != context {
-                        break;
-                    }
-                    self.pop_slot()
-                        .expect("peeked slot should still be available");
-                    run = run.saturating_add(1);
-                    continue;
-                }
-                break;
+
+    /// Unmapped ternary blocks have only 32 AC support masks and two DC states.
+    /// Emit the prefix now and count it once with the pattern's full multiplicity.
+    fn write_sparse_prefix(
+        &mut self,
+        tile: u8,
+        frame: FrameType,
+        support: u8,
+        signs: u8,
+        dc: bool,
+        end: usize,
+    ) {
+        let geometry = &SPARSE_CONTEXT_OFFSETS[usize::from(support) + 32 * usize::from(dc)];
+        let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame.as_byte());
+        let table = &CONTEXT_PREFIX[state];
+        let positive = bundle_bits(1, self.width);
+        let negative = bundle_bits(-1, self.width);
+        let zero_width = self.width.max(2);
+        let mut run = 0;
+        let mut last = BundleContextId::default();
+        self.bundles.reserve(end - 1);
+        for (i, &offset) in geometry[..end - 1].iter().enumerate() {
+            let bit = 1_u32 << i;
+            let nonzero = u32::from(support) & bit != 0;
+            let (kind, bits, bit_len) = if !nonzero {
+                (BundleType::SignificanceOnly, 1, zero_width)
+            } else if u32::from(signs) & bit != 0 {
+                negative
+            } else {
+                positive
+            };
+            let prefix = table[usize::from(kind.as_u8())][usize::from(offset)];
+            let context = if self.width == 2 && self.quantizer_bucket == 1 {
+                BundleContextId(
+                    Q16_TILE_HASH[frame.as_byte() as usize][tile as usize][usize::from(nonzero)]
+                        [usize::from(offset)]
+                        ^ (i + 1) as u16,
+                )
+            } else {
+                finish_context(prefix, tile, nonzero, i + 1)
+            };
+            if !nonzero && run != 0 && context == last && run < (1 << zero_width) - 1 {
+                run += 1;
+                self.bundles.last_mut().expect("started zero run").bits = run;
+            } else {
+                self.bundles.push(BundleRecord {
+                    bundle_type: if nonzero {
+                        kind
+                    } else {
+                        BundleType::SignificanceRle
+                    },
+                    context,
+                    bits,
+                    bit_len,
+                    flush: BundleFlushReason::TypeComplete,
+                });
+                run = u8::from(!nonzero);
             }
-            self.emit_zero_run_bundle(context, run);
-            remaining = remaining.saturating_sub(run as u8);
+            last = context;
         }
     }
-    fn emit_zero_run_bundle(&mut self, context: BundleContextId, mut run: u16) {
+
+    fn record_ac_slots(
+        &mut self,
+        tile: u8,
+        coeffs: &[i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        active: u64,
+    ) {
+        let tile_key = usize::from(tile) | (usize::from(frame_type.as_byte()) << 6);
+        const LOW: u64 = isolated_prefix(ZERO_TAIL_ORDER);
+        const FIRST: u64 = isolated_prefix(FIRST_AC_TAIL_ORDER);
+        if self.context_remap.is_some() || active & !LOW != 0 {
+            self.record_ac_range(tile, coeffs, frame_type, 1..BLOCK_PIXELS);
+            return;
+        }
+        let first_ac_only = active & !FIRST == 0;
+        let (key, start_order) = if first_ac_only {
+            (tile_key, FIRST_AC_TAIL_ORDER)
+        } else {
+            (TILE_CLASSES + tile_key, ZERO_TAIL_ORDER)
+        };
+        self.record_ac_range(tile, coeffs, frame_type, 1..start_order);
+        self.record_neutral_tail(tile, frame_type, start_order, key, false);
+    }
+
+    fn record_neutral_tail(
+        &mut self,
+        tile: u8,
+        frame_type: FrameType,
+        start_order: usize,
+        key: usize,
+        contiguous: bool,
+    ) {
+        let tail = &mut self.zero_tails[key];
+        if tail.end != 0 {
+            tail.repeats += 1;
+            self.last_context_slot = Some(tail.last_slot);
+            if contiguous {
+                self.bundles.extend_from_within(tail.start..tail.end);
+            } else {
+                self.omitted_tail_records += tail.end - tail.start;
+                self.mark_literals();
+                self.repeats.push(TAIL_KEY + key as u16);
+            }
+        } else {
+            let start = self.bundles.len();
+            let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame_type.as_byte());
+            let contexts = &NEUTRAL_IDS[state][usize::from(tile)];
+            debug_assert_eq!(
+                self.last_context_slot,
+                Some(usize::from(contexts[start_order - 1].0))
+            );
+            self.bundles
+                .extend(contexts[start_order..].iter().map(|&context| BundleRecord {
+                    bundle_type: BundleType::SignificanceRle,
+                    context,
+                    bits: 1,
+                    bit_len: self.width.max(2),
+                    flush: BundleFlushReason::TypeComplete,
+                }));
+            let last = usize::from(contexts[BLOCK_PIXELS - 1].0);
+            self.last_context_slot = Some(last);
+            self.zero_tails[key] = ZeroTail {
+                start,
+                end: self.bundles.len(),
+                last_slot: last,
+                repeats: 1,
+            };
+        }
+    }
+    fn record_ac_range(
+        &mut self,
+        tile: u8,
+        coeffs: &[i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        orders: std::ops::Range<usize>,
+    ) {
+        if self.width == 2 && self.quantizer_bucket == 1 && self.context_remap.is_none() {
+            self.record_ac_range_impl::<true>(tile, coeffs, frame_type, orders);
+        } else {
+            self.record_ac_range_impl::<false>(tile, coeffs, frame_type, orders);
+        }
+    }
+    fn record_ac_range_impl<const DEFAULT: bool>(
+        &mut self,
+        tile: u8,
+        coeffs: &[i16; BLOCK_PIXELS],
+        frame_type: FrameType,
+        orders: std::ops::Range<usize>,
+    ) {
+        let table = &Q16_TILE_HASH[frame_type.as_byte() as usize][tile as usize];
+        let neighbors = neighbor_counts(coeffs);
+        let slots = orders.len() as u64;
+        let (mut nonzero, mut negative, mut odd, mut geq2) = (0_u64, 0_u64, 0_u64, 0_u64);
+        let mut prev_level_abs = 0u8;
+        let mut zero_context = BundleContextId::default();
+        let mut zero_run = 0;
+        for order in orders {
+            let slot = ZIG_ZAG[order];
+            let coeff = coeffs[slot];
+            let (bundle_type, bits, bit_len) = bundle_bits(coeff, self.width);
+            let context = if DEFAULT {
+                let offset = CONTEXT_POSITION[order]
+                    + 4 * usize::from(neighbors[slot].min(3))
+                    + usize::from(level_bucket(prev_level_abs));
+                BundleContextId(table[usize::from(coeff != 0)][offset] ^ order as u16)
+            } else {
+                self.map_context(self.compute_context(
+                    bundle_type,
+                    tile,
+                    order,
+                    neighbors[slot],
+                    coeff,
+                    prev_level_abs,
+                    frame_type,
+                ))
+            };
+            if zero_run > 0 && (coeff != 0 || context != zero_context) {
+                self.emit_zero_run_bundle(zero_context, zero_run);
+                zero_run = 0;
+            }
+            if coeff == 0 {
+                zero_run += 1;
+                zero_context = context;
+            } else {
+                nonzero += 1;
+                negative += u64::from(coeff < 0);
+                odd += u64::from(coeff.unsigned_abs() & 1);
+                geq2 += u64::from(coeff.unsigned_abs() >= 2);
+                self.record_bundle(
+                    bundle_type,
+                    context,
+                    bits,
+                    bit_len,
+                    BundleFlushReason::TypeComplete,
+                );
+            }
+            prev_level_abs = coeff.unsigned_abs().min(255) as u8;
+        }
+        self.stats.significance_one = self.stats.significance_one.saturating_add(nonzero);
+        self.stats.significance_zero = self.stats.significance_zero.saturating_add(slots - nonzero);
+        self.stats.sign_negative = self.stats.sign_negative.saturating_add(negative);
+        self.stats.sign_positive = self.stats.sign_positive.saturating_add(slots - negative);
+        if self.width >= 3 {
+            self.stats.parity_one = self.stats.parity_one.saturating_add(odd);
+        }
+        if self.width >= 4 {
+            self.stats.geq2_one = self.stats.geq2_one.saturating_add(geq2);
+        }
+        self.emit_zero_run_bundle(zero_context, zero_run);
+    }
+    #[inline]
+    fn emit_zero_run_bundle(&mut self, context: BundleContextId, run: u16) {
+        if run == 1 {
+            let slot = self.context_slot(context);
+            self.count_transition(slot, 1);
+            let tally = &mut self.singleton_counts[slot];
+            *tally = tally.saturating_add(1);
+            self.bundles.push(BundleRecord {
+                bundle_type: BundleType::SignificanceRle,
+                context,
+                bits: 1,
+                bit_len: self.width.max(2),
+                flush: BundleFlushReason::TypeComplete,
+            });
+            return;
+        }
+        if run > 1 {
+            self.emit_long_zero_run(context, run);
+        }
+    }
+
+    fn emit_long_zero_run(&mut self, context: BundleContextId, mut run: u16) {
         while run > 0 {
             let (bits, bit_len, consumed) = bundle_zero_run_symbol(run, self.width);
             self.record_bundle(
@@ -3219,52 +5573,57 @@ impl BundleStreamRecorder {
             run = run.saturating_sub(consumed);
         }
     }
-    #[allow(clippy::too_many_arguments)]
     fn compute_context(
         &self,
         bundle_type: BundleType,
-        block_index: usize,
+        block_tile: u8,
         zigzag_order: usize,
-        coeff_slot: usize,
+        neighbor_nz: u8,
         coeff: i16,
         prev_level_abs: u8,
         frame_type: FrameType,
-        coeffs: &[i16; BLOCK_PIXELS],
     ) -> BundleContextId {
-        let block_x = block_index % self.blocks_per_row;
-        let block_y = block_index / self.blocks_per_row;
-        let block_tile = (((block_x as u32) & 0x7) | (((block_y as u32) & 0x7) << 3)) as u8;
-        let neighbor_nz = neighbor_nonzero_count(coeffs, coeff_slot);
-        let subband = subband_class(coeff_slot);
-        let pos_class = position_class(zigzag_order);
-        let prev_bucket = level_bucket(prev_level_abs);
-        let frame_class: u8 = if frame_type == FrameType::Intra { 0 } else { 1 };
-        let coeff_bucket = (coeff != 0) as u8;
-        let mut hash = 0x811C9DC5u32;
-        hash = hash_mix(hash, bundle_type.as_u8() as u32);
-        hash = hash_mix(hash, subband.into());
-        hash = hash_mix(hash, pos_class.into());
-        hash = hash_mix(hash, neighbor_nz.into());
-        hash = hash_mix(hash, prev_bucket.into());
-        hash = hash_mix(hash, self.quantizer_bucket.into());
-        hash = hash_mix(hash, frame_class.into());
-        hash = hash_mix(hash, block_tile.into());
-        hash = hash_mix(hash, coeff_bucket.into());
-        hash = hash_mix(hash, (zigzag_order as u32) & 0x3F);
-        BundleContextId::new((hash & 0xFFFF) as u16)
+        let class = CONTEXT_POSITION[zigzag_order];
+        let prev = level_bucket(prev_level_abs) as usize;
+        let state = usize::from(self.quantizer_bucket) * 2 + usize::from(frame_type.as_byte());
+        let prefix = CONTEXT_PREFIX[state][bundle_type.as_u8() as usize]
+            [class + usize::from(neighbor_nz.min(3)) * 4 + prev];
+        finish_context(prefix, block_tile, coeff != 0, zigzag_order)
     }
 }
-impl BundledHooks for BundleStreamRecorder {
+impl BundledHooks for BundleStreamRecorder<'_> {
+    fn record_zero_run(&mut self, blocks: std::ops::Range<usize>, first_diff: i16) {
+        let count = blocks.len();
+        self.tokens
+            .extend_from_slice(&[BundledToken::DcDiff(first_diff), BundledToken::EndOfBlock]);
+        append_repeated(
+            &mut self.tokens,
+            &[[BundledToken::DcDiff(0), BundledToken::EndOfBlock]; 32],
+            count - 1,
+        );
+        self.queue_dc(blocks, false, FrameType::Predicted);
+    }
+    fn record_dc_only(
+        &mut self,
+        levels: &[i16; BLOCK_PIXELS],
+        diff: i16,
+        index: usize,
+        kind: FrameType,
+    ) {
+        self.queue_dc(index..index + 1, levels[0] != 0, kind);
+        self.tokens
+            .extend_from_slice(&[BundledToken::DcDiff(diff), BundledToken::EndOfBlock]);
+    }
     fn record_block_coeffs(
         &mut self,
         coeffs: &[i16; BLOCK_PIXELS],
-        block_index: usize,
-        frame_type: FrameType,
+        active: u64,
+        index: usize,
+        frame: FrameType,
     ) {
-        self.record_block(block_index, coeffs, frame_type);
+        self.record_masked_block(index, coeffs, frame, active);
     }
     fn record_dc(&mut self, diff: i16) {
-        self.ensure_current_block();
         self.stats.dc_events = self.stats.dc_events.saturating_add(1);
         self.tokens.push(BundledToken::DcDiff(diff));
     }
@@ -3275,62 +5634,11 @@ impl BundledHooks for BundleStreamRecorder {
         if value != 0 {
             self.stats.nonzero_levels = self.stats.nonzero_levels.saturating_add(1);
         }
-        self.record_zero_run(zeros);
-        let slot = self
-            .pop_slot()
-            .expect("non-zero slot must exist after zero run");
-        debug_assert!(slot.is_non_zero);
-        let (bundle_type, bits, len) = bundle_bits(value, self.width);
-        self.record_bundle(
-            bundle_type,
-            slot.context,
-            bits,
-            len,
-            BundleFlushReason::TypeComplete,
-        );
         self.tokens.push(BundledToken::Ac { run: zeros, value });
     }
     fn record_eob(&mut self) {
-        self.flush_pending_zero_slots();
-        self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(1);
-        if let Some(last_context) = self.bundles.last().map(|record| record.context) {
-            self.context_stats_entry(last_context)
-                .record_flush(BundleFlushReason::EndOfBlock);
-        }
-        self.stats.record_flush(BundleFlushReason::EndOfBlock);
+        self.count_eob();
         self.tokens.push(BundledToken::EndOfBlock);
-        self.current_block = None;
-        self.last_context = None;
-    }
-}
-#[derive(Clone, Copy)]
-struct SlotContext {
-    context: BundleContextId,
-    is_non_zero: bool,
-}
-struct BlockBundleState {
-    #[allow(dead_code)]
-    block_index: usize,
-    slots: Vec<SlotContext>,
-    cursor: usize,
-}
-impl BlockBundleState {
-    fn new(block_index: usize, slots: Vec<SlotContext>) -> Self {
-        Self {
-            block_index,
-            slots,
-            cursor: 0,
-        }
-    }
-    fn next_slot(&mut self) -> Option<SlotContext> {
-        let slot = self.slots.get(self.cursor).copied();
-        if slot.is_some() {
-            self.cursor = self.cursor.saturating_add(1);
-        }
-        slot
-    }
-    fn peek_slot(&self) -> Option<SlotContext> {
-        self.slots.get(self.cursor).copied()
     }
 }
 const BUNDLE_ANS_PRECISION_BITS: u8 = 12;
@@ -3622,6 +5930,10 @@ fn encode_bundle_stream(tables: &BundleAnsTables, bundles: &[BundleRecord]) -> V
         encode_bundle_stream_with_opts(tables, bundles, BundleAcceleration::None, 0);
     stream
 }
+fn bundle_symbol(record: &BundleRecord) -> u8 {
+    record.bits & ((1u8 << record.bit_len) - 1)
+}
+
 fn encode_bundle_stream_with_opts(
     tables: &BundleAnsTables,
     bundles: &[BundleRecord],
@@ -3632,10 +5944,7 @@ fn encode_bundle_stream_with_opts(
         .iter()
         .any(|record| matches!(record.bundle_type, BundleType::SignificanceRle));
     if has_rle {
-        let mut stream = Vec::with_capacity(bundles.len());
-        for record in bundles {
-            stream.push(record.bits & ((1u8 << record.bit_len) - 1));
-        }
+        let stream = bundles.iter().map(bundle_symbol).collect();
         // RLE bundles are scalar-only until SIMD tables are calibrated.
         return (stream, BundleAcceleration::None);
     }
@@ -3886,7 +6195,7 @@ fn quantizer_to_bucket(qp: u8) -> u8 {
         _ => 3,
     }
 }
-fn position_class(order: usize) -> u8 {
+const fn position_class(order: usize) -> u8 {
     match order {
         0 => 0,
         1..=4 => 1,
@@ -3895,7 +6204,7 @@ fn position_class(order: usize) -> u8 {
         _ => 4,
     }
 }
-fn subband_class(slot: usize) -> u8 {
+const fn subband_class(slot: usize) -> u8 {
     let row = slot / BLOCK_SIZE;
     let col = slot % BLOCK_SIZE;
     let low_cut = 3;
@@ -3906,23 +6215,167 @@ fn subband_class(slot: usize) -> u8 {
         (false, false) => 3,
     }
 }
-fn neighbor_nonzero_count(coeffs: &[i16; BLOCK_PIXELS], slot: usize) -> u8 {
-    let row = slot / BLOCK_SIZE;
-    let col = slot % BLOCK_SIZE;
-    let mut count = 0u8;
-    if col > 0 && coeffs[row * BLOCK_SIZE + (col - 1)] != 0 {
-        count = count.saturating_add(1);
+// Only the low 16 bits of FNV reach the wire. Multiplication and XOR cannot
+// propagate discarded high bits downward, so each invariant prefix fits in u16.
+const CONTEXT_POSITION: [usize; BLOCK_PIXELS] = {
+    let mut offsets = [0; BLOCK_PIXELS];
+    let mut order = 0;
+    while order < BLOCK_PIXELS {
+        let pos = position_class(order) as usize;
+        let band = subband_class(ZIG_ZAG[order]) as usize;
+        offsets[order] = (pos * 4 + band) * 16;
+        order += 1;
     }
-    if row > 0 && coeffs[(row - 1) * BLOCK_SIZE + col] != 0 {
-        count = count.saturating_add(1);
+    offsets
+};
+// Prefix positions depend solely on support and DC significance. The first AC
+// has no preceding AC level; later ternary levels have magnitude zero or one.
+const SPARSE_CONTEXT_OFFSETS: [[u16; ZERO_TAIL_ORDER - 1]; 64] = {
+    let mut offsets = [[0; ZERO_TAIL_ORDER - 1]; 64];
+    let mut mask = 0;
+    while mask < 64 {
+        let mut occupied = [0; BLOCK_PIXELS];
+        occupied[0] = mask >> 5;
+        let mut i = 0;
+        while i < 5 {
+            occupied[ZIG_ZAG[i + 1]] = (mask >> i) & 1;
+            i += 1;
+        }
+        let mut order = 1;
+        let mut previous = 0;
+        while order < ZERO_TAIL_ORDER {
+            let slot = ZIG_ZAG[order];
+            let (x, y) = (slot % BLOCK_SIZE, slot / BLOCK_SIZE);
+            let mut neighbors = 0;
+            if x > 0 {
+                neighbors += occupied[slot - 1];
+            }
+            if y > 0 {
+                neighbors += occupied[slot - BLOCK_SIZE];
+                if x > 0 {
+                    neighbors += occupied[slot - BLOCK_SIZE - 1];
+                }
+                if x + 1 < BLOCK_SIZE {
+                    neighbors += occupied[slot - BLOCK_SIZE + 1];
+                }
+            }
+            offsets[mask][order - 1] = (CONTEXT_POSITION[order]
+                + 4 * (if neighbors > 3 { 3 } else { neighbors })
+                + previous) as u16;
+            previous = occupied[slot];
+            order += 1;
+        }
+        mask += 1;
     }
-    if row > 0 && col > 0 && coeffs[(row - 1) * BLOCK_SIZE + (col - 1)] != 0 {
-        count = count.saturating_add(1);
+    offsets
+};
+
+const fn finish_context(prefix: u16, tile: u8, nonzero: bool, order: usize) -> BundleContextId {
+    let hash = hash_mix(prefix as u32, tile as u32);
+    let hash = hash_mix(hash, nonzero as u32);
+    BundleContextId::new(hash_mix(hash, (order & 63) as u32) as u16)
+}
+// A neutral coefficient has no occupied neighbor or predecessor. Check
+// every tile and state when building the table: each zero in a neutral
+// suffix emits one singleton and its predecessor has a different context.
+static NEUTRAL_IDS: [[[BundleContextId; BLOCK_PIXELS]; 64]; 8] = {
+    let mut out = [[[BundleContextId(0); BLOCK_PIXELS]; 64]; 8];
+    let mut state = 0;
+    while state < 8 {
+        let mut tile = 0;
+        while tile < 64 {
+            let mut z = 1;
+            while z < BLOCK_PIXELS {
+                let ctx = finish_context(
+                    CONTEXT_PREFIX[state][0][CONTEXT_POSITION[z]],
+                    tile as u8,
+                    false,
+                    z,
+                );
+                if z >= FIRST_AC_TAIL_ORDER {
+                    assert!(out[state][tile][z - 1].0 != ctx.0);
+                }
+                out[state][tile][z] = ctx;
+                z += 1;
+            }
+            tile += 1;
+        }
+        state += 1;
     }
-    if row > 0 && col + 1 < BLOCK_SIZE && coeffs[(row - 1) * BLOCK_SIZE + (col + 1)] != 0 {
-        count = count.saturating_add(1);
+    out
+};
+
+// Within a Q16 tile the hash through significance depends only on the
+// context geometry and whether the coefficient is occupied at bundle width two.
+static Q16_TILE_HASH: [[[[u16; 320]; 2]; 64]; 2] = {
+    let mut table = [[[[0; 320]; 2]; 64]; 2];
+    let mut f = 0;
+    while f < 2 {
+        let mut t = 0;
+        while t < 64 {
+            let mut occupied = 0;
+            while occupied < 2 {
+                let mut k = 0;
+                while k < 320 {
+                    let prefix = CONTEXT_PREFIX[2 + f][occupied][k];
+                    table[f][t][occupied][k] = hash_mix(
+                        hash_mix(hash_mix(prefix as u32, t as u32), occupied as u32),
+                        0,
+                    ) as u16;
+                    k += 1;
+                }
+                occupied += 1;
+            }
+            t += 1;
+        }
+        f += 1;
     }
-    count.min(3)
+    table
+};
+
+static CONTEXT_PREFIX: [[[u16; 5 * 4 * 16]; 5]; 8] = {
+    let mut table = [[[0; 5 * 4 * 16]; 5]; 8];
+    let mut state = 0;
+    while state < table.len() {
+        let mut kind = 0;
+        while kind < table[state].len() {
+            let mut index = 0;
+            while index < table[state][kind].len() {
+                let band = (index / 16) % 4;
+                let pos = index / 64;
+                let neighbors = (index / 4) % 4;
+                let previous = index % 4;
+                let mut hash = hash_mix(0x811C9DC5, kind as u32);
+                hash = hash_mix(hash, band as u32);
+                hash = hash_mix(hash, pos as u32);
+                hash = hash_mix(hash, neighbors as u32);
+                hash = hash_mix(hash, previous as u32);
+                hash = hash_mix(hash, (state / 2) as u32);
+                table[state][kind][index] = hash_mix(hash, (state % 2) as u32) as u16;
+                index += 1;
+            }
+            kind += 1;
+        }
+        state += 1;
+    }
+    table
+};
+/// Eight independent byte lanes sum the left neighbor and three neighbors
+/// from the row above. A lane holds at most four, so addition cannot carry.
+fn neighbor_counts(coeffs: &[i16; BLOCK_PIXELS]) -> [u8; BLOCK_PIXELS] {
+    let mut counts = [0; BLOCK_PIXELS];
+    let mut above = 0;
+    for (coeff_row, out) in coeffs
+        .as_chunks::<BLOCK_SIZE>()
+        .0
+        .iter()
+        .zip(counts.as_chunks_mut::<BLOCK_SIZE>().0)
+    {
+        let row = u64::from_le_bytes(coeff_row.map(|v| u8::from(v != 0)));
+        *out = ((row << 8) + (above << 8) + above + (above >> 8)).to_le_bytes();
+        above = row;
+    }
+    counts
 }
 fn level_bucket(value: u8) -> u8 {
     match value {
@@ -3932,49 +6385,106 @@ fn level_bucket(value: u8) -> u8 {
         _ => 3,
     }
 }
-fn hash_mix(acc: u32, value: u32) -> u32 {
+const fn hash_mix(acc: u32, value: u32) -> u32 {
     acc.wrapping_mul(16777619) ^ value
 }
+/// Seed short runs from a constant slab and double longer runs from the output.
+fn append_repeated<T: Copy, const N: usize>(
+    out: &mut Vec<T>,
+    periods: &[[T; N]; 32],
+    count: usize,
+) {
+    let start = out.len();
+    let total = count * N;
+    out.reserve(total);
+    let seed = count.min(periods.len());
+    out.extend_from_slice(periods[..seed].as_flattened());
+    let mut written = seed * N;
+    while written < total {
+        let next = written.min(total - written);
+        out.extend_from_within(start..start + next);
+        written += next;
+    }
+}
+
+/// Emit consecutive predicted blocks whose quantized residuals are identically zero.
+fn emit_zero_run(
+    blocks: std::ops::Range<usize>,
+    prev_dc: &mut i16,
+    payload: &mut Vec<u8>,
+    hooks: &mut impl BundledHooks,
+) {
+    let first_diff = prev_dc.wrapping_neg();
+    let count = blocks.len();
+    hooks.record_zero_run(blocks, first_diff);
+    let [lo, hi] = first_diff.to_le_bytes();
+    payload.extend_from_slice(&[lo, hi, RLE_EOB, 0, 0]);
+    append_repeated(payload, &[[0, 0, RLE_EOB, 0, 0]; 32], count - 1);
+    *prev_dc = 0;
+}
+
+fn emit_dc_block(
+    levels: &[i16; BLOCK_PIXELS],
+    prev_dc: &mut i16,
+    payload: &mut Vec<u8>,
+    hooks: &mut impl BundledHooks,
+    block_index: usize,
+    frame_type: FrameType,
+) {
+    let diff = levels[0].wrapping_sub(*prev_dc);
+    hooks.record_dc_only(levels, diff, block_index, frame_type);
+    let [lo, hi] = diff.to_le_bytes();
+    payload.extend_from_slice(&[lo, hi, RLE_EOB, 0, 0]);
+    *prev_dc = levels[0];
+}
+
+#[cfg(test)]
 pub(crate) fn encode_block_rle(
     coeffs: &[i16; BLOCK_PIXELS],
     prev_dc: &mut i16,
     out: &mut Vec<u8>,
-    hooks: &mut dyn BundledHooks,
+    hooks: &mut impl BundledHooks,
     block_index: usize,
     frame_type: FrameType,
 ) {
-    hooks.record_block_coeffs(coeffs, block_index, frame_type);
+    encode_active_block(
+        coeffs,
+        ac_support(coeffs),
+        prev_dc,
+        out,
+        hooks,
+        block_index,
+        frame_type,
+    )
+}
+
+fn encode_active_block(
+    coeffs: &[i16; BLOCK_PIXELS],
+    mut active: u64,
+    prev_dc: &mut i16,
+    out: &mut Vec<u8>,
+    hooks: &mut impl BundledHooks,
+    block_index: usize,
+    frame_type: FrameType,
+) {
+    hooks.record_block_coeffs(coeffs, active, block_index, frame_type);
     let dc = coeffs[0];
     let diff = dc.wrapping_sub(*prev_dc);
     out.extend_from_slice(&diff.to_le_bytes());
     hooks.record_dc(diff);
     *prev_dc = dc;
-    let mut pos = 1usize;
-    while pos < BLOCK_PIXELS {
-        let mut zero_run = 0usize;
-        while pos < BLOCK_PIXELS && coeffs[ZIG_ZAG[pos]] == 0 {
-            zero_run += 1;
-            pos += 1;
-        }
-        if pos == BLOCK_PIXELS {
-            out.push(RLE_EOB);
-            out.extend_from_slice(&0i16.to_le_bytes());
-            hooks.record_eob();
-            return;
-        }
-        while zero_run > MAX_ZERO_RUN {
-            out.push(MAX_ZERO_RUN as u8);
-            out.extend_from_slice(&0i16.to_le_bytes());
-            hooks.record_ac(MAX_ZERO_RUN as u8, 0);
-            zero_run -= MAX_ZERO_RUN;
-        }
-        out.push(zero_run as u8);
-        out.extend_from_slice(&coeffs[ZIG_ZAG[pos]].to_le_bytes());
-        hooks.record_ac(zero_run as u8, coeffs[ZIG_ZAG[pos]]);
-        pos += 1;
+    let mut first = 1;
+    while active != 0 {
+        let order = active.trailing_zeros() as usize;
+        let zeros = (order - first) as u8;
+        let level = coeffs[ZIG_ZAG[order]];
+        let [lo, hi] = level.to_le_bytes();
+        out.extend_from_slice(&[zeros, lo, hi]);
+        hooks.record_ac(zeros, level);
+        active &= active - 1;
+        first = order + 1;
     }
-    out.push(RLE_EOB);
-    out.extend_from_slice(&0i16.to_le_bytes());
+    out.extend_from_slice(&[RLE_EOB, 0, 0]);
     hooks.record_eob();
 }
 fn take_block_i16_le(

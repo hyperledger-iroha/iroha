@@ -1,7 +1,8 @@
 //! Proof parameters and their soundness accounting.
 //!
-//! Security uses the Johnson-regime bound for DEEP-FRI, never the "up to capacity" conjecture,
-//! which Diamond–Gruen (ePrint 2025/2010) and Crites–Stewart (ePrint 2025/2046) refuted in 2025.
+//! The parameter estimator uses Johnson-regime DEEP-FRI accounting. Its interpretation as a
+//! Fiat–Shamir soundness bound depends on the round-by-round composition in section 7 of
+//! `specs/execution_stark_v1.md`, including joint lookup extraction and the shifted DEEP batch.
 //!
 //! - Query phase (BCIKS20 Thm 8.3, ethSTARK v1.2 eq. 10; Haböck ePrint 2022/1216 Thm 8): each
 //!   query lets a cheating prover through with probability at most `sqrt(rho+) * (1 + 1/(2m))`,
@@ -10,13 +11,16 @@
 //!   bound of BCHKS25, ePrint 2025/2055, is tighter). At the standard blowup 8 and `N <= 2^25`,
 //!   this base term is below `2^-153`. The estimator also accounts for DEEP batch width, folding
 //!   arity and round count; the base-term example is not a bound for every supported parameter set.
-//! - DEEP/ALI: `L+ (C + d (k+2) + k) / |F|` with list size `L+ = (m + 1/2)/sqrt(rho+)`.
-//! - LogUp (Haböck ePrint 2022/1530): `(lookups * rows + table) / |F|`.
+//! - DEEP/ALI: the interactive single-list estimate `L+ (C + d (k+2) + k) / |F|` with list
+//!   size `L+ = (m + 1/2)/sqrt(rho+)`. A round-by-round mapping must justify separate prefix errors.
+//! - LogUp (Haböck ePrint 2022/1530): `(lookups * rows + table) / |F|`, over the range argument and
+//!   the fixed-table argument together for a fixed trace. Clearing the shared sum gives one
+//!   bivariate polynomial in the independent challenges.
 //!
 //! Each round must stay below `2^-(lambda+1)` for `lambda` bits after Fiat–Shamir (ethSTARK v1.2
 //! Cor. 3), so queries are sized for 129 bits. Native 384-bit BLAKE2b digests give the BCS hash
 //! term `3(T^2+1)/2^384`, imposing a 190.5-bit hash ceiling; the full budget is the minimum of
-//! that ceiling and the circuit-specific algebraic terms. This is a classical random-oracle bound.
+//! that ceiling and the circuit-specific algebraic terms, under the classical random-oracle model.
 //! Grinding is applied before query sampling but never counted.
 
 /// Proof-system parameters.
@@ -62,8 +66,8 @@ pub enum ParamsError {
     /// The blowup is smaller than the quotient domain the constraint degree needs.
     #[error("blowup too small for the constraint degree")]
     QuotientBlowup,
-    /// A FRI fold needs more points than its layer's codeword has.
-    #[error("FRI folding exceeds a layer's domain")]
+    /// A FRI fold would exceed the layer's remaining degree bound.
+    #[error("FRI folding exceeds a layer's degree bound")]
     FoldGeometry,
     /// Opened rows or the worst-case decoded element count exceed the proof codec's limits.
     #[error("proof dimensions exceed the codec's limits")]
@@ -90,21 +94,71 @@ pub enum SecurityError {
     InsufficientSecurity,
 }
 
-/// Lookup occurrences over every row, padding included (the exact sum of the multiplicities).
+/// Lookup occurrences over every row, padding included (the exact sum of the multiplicities), for
+/// both LogUp arguments together.
 ///
 /// # Errors
 /// Rejects counts that overflow or reach the field characteristic.
 pub fn lookup_occurrences(circuit: &crate::Circuit) -> Result<u64, ParamsError> {
-    let rows = 1u64
-        .checked_shl(circuit.log_rows)
-        .filter(|_| circuit.log_rows < 64)
-        .ok_or(ParamsError::Overflow)?;
-    let lookups = u64::try_from(circuit.lookups.len()).map_err(|_| ParamsError::Overflow)?;
-    let total = rows.checked_mul(lookups).ok_or(ParamsError::Overflow)?;
+    let (range, tables) = lookup_occurrences_by_argument(circuit)?;
+    let total = range.checked_add(tables).ok_or(ParamsError::Overflow)?;
     if total >= crate::field::MODULUS {
         return Err(ParamsError::Circuit);
     }
     Ok(total)
+}
+
+/// Lookup occurrences over every row of the range argument and of the table argument (the exact sums
+/// of each argument's multiplicities).
+///
+/// # Errors
+/// Rejects counts that overflow or reach the field characteristic.
+pub fn lookup_occurrences_by_argument(circuit: &crate::Circuit) -> Result<(u64, u64), ParamsError> {
+    let rows = 1u64
+        .checked_shl(circuit.log_rows)
+        .filter(|_| circuit.log_rows < 64)
+        .ok_or(ParamsError::Overflow)?;
+    let count = |lookups: usize| -> Result<u64, ParamsError> {
+        let lookups = u64::try_from(lookups).map_err(|_| ParamsError::Overflow)?;
+        let total = rows.checked_mul(lookups).ok_or(ParamsError::Overflow)?;
+        if total >= crate::field::MODULUS {
+            return Err(ParamsError::Circuit);
+        }
+        Ok(total)
+    };
+    Ok((
+        count(circuit.lookups.len())?,
+        count(circuit.table_lookups.len())?,
+    ))
+}
+
+/// Checks the fixed tables a circuit reads: each nonempty with its recorded minimum, spanning less
+/// than the range table, all together at most [`crate::circuit::MAX_FIXED_TABLE_ROWS`] rows, and
+/// present whenever there are table lookups. The packing then stays below `2^62`.
+fn check_tables(circuit: &crate::Circuit) -> Result<(), ParamsError> {
+    if !circuit.table_lookups.is_empty() && circuit.tables.is_empty() {
+        return Err(ParamsError::Circuit);
+    }
+    let mut rows = 0usize;
+    for table in &circuit.tables {
+        let (Some(min), Some(max)) = (table.values.iter().min(), table.values.iter().max()) else {
+            return Err(ParamsError::Circuit);
+        };
+        if *min != table.min
+            || i128::from(*min) < -crate::circuit::MAX_MAGNITUDE
+            || i128::from(*max) > crate::circuit::MAX_MAGNITUDE
+            || i128::from(*max) - i128::from(*min) >= 1i128 << circuit.range_bits
+        {
+            return Err(ParamsError::Circuit);
+        }
+        rows = rows
+            .checked_add(table.values.len())
+            .ok_or(ParamsError::Overflow)?;
+    }
+    if rows > crate::circuit::MAX_FIXED_TABLE_ROWS {
+        return Err(ParamsError::Circuit);
+    }
+    Ok(())
 }
 
 /// The dimensions of a circuit that enter its soundness bound.
@@ -116,10 +170,10 @@ pub struct SecurityShape {
     pub max_degree: u32,
     /// Identities combined in the composition (circuit, boundary and LogUp).
     pub identities: usize,
-    /// Lookups per row.
+    /// Lookups per row, range and table lookups together.
     pub lookups: usize,
-    /// `log2` of the range-table size.
-    pub table_bits: u32,
+    /// Entries of the LogUp tables: the `2^range_bits` range values plus every fixed-table row.
+    pub table: u64,
     /// Polynomials combined in the DEEP batch.
     pub batched: usize,
 }
@@ -128,7 +182,7 @@ impl SecurityShape {
     /// The shape of a circuit.
     pub fn of(circuit: &crate::Circuit) -> Self {
         let shape = crate::air::quotient_shape(circuit);
-        let has_lookups = !circuit.lookups.is_empty();
+        let has_lookups = circuit.has_lookups();
         let aux = if has_lookups {
             circuit.helper_count() + 1
         } else {
@@ -144,8 +198,8 @@ impl SecurityShape {
                 } else {
                     0
                 },
-            lookups: circuit.lookups.len(),
-            table_bits: circuit.range_bits,
+            lookups: circuit.lookups.len() + circuit.table_lookups.len(),
+            table: (1u64 << circuit.range_bits) + circuit.fixed_table_rows() as u64,
             batched: circuit.columns.len()
                 + aux
                 + shape.chunks()
@@ -195,19 +249,19 @@ impl Params {
         if quotient_log > self.log_blowup {
             return Err(ParamsError::QuotientBlowup);
         }
-        // Track the codeword size separately from the degree bound: a last fold may round the
-        // degree down to a constant but still needs `arity` codeword entries.
-        let (mut log_degree, mut log_codeword) = (circuit.log_rows, log_lde);
+        // An arity-A fold divides both the degree bound and codeword size by A. Rounding
+        // an undersized degree bound up to one would increase the rate used by the estimator.
+        let mut log_degree = circuit.log_rows;
         while log_degree > self.fri_log_final_degree {
-            log_codeword = log_codeword
+            log_degree = log_degree
                 .checked_sub(self.fri_log_arity)
                 .ok_or(ParamsError::FoldGeometry)?;
-            log_degree = log_degree.saturating_sub(self.fri_log_arity);
         }
-        let aux_width = if circuit.lookups.is_empty() {
-            0
-        } else {
+        check_tables(circuit)?;
+        let aux_width = if circuit.has_lookups() {
             (circuit.helper_count() + 1) * 4
+        } else {
+            0
         };
         if [circuit.columns.len(), aux_width, shape.chunks() * 4]
             .into_iter()
@@ -295,8 +349,9 @@ impl Params {
     /// `2^-(lambda+1)`). At the smallest trace the standard query term is 129.522 bits before
     /// this margin, so it contributes 128.522 bits; another term can lower the reported budget.
     ///
-    /// The commit term carries the DEEP batch width (Haböck 2022/1216 Thm 2: factor `L - 1/2`) and
-    /// the LogUp term counts every lookup of every row plus the table.
+    /// The commit term carries the DEEP batch width. The LogUp term counts every lookup of every
+    /// row plus the table for a fixed trace. Section 7 of `specs/execution_stark_v1.md` gives the
+    /// remaining proof obligations for interpreting this parameter budget end to end.
     #[allow(clippy::cast_precision_loss)] // counts are far below 2^52
     pub fn proven_security_bits(&self, shape: &SecurityShape) -> f64 {
         let log_rows = shape.log_rows;
@@ -306,9 +361,10 @@ impl Params {
         let query = self.bits_per_query(log_rows) * self.queries as f64;
         // Commit phase: per folding round, (m + 1/2)^7 / (2 rho^1.5) * N^2 / |F|, times arity - 1
         // for power batching, the number of rounds and the batch width.
-        let rounds = f64::from(log_rows.saturating_sub(self.fri_log_final_degree))
-            / f64::from(self.fri_log_arity.max(1))
-            + 1.0;
+        let folds = log_rows
+            .saturating_sub(self.fri_log_final_degree)
+            .div_ceil(self.fri_log_arity.max(1));
+        let rounds = f64::from(folds) + 1.0;
         let arity = 2f64.powi(i32::try_from(self.fri_log_arity).expect("small"));
         let gap_log = 7.0f64.mul_add((JOHNSON_M + 0.5).log2(), -(2.0 * rho.powf(1.5)).log2());
         let commit_log = 2.0f64.mul_add(log_lde, gap_log)
@@ -324,8 +380,8 @@ impl Params {
             .log2()
             + list_log;
         let ali = EXTENSION_FIELD_BITS - ali_log;
-        // LogUp: (lookups * rows + table) / |F|.
-        let table = 2f64.powi(i32::try_from(shape.table_bits).expect("small"));
+        // Total-degree estimate for the fixed trace's shared range and fixed-table lookup sum.
+        let table = shape.table as f64;
         let logup = EXTENSION_FIELD_BITS - (shape.lookups as f64).mul_add(rows, table).log2();
         query.min(commit).min(ali).min(logup) - 1.0
     }
@@ -344,6 +400,57 @@ impl Params {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folds_must_preserve_the_configured_rate_down_to_the_last_layer() {
+        let params = Params {
+            fri_log_arity: 4,
+            fri_log_final_degree: 0,
+            ..Params::standard()
+        };
+        let circuit = |log_rows| {
+            let mut builder = crate::Builder::new("FRI geometry", log_rows);
+            builder.materialize(&crate::Expr::constant(0), "zero");
+            builder.finish()
+        };
+        // Two complete arity-16 folds reach a constant at the configured blowup.
+        assert_eq!(params.check(&circuit(8)), Ok(()));
+        // At nine bits a third fold would consume four degree bits when only one remains.
+        let partial = circuit(9);
+        assert_eq!(params.check(&partial), Err(ParamsError::FoldGeometry));
+        assert_eq!(
+            params.check_security(&partial, TARGET_SECURITY_BITS),
+            Err(SecurityError::Parameters(ParamsError::FoldGeometry))
+        );
+        let stop_earlier = Params {
+            fri_log_final_degree: 1,
+            ..params
+        };
+        assert_eq!(stop_earlier.check(&partial), Ok(()));
+    }
+
+    #[test]
+    fn equal_fold_counts_have_the_same_commit_budget() {
+        let circuit = crate::Builder::new("two folds", 8).finish();
+        // With enough queries the commit term controls the reported budget. Both caps
+        // allow exactly two arity-16 folds, going from 8 degree bits to 4 to 0.
+        let exact = Params {
+            queries: 512,
+            fri_log_arity: 4,
+            fri_log_final_degree: 0,
+            ..Params::standard()
+        };
+        let below_cap = Params {
+            fri_log_final_degree: 1,
+            ..exact
+        };
+        let shape = SecurityShape::of(&circuit);
+        assert_eq!(below_cap.check(&circuit), Ok(()));
+        assert!(
+            (exact.proven_security_bits(&shape) - below_cap.proven_security_bits(&shape)).abs()
+                < f64::EPSILON
+        );
+    }
 
     #[test]
     fn supported_parameters_fit_the_total_decoder_budget() {
@@ -385,7 +492,7 @@ mod tests {
                 max_degree: 5,
                 identities: 100_000,
                 lookups: 4_000,
-                table_bits: 16,
+                table: 1 << 16,
                 batched: 10_000,
             };
             let bits = params.proven_security_bits(&shape);
@@ -407,7 +514,7 @@ mod tests {
             max_degree: 3,
             identities: 1_000,
             lookups: 1_000,
-            table_bits: 16,
+            table: 1 << 16,
             batched: 2_000,
         };
         assert!(fewer.proven_security_bits(&shape) < 128.0);

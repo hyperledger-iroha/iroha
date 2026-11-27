@@ -74,7 +74,11 @@ pub(super) fn run(bundle: &str, profile: &str) -> io::Result<()> {
     );
     println!(
         "payment_pair_bytes={} payment_envelope_bytes={} payment_peer_bytes={} maximum_receive_status_peer_bytes={} maximum_later_send_status_peer_bytes={}",
-        sizes.payment_pair, sizes.payment_envelope, sizes.payment_peer, sizes.receive_status_peer, sizes.later_send_status_peer
+        sizes.payment_pair,
+        sizes.payment_envelope,
+        sizes.payment_peer,
+        sizes.receive_status_peer,
+        sizes.later_send_status_peer
     );
     for (
         curve,

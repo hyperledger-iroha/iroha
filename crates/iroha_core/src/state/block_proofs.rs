@@ -770,15 +770,17 @@ impl KagemushaLedgerEntryOwnerV1 {
                 let value = instruction.as_any();
                 if let Some(ledger) = value.downcast_ref::<KagemushaWalletLedgerV1>() {
                     KagemushaLedgerAttemptV1::from_instruction(ledger).transpose()
-                } else if let Some(activation) = value.downcast_ref::<ActivateKagemushaSpartanV1>() {
+                } else if let Some(activation) = value.downcast_ref::<ActivateKagemushaSpartanV1>()
+                {
                     (activation.wallet != [0; 32]
                         && !activation.activation.is_empty()
-                        && activation.activation.len() <= ActivateKagemushaSpartanV1::MAX_ACTIVATION_BYTES)
-                    .then_some(Ok(KagemushaLedgerAttemptV1 {
-                        scheme: activation.scheme,
-                        wallet: activation.wallet,
-                        kind: KagemushaLedgerAttemptKindV1::Activate,
-                    }))
+                        && activation.activation.len()
+                            <= ActivateKagemushaSpartanV1::MAX_ACTIVATION_BYTES)
+                        .then_some(Ok(KagemushaLedgerAttemptV1 {
+                            scheme: activation.scheme,
+                            wallet: activation.wallet,
+                            kind: KagemushaLedgerAttemptKindV1::Activate,
+                        }))
                 } else {
                     value
                         .downcast_ref::<UnloadKagemushaSpartanV1>()

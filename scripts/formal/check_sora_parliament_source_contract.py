@@ -1638,7 +1638,8 @@ def require_block_start_construction(state: str) -> None:
         (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
         (policy_path, "cb1254ebf9560191d283805b3bd89f3f7369cd4216b56f9596648b69e6ffc00a"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
-        (hydration_path, "30b0ad1d1de3e74e938da7501266250fa09e94358060a05c1f622feaae6c9670"),
+        # Optional proposal selection reads the existing hydration result with try_read().
+        (hydration_path, "9c22d1de740ba0c367d60a7a74673def99e1d03408698fda6a82b15f787e035d"),
     ):
         if rust_token_digest(sources[location]) != expected:
             raise RuntimeError(f"{location}: start construction changed its defining module tokens")
@@ -5200,6 +5201,7 @@ def require_signed_deferred_authority_and_native_fees(
     require(authority_path, recursive, (
         "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
+        "crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)",
         "MultisigInstructionBox::Propose(proposal)",
         "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "MultisigInstructionBox::Approve(approval)",
@@ -5896,7 +5898,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "4b9974d3930ed01fce14630a8bcda376a63204aab8e8f2867917762549843f15":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "fa9b3d69ccbdec58af9c70cfd757d7b5a6a55583417d6c387cf11ea88db71c87":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):

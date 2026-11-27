@@ -1026,12 +1026,24 @@ fn trace_with<C: PastaCurve>(
         alpha,
         gamma,
     };
-    let (weights, kappa, eq_row, coefficient, r_col) = match &rel {
+    let opening = match &rel {
         Some(r) => spartan::relation(shape, &chs, &io_full, r.as_ref()),
         None => spartan::relation(shape, &chs, &inst.io, &r1cs::Toy),
     };
+    // Framed proofs have exactly col_bits rounds. Also reject manually supplied
+    // proof or claim vectors of a different dimension without expanding them.
+    let dimensions_match =
+        proof.ipa.lr.len() == shape.col_bits && claims.iter().all(|c| c.us.len() == shape.col_bits);
+    let folded_weight = |us: &[F<C>]| {
+        if dimensions_match {
+            opening.folded_weight(shape, &chs, us)
+        } else {
+            F::<C>::ZERO
+        }
+    };
+    let kappa = opening.kappa;
     let rounds: Vec<Aff<C>> = proof.outer.iter().chain(&proof.inner).copied().collect();
-    let p = spartan::combined_commitment::<C>(&rows, &rounds, &eq_row, gamma);
+    let p = spartan::combined_commitment::<C>(&rows, &rounds, &opening.eq_row, gamma);
     // Inherited claims, folded in clear.
     let (mut p_claims, mut kappa_claims, mut xi) = (p, kappa, F::<C>::ZERO);
     let mut claim_values = Vec::new();
@@ -1043,8 +1055,7 @@ fn trace_with<C: PastaCurve>(
         let mut power = F::<C>::ONE;
         for claim in claims {
             power *= xi;
-            let s = s_vector(&claim.us);
-            let value: F<C> = s.iter().zip(&weights).map(|(a, b)| *a * b).sum();
+            let value = folded_weight(&claim.us);
             claim_values.push(value);
             kappa_claims += power * value;
             p_claims += C::from(claim.g) * power;
@@ -1065,14 +1076,15 @@ fn trace_with<C: PastaCurve>(
         trail.push(folded);
         us.push(u);
     }
-    let b_final = spartan::b_final_slots(shape, &chs, coefficient, &r_col, &us);
+    let b_final = folded_weight(&us);
     t.point(b"ipa/G", &proof.ipa.g_final);
     t.point(b"ipa/A", &proof.ipa.a);
     let c = ch(&mut t, Kind::Endo);
     let lhs = (C::from(proof.ipa.g_final) + u_point * b_final) * proof.ipa.z1
         + C::from(gens.h) * proof.ipa.z2;
-    let accepts =
-        !bool::from(C::from(proof.ipa.a).is_identity()) && lhs == C::from(proof.ipa.a) + folded * c;
+    let accepts = dimensions_match
+        && !bool::from(C::from(proof.ipa.a).is_identity())
+        && lhs == C::from(proof.ipa.a) + folded * c;
     Trace {
         challenges: log,
         header,
@@ -1094,8 +1106,8 @@ fn trace_with<C: PastaCurve>(
         us,
         c,
         b_final,
-        coefficient,
-        r_col,
+        coefficient: opening.coefficient,
+        r_col: opening.r_col,
         accepts,
         link: link_words,
         circuit: ctrace,

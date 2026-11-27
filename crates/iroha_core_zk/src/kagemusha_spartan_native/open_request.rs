@@ -247,11 +247,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             Some(original) => {
                 let verified = self.verify_payment(original).map_err(provider_error)?;
                 self.engine.encode_credit_status_peer(
-                    &capsule, &retained.record, &request, &verified, &self.parameters,
+                    &capsule,
+                    &retained.record,
+                    &request,
+                    &verified,
+                    &self.parameters,
                 )
             }
             None => self.engine.encode_retained_credit_status_peer(
-                &capsule, &retained.record, &request, &self.parameters,
+                &capsule,
+                &retained.record,
+                &request,
+                &self.parameters,
             ),
         };
         proof.map_err(provider_error)
@@ -295,7 +302,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1 + 'static, S> FutureRu
             (Some(original), _) => original,
             (None, true) => return Err(lost("released Send open Request original")),
             (None, false) => {
-                prepared.verify_recovered_send_request(open_request).map_err(provider_error)?;
+                prepared
+                    .verify_recovered_send_request(open_request)
+                    .map_err(provider_error)?;
                 open_request
             }
         };

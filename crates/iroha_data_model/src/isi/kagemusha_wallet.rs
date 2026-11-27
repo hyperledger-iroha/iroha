@@ -3,12 +3,12 @@
 use super::*;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, asset::AssetBalanceScope};
 
-/// Separately governed Spartan program installation and Unload interfaces.
-pub mod spartan;
 /// Authenticated successful Load transactions on the selected global chain.
 pub mod load_finality;
 /// Native-finality authentication of actual successful Global asset registration.
 pub mod registration_finality;
+/// Separately governed Spartan program installation and Unload interfaces.
+pub mod spartan;
 
 pub use load_finality::KagemushaWalletLoadReceiptV1;
 

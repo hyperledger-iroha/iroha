@@ -103,9 +103,11 @@ fn original_root(view: &StateQueryView<'_>) -> Result<RuntimeRetirementRootV1, A
         .certified_from_execution(height, |_, _| Ok(()))
         .map_err(|error| error.map_rejection(invalid))?;
     let original = certified.committed();
+    // The native tip names the committed block's hash `iroha_hash`.
+    let same_block = original.block_hash() == tip.iroha_hash();
     if tip.root_scope() != chain.root_scope()
         || original.root_scope() != chain.root_scope()
-        || original.block_hash() != tip.iroha_hash()
+        || !same_block
         || original.core_hash() != tip.core_hash()
         || original.result() != tip.result()
     {

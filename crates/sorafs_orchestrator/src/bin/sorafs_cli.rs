@@ -345,6 +345,7 @@ fn run() -> Result<(), String> {
                 "build" => manifest_build(args.collect()),
                 "submit" => manifest_submit(args.collect()),
                 "proposal" => manifest_proposal(args.collect()),
+                "retire-instruction" => manifest_retire_instruction(args.collect()),
                 _ => Err(usage()),
             }
         }
@@ -599,6 +600,8 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut prepared_digest: Option<String> = None;
     let mut finality_checkpoint: Option<PathBuf> = None;
     let mut provider_urls = Vec::new();
+    let mut client_deadline = deploy_publication::PUBLICATION_TIMEOUT;
+    let mut staged_provider_limit: Option<usize> = None;
     let mut payload_path: Option<PathBuf> = None;
     let mut client_config_path: Option<PathBuf> = None;
     let mut torii_url_override: Option<String> = None;
@@ -621,6 +624,18 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             "--prepared-package-blake3-hex" => prepared_digest = Some(value.to_owned()),
             "--finality-checkpoint" => finality_checkpoint = Some(PathBuf::from(value)),
             "--provider-url" => provider_urls.push(value.to_owned()),
+            "--client-deadline-secs" => {
+                client_deadline = deploy_publication::parse_client_deadline(value)?;
+            }
+            "--stage-providers" => {
+                staged_provider_limit = Some(
+                    value
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|limit| *limit != 0)
+                        .ok_or_else(|| "--stage-providers must be a positive integer".to_owned())?,
+                );
+            }
             "--payload" => payload_path = Some(PathBuf::from(value)),
             "--client-config" => client_config_path = Some(PathBuf::from(value)),
             "--torii-url" => torii_url_override = Some(value.to_string()),
@@ -646,6 +661,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
     let client_config = load_deploy_client_config(&client_config_path)?;
+    // Account literals inside JSON request and response bodies (the `/v1/fees/quote` draft and
+    // its quote) use the I105 discriminant in scope. Bind this config's network for the whole
+    // deployment, or the SORA mainnet default is encoded and other networks refuse the payload.
+    let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        client_config.chain_discriminant,
+    );
     let finality_checkpoint = finality_checkpoint.ok_or_else(|| "deploy requires --finality-checkpoint=PATH containing an independently trusted canonical SumeragiFinalityCheckpoint for the configured network and chain".to_owned())?;
     let (checkpoint, tip) = deploy_publication::load_checkpoint(
         &finality_checkpoint,
@@ -720,7 +741,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             &pack_summary_path,
             &manifest_path,
             &manifest_json_path,
-            da_package.as_ref().map(|package| package.policy.clone()),
+            da_package.as_ref().map(|package| package.policy),
         )
     };
     let mut receipt = Map::new();
@@ -783,8 +804,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         private_key: &client_config.private_key,
         alias_inputs: None,
     };
-    let session =
-        deploy_publication::PublicationSession::begin(&client, &torii_base_url, &client_config);
+    let session = deploy_publication::PublicationSession::begin(
+        &client,
+        &torii_base_url,
+        &client_config,
+        client_deadline,
+    );
     let registration = deploy_publication::register_if_absent(
         session,
         &submit_request,
@@ -887,7 +912,10 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             &mut artifacts,
             registration_hash,
             checkpoint,
-            &provider_urls,
+            &deploy_publication::SourceSupply {
+                endpoints: &provider_urls,
+                staged_provider_limit,
+            },
             &out_dir,
         )
     } else {
@@ -1241,6 +1269,66 @@ fn build_gateway_expectations(
         bytes: payload_bytes.len() as u64,
         blake3_hex: hex_encode(blake3_hash(payload_bytes).as_bytes()),
     }])
+}
+/// Print the `iroha tx prepare` stdin JSON that retires one registered manifest digest.
+///
+/// Offline only: nothing is signed or sent. The pin registry accepts the retirement only from the
+/// manifest's authenticated submitter, and refuses it for a manifest whose automatic replication
+/// order already completed before its retention epoch.
+fn manifest_retire_instruction(raw_args: Vec<String>) -> Result<(), String> {
+    println!("{}", retire_instruction_json(raw_args)?);
+    Ok(())
+}
+/// The pin registry's bound on a recorded retirement reason.
+const RETIREMENT_REASON_MAX_BYTES: usize = 1024;
+fn retire_instruction_json(raw_args: Vec<String>) -> Result<String, String> {
+    let mut digest: Option<[u8; 32]> = None;
+    let mut reason: Option<String> = None;
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest-digest-hex" => {
+                digest = Some(
+                    hex::decode(value)
+                        .ok()
+                        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                        .ok_or_else(|| "--manifest-digest-hex must be 32-byte hex".to_owned())?,
+                );
+            }
+            "--reason" => reason = Some(value.to_owned()),
+            _ => {
+                return Err(format!(
+                    "unknown manifest retire-instruction argument `{key}`"
+                ));
+            }
+        }
+    }
+    let digest = digest.ok_or_else(|| "--manifest-digest-hex is required".to_owned())?;
+    if digest == [0; 32] {
+        return Err("manifest digest must not be zero".to_owned());
+    }
+    // The canonical journal submits this exactly once; refuse offline a reason the registry
+    // would refuse on execution.
+    if let Some(reason) = reason.as_deref()
+        && (reason.is_empty()
+            || reason.len() > RETIREMENT_REASON_MAX_BYTES
+            || reason != reason.trim()
+            || reason.chars().any(char::is_control))
+    {
+        return Err(format!(
+            "--reason must be non-empty, trimmed, control-free UTF-8 of at most {RETIREMENT_REASON_MAX_BYTES} bytes"
+        ));
+    }
+    let instruction: iroha_data_model::isi::InstructionBox =
+        iroha_data_model::isi::sorafs::RetirePinManifest {
+            digest: ManifestDigest::new(digest),
+            reason,
+        }
+        .into();
+    norito::json::to_json(&vec![instruction])
+        .map_err(|err| format!("failed to encode retire instruction: {err}"))
 }
 fn submit_pin_register(
     request: &ManifestSubmitRequest<'_>,
@@ -3073,11 +3161,12 @@ fn format_car_error(err: CarWriteError) -> String {
 fn usage() -> String {
     "Usage:
   sorafs_cli da-recover --gateway=URL [--gateway=URL...] --cid=BASE32 --manifest-hash=HEX --output=PATH
-  sorafs_cli deploy (--payload=PATH | --da-source=TICKET_DIRECTORY | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy (--payload=PATH | --da-source=TICKET_DIRECTORY | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--client-deadline-secs=N] [--stage-providers=N] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
+  sorafs_cli manifest retire-instruction --manifest-digest-hex=HEX32 [--reason=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
@@ -21031,6 +21120,70 @@ mod tests {
                 "payload-free event leaked `{forbidden}`"
             );
         }
+    }
+    #[test]
+    fn manifest_retire_instruction_encodes_one_retirement_for_the_canonical_journal() {
+        use iroha_data_model::isi::{InstructionBox, sorafs::RetirePinManifest};
+        let digest = [0x5a; 32];
+        for reason in [Some("superseded: provider ingest dead-lettered"), None] {
+            let mut args = vec![format!("--manifest-digest-hex={}", hex_encode(digest))];
+            args.extend(reason.map(|reason| format!("--reason={reason}")));
+            // `iroha tx prepare` reads exactly this instruction list from stdin.
+            let instructions: Vec<InstructionBox> =
+                norito::json::from_json(&retire_instruction_json(args).expect("encode"))
+                    .expect("journal instruction list");
+            let [instruction] = instructions.as_slice() else {
+                panic!("one retirement instruction");
+            };
+            let retire = instruction
+                .as_any()
+                .downcast_ref::<RetirePinManifest>()
+                .expect("manifest retirement");
+            assert_eq!(retire.digest, ManifestDigest::new(digest));
+            assert_eq!(retire.reason.as_deref(), reason);
+        }
+    }
+
+    #[test]
+    fn manifest_retire_instruction_refuses_what_the_registry_would_refuse() {
+        let digest = format!("--manifest-digest-hex={}", hex_encode([0x5a; 32]));
+        let reason = "--reason must be non-empty, trimmed, control-free";
+        for (args, expected) in [
+            (vec![], "--manifest-digest-hex is required"),
+            (
+                vec![format!("--manifest-digest-hex={}", hex_encode([0; 32]))],
+                "manifest digest must not be zero",
+            ),
+            (
+                vec!["--manifest-digest-hex=abcd".to_owned()],
+                "--manifest-digest-hex must be 32-byte hex",
+            ),
+            (
+                vec![format!("--manifest-digest-hex={}zz", "0".repeat(62))],
+                "--manifest-digest-hex must be 32-byte hex",
+            ),
+            (vec![digest.clone(), "--reason=".to_owned()], reason),
+            (vec![digest.clone(), "--reason= padded".to_owned()], reason),
+            (
+                vec![digest.clone(), "--reason=line\nbreak".to_owned()],
+                reason,
+            ),
+            (
+                vec![digest.clone(), format!("--reason={}", "x".repeat(1025))],
+                reason,
+            ),
+            (
+                vec![digest.clone(), "--submit=yes".to_owned()],
+                "unknown manifest retire-instruction argument `--submit`",
+            ),
+            (vec!["positional".to_owned()], "expected key=value argument"),
+        ] {
+            let error = retire_instruction_json(args).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+        assert!(
+            retire_instruction_json(vec![digest, format!("--reason={}", "x".repeat(1024))]).is_ok()
+        );
     }
     include!("sorafs_cli/canonical_argument_tests.rs");
 }

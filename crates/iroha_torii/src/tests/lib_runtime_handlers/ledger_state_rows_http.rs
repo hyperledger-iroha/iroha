@@ -5,6 +5,12 @@ struct PoolProofFixture {
     asset: iroha_data_model::asset::AssetDefinitionId,
 }
 fn pool_proof_fixture(keyed: bool) -> PoolProofFixture {
+    configured_pool_proof_fixture(keyed, |_| {})
+}
+fn configured_pool_proof_fixture(
+    keyed: bool,
+    configure: impl FnOnce(&mut iroha_config::parameters::actual::Root),
+) -> PoolProofFixture {
     use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     use iroha_data_model::{
         asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition},
@@ -54,7 +60,7 @@ fn pool_proof_fixture(keyed: bool) -> PoolProofFixture {
     ];
     let mut chain = CertifiedTestChain::start(config).unwrap();
     chain.commit(Vec::new());
-    let fixture = RuntimeApiRouterFixture::with_runtime(
+    let fixture = RuntimeApiRouterFixture::with_configured_runtime(
         "ironwood-http-cut",
         Arc::clone(chain.kura()),
         Arc::clone(chain.state()),
@@ -62,6 +68,7 @@ fn pool_proof_fixture(keyed: bool) -> PoolProofFixture {
             crate::build_identity_test_fixture::build_identity(),
             routing::MaybeTelemetry::disabled(),
         ),
+        configure,
     );
     PoolProofFixture {
         chain,
@@ -185,7 +192,13 @@ impl PoolProofFixture {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ledger_state_rows_verifies_ironwood_against_a_certified_tip_and_refuses_a_stale_height() {
-    let mut f = pool_proof_fixture(true);
+    // The ingress quarter leaves exactly two query working sets. One funds all
+    // fresh authorization views and the other stays with the proof body through egress.
+    let mut f = configured_pool_proof_fixture(true, |cfg| {
+        cfg.torii.max_content_len = 64_000_000u64.into();
+        cfg.torii.query_fanout_max_working_set_bytes = 768_000_000u64.into();
+        cfg.torii.query_fanout_max_retained_bytes = 2_048_000_000u64.into();
+    });
     let tip = f.verified();
     let schema = f.expected_schema();
     assert!(f.payment_rows(&tip, &schema).await > 0);

@@ -148,8 +148,10 @@ pub(super) fn authenticate(
     let native = view
         .native_execution_tip()
         .ok_or(RetirementCutError::Unexecuted)?;
+    // The native tip names the committed block's hash `iroha_hash`.
+    let same_block = native.iroha_hash() == tip.block_hash();
     if native.height() != tip.height()
-        || native.iroha_hash() != tip.block_hash()
+        || !same_block
         || native.core_hash() != tip.core_hash()
         || native.result() != tip.result()
         || native.root_scope() != tip.root_scope()

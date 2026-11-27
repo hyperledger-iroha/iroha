@@ -1,5 +1,5 @@
 //! Field arithmetic microbenchmarks for `Fp` and `Fq`, with `pasta_curves`
-//! 0.5.2 measured in the same binary as the baseline.
+//! 0.6.1 measured in the same binary as the baseline.
 //!
 //! Latency benchmarks chain 1000 dependent operations; throughput benchmarks
 //! run 1024 independent operations. Divide the reported time by 1000 or 1024
@@ -9,6 +9,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use ff::{Field, PrimeField};
+use iroha_pasta::PastaField;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
 
@@ -65,7 +66,37 @@ macro_rules! field_benches {
     }};
 }
 
+/// Same coefficient and dependent operands for both paths. The full-width
+/// multiplication receives its coefficient already in Montgomery form.
+fn word_product<F: PastaField>(c: &mut Criterion, name: &str) {
+    let mut g = c.benchmark_group(name);
+    let mut rng = ChaCha20Rng::seed_from_u64(3);
+    let input = F::random(&mut rng);
+    let word = black_box(0xff25_2b8f_1c51_7663_u64);
+    let field = F::from(word);
+    g.bench_function("full_x1000", |bench| {
+        bench.iter(|| {
+            let mut x = black_box(input);
+            for _ in 0..1000 {
+                x *= field;
+            }
+            x
+        })
+    });
+    g.bench_function("word_x1000", |bench| {
+        bench.iter(|| {
+            let mut x = black_box(input);
+            for _ in 0..1000 {
+                x = x.mul_u64(word);
+            }
+            x
+        })
+    });
+}
+
 fn bench_fields(c: &mut Criterion) {
+    word_product::<iroha_pasta::Fp>(c, "fp_word_product");
+    word_product::<iroha_pasta::Fq>(c, "fq_word_product");
     field_benches!(c, "iroha_pasta_fp", iroha_pasta::Fp);
     field_benches!(c, "iroha_pasta_fq", iroha_pasta::Fq);
     field_benches!(c, "pasta_curves_fp", pasta_curves::Fp);

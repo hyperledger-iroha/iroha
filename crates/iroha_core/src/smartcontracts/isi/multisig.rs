@@ -3398,6 +3398,7 @@ mod tests {
         };
     }
     include!("multisig/parliament_rekey_tests.rs");
+    include!("multisig/tests/contract_call_arguments.rs");
     fn spec(signatories: BTreeMap<AccountId, u8>, quorum: u16) -> MultisigSpec {
         MultisigSpec {
             signatories,

@@ -245,7 +245,11 @@ mod tests {
 
             for (basis, image, gamma) in [(&b1, t1, C::GAMMA1), (&b2, t2, C::GAMMA2)] {
                 assert_eq!(integer(&gamma), (&scale * basis) / &modulus);
-                let abs_image = if image.sign() == Sign::Minus { -image } else { image };
+                let abs_image = if image.sign() == Sign::Minus {
+                    -image
+                } else {
+                    image
+                };
                 // k = (b + a*zeta) mod r. Its exact Babai coefficient is
                 // within max_half*(basis + |image|)/r of the target integer.
                 // Truncating the multiplier adds less than r/2^256. Their sum

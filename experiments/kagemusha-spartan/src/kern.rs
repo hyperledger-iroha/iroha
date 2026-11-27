@@ -32,6 +32,7 @@
 //! tested for zero (a witness run that happens to be zero is evaluated like
 //! any other), and the outer tables `Az, Bz, Cz` are always dense. The field
 //! arithmetic itself is the Pasta implementation's constant-time arithmetic.
+//! (The commitment MSMs are not constant time in the witness: TODO.md G8.)
 
 use ff::Field;
 use rayon::prelude::*;
@@ -370,7 +371,12 @@ impl<'a, F: Field> Rows<'a, F> {
         cols: usize,
         fill: &[crate::r1cs::RowFill],
     ) -> Self {
-        Self::from_rows(w.len(), cols, fill, w.chunks_exact_mut(cols).map(Row::Exclusive))
+        Self::from_rows(
+            w.len(),
+            cols,
+            fill,
+            w.chunks_exact_mut(cols).map(Row::Exclusive),
+        )
     }
 
     fn from_rows(
@@ -384,7 +390,8 @@ impl<'a, F: Field> Rows<'a, F> {
         assert_eq!(fill.len(), len / cols, "a fill per row");
         Rows {
             shift: cols.trailing_zeros() as usize,
-            rows: rows.zip(fill)
+            rows: rows
+                .zip(fill)
                 .map(|(row, f)| match f {
                     RowFill::Values => row,
                     RowFill::Zero => Row::Zero,
@@ -578,7 +585,8 @@ pub fn zeroed<F: Field>(n: usize) -> Vec<F> {
     use std::any::TypeId;
 
     let field = TypeId::of::<F>();
-    let pasta = field == TypeId::of::<iroha_pasta::Fp>() || field == TypeId::of::<iroha_pasta::Fq>();
+    let pasta =
+        field == TypeId::of::<iroha_pasta::Fp>() || field == TypeId::of::<iroha_pasta::Fq>();
     if n == 0 || !pasta {
         return vec![F::ZERO; n];
     }
@@ -1446,7 +1454,10 @@ impl<'z, F: Field, Z: Table<F> + ?Sized> Projection<'z, F, Z> {
         let mut sums = std::mem::take(&mut *self.sums.lock().unwrap());
         for (t, &value) in tail.iter().enumerate() {
             if !value.is_zero_vartime() {
-                let (h, j) = ((half + t) >> self.low_bits, (half + t) & ((1 << self.low_bits) - 1));
+                let (h, j) = (
+                    (half + t) >> self.low_bits,
+                    (half + t) & ((1 << self.low_bits) - 1),
+                );
                 self.add(&mut sums[h * cube..(h + 1) * cube], j, value);
             }
         }
@@ -1574,16 +1585,24 @@ impl<F: Field> Folding<F> {
             .map(|h| {
                 r.iter()
                     .enumerate()
-                    .map(|(t, &rt)| if (h >> (k - 1 - t)) & 1 == 1 { rt } else { F::ONE - rt })
+                    .map(|(t, &rt)| {
+                        if (h >> (k - 1 - t)) & 1 == 1 {
+                            rt
+                        } else {
+                            F::ONE - rt
+                        }
+                    })
                     .product()
             })
             .collect();
         let w0 = weights[0];
-        out.par_chunks_mut(SEGMENT).enumerate().for_each(|(s, run)| {
-            if nonzero[s / 64] >> (s % 64) & 1 == 1 {
-                run.iter_mut().for_each(|x| *x *= w0);
-            }
-        });
+        out.par_chunks_mut(SEGMENT)
+            .enumerate()
+            .for_each(|(s, run)| {
+                if nonzero[s / 64] >> (s % 64) & 1 == 1 {
+                    run.iter_mut().for_each(|x| *x *= w0);
+                }
+            });
         let ptr = Shared(out.as_mut_ptr());
         Folding {
             low_bits: low.trailing_zeros() as usize,
@@ -1674,9 +1693,15 @@ mod tests {
         fn check<F: ff::PrimeField>() {
             let n = 1 << 16;
             let seg = super::SEGMENT;
-            let values: Vec<_> = (0..n).map(|i| {
-                if i / seg % 7 < 3 { F::from((i % 251) as u64) } else { F::ZERO }
-            }).collect();
+            let values: Vec<_> = (0..n)
+                .map(|i| {
+                    if i / seg % 7 < 3 {
+                        F::from((i % 251) as u64)
+                    } else {
+                        F::ZERO
+                    }
+                })
+                .collect();
             let live = super::Live {
                 seg,
                 runs: (0..n / seg).map(|i| i % 7 < 3).collect(),
@@ -1694,16 +1719,23 @@ mod tests {
             }
             for i in (0..dense.len()).step_by(seg) {
                 let end = (i + seg).min(dense.len());
-                assert_eq!(super::Table::zero_run(&folded, i..end), live.zero_run(i..end));
+                assert_eq!(
+                    super::Table::zero_run(&folded, i..end),
+                    live.zero_run(i..end)
+                );
             }
             let matrix = super::Public(&matrix[..dense.len()]);
             let second = super::support(3, &matrix, &folded);
             let eager = super::Masked::new(&dense, &live);
             let basis = super::Basis::new(3);
-            assert_eq!(super::inner_round(&basis, &matrix, &eager, Some(&second)),
-                       super::inner_round(&basis, &matrix, &folded, Some(&second)));
-            assert_eq!(super::fold_top(&eager, &r, Some(&second)),
-                       super::fold_top(&folded, &r, Some(&second)));
+            assert_eq!(
+                super::inner_round(&basis, &matrix, &eager, Some(&second)),
+                super::inner_round(&basis, &matrix, &folded, Some(&second))
+            );
+            assert_eq!(
+                super::fold_top(&eager, &r, Some(&second)),
+                super::fold_top(&folded, &r, Some(&second))
+            );
         }
         check::<iroha_pasta::Fp>();
         check::<iroha_pasta::Fq>();
@@ -1870,7 +1902,12 @@ mod tests {
                 // As private tables nothing is known to be empty; the
                 // round evaluates every run, with the same values.
                 let dense = support(k, &m, &z);
-                assert!(dense.masks.iter().all(|mask| *mask == (1u32 << (1 << k)) - 1));
+                assert!(
+                    dense
+                        .masks
+                        .iter()
+                        .all(|mask| *mask == (1u32 << (1 << k)) - 1)
+                );
                 assert_eq!(
                     inner_round(&basis, &m, &z, Some(&dense)),
                     reference_round(k, &m, &z, None, None),
@@ -1961,10 +1998,16 @@ mod tests {
         assert!(!zv.zero_run(0..COLS));
         assert!(zv.zero_run(8 * COLS..12 * COLS), "rows never written");
         assert!(!zv.zero_run(30 * COLS..30 * COLS + 1), "a padding row's 1");
-        assert!(zv.zero_run(30 * COLS + 1..31 * COLS), "padding beyond column 0");
+        assert!(
+            zv.zero_run(30 * COLS + 1..31 * COLS),
+            "padding beyond column 0"
+        );
         assert!(!zv.zero_run(half..half + 1), "public io by value");
         assert!(zv.zero_run(half + 1..half + 2), "a public zero in the io");
-        assert!(zv.zero_run(half + 3..2 * half), "the public half beyond the io");
+        assert!(
+            zv.zero_run(half + 3..2 * half),
+            "the public half beyond the io"
+        );
         let live = Live {
             seg: 4,
             runs: vec![true, false, false, true],
@@ -2147,7 +2190,11 @@ mod tests {
                         "empty", "zero", "sparse", "dense", "boundary", "z-zero", "tail",
                     ] {
                         let random = |rng: &mut SpikeRng| -> F {
-                            if below(rng, 5) == 0 { F::ZERO } else { rng.scalar() }
+                            if below(rng, 5) == 0 {
+                                F::ZERO
+                            } else {
+                                rng.scalar()
+                            }
                         };
                         let mut positions: Vec<usize> = match pattern {
                             "empty" | "tail" => Vec::new(),
@@ -2178,7 +2225,13 @@ mod tests {
                             .collect();
                         let m_tail = [1, 3, low + 2][below(&mut rng, 3)].min(half);
                         let tail = (0..m_tail)
-                            .map(|_| if pattern == "zero" { F::ZERO } else { random(&mut rng) })
+                            .map(|_| {
+                                if pattern == "zero" {
+                                    F::ZERO
+                                } else {
+                                    random(&mut rng)
+                                }
+                            })
                             .collect();
                         let listed = Listed { dense, tail };
                         let io_len = [0, 2, low + 3, 2 * low + 1][cases % 4].min(half);

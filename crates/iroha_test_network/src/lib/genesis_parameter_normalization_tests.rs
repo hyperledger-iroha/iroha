@@ -565,7 +565,7 @@ fn normalization_rejects_rejected_outputs_in_a_supplied_complete_envelope() {
         &key,
         InvalidGenesisError::RejectedOutput(GenesisOutputRejection {
             output_index: 0,
-            reason: Box::new(reason),
+            reason: Box::new(reason.into()),
         }),
     );
 }

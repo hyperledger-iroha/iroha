@@ -28,13 +28,15 @@ fn coordinate_limbs<C: PastaCurve>(point: &crate::ipa::Aff<C>) -> [u128; 4] {
     ]
 }
 
-fn inherited_words<C: PastaCurve>(
-    tr: &crate::verifier::Trace<C>,
-    k: usize,
-) -> Result<&[F<C>], &'static str> {
+fn traced_io<C: PastaCurve>(tr: &crate::verifier::Trace<C>) -> Result<&[F<C>], &'static str> {
     tr.circuit
         .as_ref()
-        .and_then(|c| c.io_full.get(gc::IO_START..gc::IO_START + 4 + k))
+        .map(|c| c.io_full.as_slice())
+        .ok_or("missing inherited generator claim")
+}
+
+fn inherited_words<S>(io: &[S], k: usize) -> Result<&[S], &'static str> {
+    io.get(gc::IO_START..gc::IO_START + 4 + k)
         .ok_or("missing inherited generator claim")
 }
 
@@ -43,8 +45,15 @@ pub fn inherited_generator_claim<C: PastaCurve>(
     tr: &crate::verifier::Trace<C>,
     gens: &Gens<C>,
 ) -> Result<Claim<C>, &'static str> {
-    let k = gens.g.len().ilog2() as usize;
-    let words = inherited_words(tr, k)?;
+    inherited_generator_claim_from_io(traced_io(tr)?, gens)
+}
+
+/// Decode the generator claim in the complete public inputs of a linked proof.
+pub(crate) fn inherited_generator_claim_from_io<C: PastaCurve>(
+    io: &[F<C>],
+    gens: &Gens<C>,
+) -> Result<Claim<C>, &'static str> {
+    let words = inherited_words(io, gens.g.len().ilog2() as usize)?;
     let mut enc = [[0u8; 32]; 2];
     for i in 0..4 {
         let b = words[i].to_repr();
@@ -87,7 +96,7 @@ where
     let incoming = match proofs.get(1) {
         Some((_, trace)) => Some([
             trace.us.as_slice(),
-            &inherited_words(trace, gens.g.len().ilog2() as usize)?[4..],
+            &inherited_words(traced_io(trace)?, gens.g.len().ilog2() as usize)?[4..],
         ]),
         None => None,
     };
@@ -100,6 +109,23 @@ impl GeneratorFolds {
         gens: &PairGens,
         pairs: &[TracedPair],
         entropy: &crate::fs::ProofEntropy,
+    ) -> Result<Self, &'static str> {
+        Self::prepare_inner(gens, pairs, entropy, None)
+    }
+
+    pub(crate) fn prepare_verified(
+        receipt: &crate::native::engine::VerifiedFoldSources<'_>,
+        entropy: &crate::fs::ProofEntropy,
+    ) -> Result<Self, &'static str> {
+        let (gens, pairs) = receipt.sources();
+        Self::prepare_inner(gens, pairs, entropy, Some(receipt))
+    }
+
+    fn prepare_inner(
+        gens: &PairGens,
+        pairs: &[TracedPair],
+        entropy: &crate::fs::ProofEntropy,
+        verified: Option<&crate::native::engine::VerifiedFoldSources<'_>>,
     ) -> Result<Self, &'static str> {
         if !(1..=2).contains(&pairs.len()) {
             return Err("generator fold proof count");
@@ -114,28 +140,46 @@ impl GeneratorFolds {
             }
             relation[16 * i..16 * (i + 1)].copy_from_slice(&r[..16]);
         }
-        let ps = pairs
-            .iter()
-            .map(|p| (&p.proof_p, &p.tr_p))
-            .collect::<Vec<_>>();
-        let ss = pairs
-            .iter()
-            .map(|p| (&p.proof_s, &p.tr_s))
-            .collect::<Vec<_>>();
-        let (p, tp) = prove_sources(
-            &gens.p,
-            relation,
-            &ps,
-            entropy,
-            b"primary inherited generator fold",
-        )?;
-        let (s, ts) = prove_sources(
-            &gens.s,
-            relation,
-            &ss,
-            entropy,
-            b"secondary inherited generator fold",
-        )?;
+        let ((p, tp), (s, ts)) = if let Some(receipt) = verified {
+            (
+                gc::prove_verified_predecessors(
+                    receipt.primary(),
+                    relation,
+                    entropy,
+                    b"primary inherited generator fold",
+                )?,
+                gc::prove_verified_predecessors(
+                    receipt.secondary(),
+                    relation,
+                    entropy,
+                    b"secondary inherited generator fold",
+                )?,
+            )
+        } else {
+            let ps = pairs
+                .iter()
+                .map(|p| (&p.proof_p, &p.tr_p))
+                .collect::<Vec<_>>();
+            let ss = pairs
+                .iter()
+                .map(|p| (&p.proof_s, &p.tr_s))
+                .collect::<Vec<_>>();
+            let (p, tp) = prove_sources(
+                &gens.p,
+                relation,
+                &ps,
+                entropy,
+                b"primary inherited generator fold",
+            )?;
+            let (s, ts) = prove_sources(
+                &gens.s,
+                relation,
+                &ss,
+                entropy,
+                b"secondary inherited generator fold",
+            )?;
+            ((p, tp), (s, ts))
+        };
         let mu = zeroize::Zeroizing::new(entropy.stream(b"pair binding privacy mask").scalar());
         Ok(Self { p, s, tp, ts, mu })
     }
@@ -236,16 +280,31 @@ where
 /// transcript values that a monetary Send transports.
 #[cfg(test)]
 pub(super) fn expose_compiler_claim<C: PastaCurve>(
-    w: &mut Wiring<F<C>>, family: usize, gens: &Gens<C>, claim: &Claim<C>,
-) where F<C>: Scalar {
+    w: &mut Wiring<F<C>>,
+    family: usize,
+    gens: &Gens<C>,
+    claim: &Claim<C>,
+) where
+    F<C>: Scalar,
+{
     assert_eq!(claim.us.len(), gens.g.len().ilog2() as usize);
-    assert!(gc::decide(gens, claim), "retained IPA opening on the compiler generator basis");
-    let mut words = coordinate_limbs::<C>(&claim.g).map(F::<C>::from_u128).to_vec();
+    assert!(
+        gc::decide(gens, claim),
+        "retained IPA opening on the compiler generator basis"
+    );
+    let mut words = coordinate_limbs::<C>(&claim.g)
+        .map(F::<C>::from_u128)
+        .to_vec();
     words.extend_from_slice(&claim.us);
     expose_constant_words(w, family, &words, "retained compiler generator claim");
 }
 
-fn expose_constant_words<S: Scalar>(w: &mut Wiring<S>, family: usize, values: &[S], name: &'static str) {
+fn expose_constant_words<S: Scalar>(
+    w: &mut Wiring<S>,
+    family: usize,
+    values: &[S],
+    name: &'static str,
+) {
     let a = w.push(Array {
         name,
         family,
@@ -434,5 +493,37 @@ pub(super) fn bind_relation(
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_claim_uses_the_canonical_words_of_verified_io() {
+        fn check<C: PastaCurve>() {
+            let gens = Gens::<C>::new(8);
+            let start = gc::IO_START;
+            let end = start + 4 + 3;
+            let mut io = vec![F::<C>::from(11); end + 1];
+            let point = gens.g[1];
+            io[start..start + 4]
+                .copy_from_slice(&coordinate_limbs::<C>(&point).map(F::<C>::from_u128));
+            let claim = inherited_generator_claim_from_io(&io, &gens).unwrap();
+            assert_eq!(claim.g, point);
+            assert_eq!(claim.us, io[start + 4..end]);
+            assert!(matches!(
+                inherited_generator_claim_from_io(&io[..end - 1], &gens),
+                Err("missing inherited generator claim")
+            ));
+            io[start] = F::<C>::from_u128(u128::MAX) + F::<C>::ONE;
+            assert!(matches!(
+                inherited_generator_claim_from_io(&io, &gens),
+                Err("generator coordinate limb exceeds 128 bits")
+            ));
+        }
+        check::<Ep>();
+        check::<Eq>();
     }
 }

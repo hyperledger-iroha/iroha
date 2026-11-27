@@ -337,8 +337,7 @@ fn spartan_profile(value: &Value, input: &RuntimeOriginals<'_>) -> Result<Sparta
     let pack = blob(field(record, "verifierPack")?, MAX_PACK_BYTES)?;
     let inventory = blob(field(record, "producerInventory")?, MAX_INVENTORY_BYTES)?;
     let transport = blob(field(record, "transport")?, MAX_JSON_BYTES)?;
-    if pack != BlobV1::of(input.verifier_pack)
-        || inventory != BlobV1::of(input.producer_inventory)
+    if pack != BlobV1::of(input.verifier_pack) || inventory != BlobV1::of(input.producer_inventory)
     {
         return Err(invalid());
     }
@@ -356,7 +355,11 @@ fn spartan_profile(value: &Value, input: &RuntimeOriginals<'_>) -> Result<Sparta
 pub(super) fn require_runtime(
     app: &Map,
     input: &RuntimeOriginals<'_>,
-) -> Result<([u8; 32], Option<FinancialSelection>, Option<SpartanSelection>)> {
+) -> Result<(
+    [u8; 32],
+    Option<FinancialSelection>,
+    Option<SpartanSelection>,
+)> {
     let pin = exact(
         field(app, "walletRuntime")?,
         &["schema", "currentRuntimeSha256", "financialOriginals"],

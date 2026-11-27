@@ -320,7 +320,7 @@ fn validate_configuration(
             .unwrap()
             .citizenship_bond_amount
     );
-    let expected_nexus = configuration.nexus.as_ref().cloned().unwrap_or_default();
+    let expected_nexus = configuration.nexus.clone().unwrap_or_default();
     assert_eq!(
         parsed.nexus.configured_lane_catalog,
         expected_nexus.configured_lane_catalog

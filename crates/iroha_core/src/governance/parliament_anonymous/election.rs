@@ -1332,7 +1332,8 @@ mod roster_error_tests {
 
     #[test]
     fn roster_codec_mapping_retains_the_exact_original_local_refusal() {
-        let payload = std::collections::HashMap::from([(1_u64, 2_u64)]);
+        // A heap's canonical encoding is deterministic but sorts through serializer scratch.
+        let payload = std::collections::BinaryHeap::from([(1_u64, 2_u64)]);
         let error = norito::core::with_decode_limits_scope(
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64),
             || iroha_data_model::governance::checked_fingerprint(b"test.roster", &payload),

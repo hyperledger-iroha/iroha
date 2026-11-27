@@ -21,6 +21,7 @@ use std::ops::{Add, Mul, Sub};
 use std::sync::OnceLock;
 
 use ff::Field;
+use iroha_pasta::PastaField;
 use iroha_pasta::poseidon::{PoseidonField, permute_with};
 use rayon::prelude::*;
 
@@ -221,6 +222,7 @@ pub struct Term<F> {
 #[path = "coefficients.rs"]
 mod coefficients;
 pub use coefficients::Coefficients;
+pub(crate) use coefficients::share_array_coefficients;
 
 pub type Lin<F> = Vec<Term<F>>;
 
@@ -1729,7 +1731,17 @@ impl<F: Scalar> UniformCircuit<F> {
         release: impl Fn(&mut Vec<Vec<F>>),
     ) -> (Self, Instance<F>, Witness<F>, Vec<RowFill>) {
         Self::build_rows_grouped_with_release::<3>(
-            label, arrays, pi, counts, table_specs, copies, col_bits, io_len, seed, target, release,
+            label,
+            arrays,
+            pi,
+            counts,
+            table_specs,
+            copies,
+            col_bits,
+            io_len,
+            seed,
+            target,
+            release,
         )
     }
 
@@ -1826,7 +1838,9 @@ impl<F: Scalar> UniformCircuit<F> {
                 assert_eq!(mask.widths[k], 255);
                 let lin = &mask.rows[0][k];
                 assert!(
-                    lin.len() == 1 && lin[0].src == Src::Own(k) && lin[0].coef[..] == vec![F::ONE; n],
+                    lin.len() == 1
+                        && lin[0].src == Src::Own(k)
+                        && lin[0].coef[..] == vec![F::ONE; n],
                     "exact private product gate"
                 );
             }
@@ -2016,7 +2030,10 @@ impl<F: Scalar> UniformCircuit<F> {
                 }
             });
             if let Some(g) = found.missing.iter().position(|m| *m) {
-                panic!("{}: a looked-up tuple is in table {tid}", arrays[readers[g]].name);
+                panic!(
+                    "{}: a looked-up tuple is in table {tid}",
+                    arrays[readers[g]].name
+                );
             }
             let mut mult = vec![0u64; slots];
             for (&i, &m) in entries.iter().zip(&found.counts) {
@@ -2677,6 +2694,17 @@ impl<F: Scalar> UniformCircuit<F> {
         // Only the public layout decides which pages to touch and which rows
         // the prover may skip. A present private zero is written just like any
         // other scalar. Structural holes can keep their demand-zero pages.
+        // TODO: store only the present cells if the allocator count matters.
+        // The Receive primary's dense witness is 2^22 field elements (134 MB
+        // counted as in use), but its zero-on-demand pages are touched only
+        // where a cell is present: 3,946 of 8,192 16 KiB pages (65 MB) for
+        // 1.81M present cells (58 MB); the secondary touches 1,603 of 4,096
+        // pages (26 MB) for 0.78M cells (25 MB). Packing would therefore save
+        // about 8 MB resident, not the 77 MB the in-use count suggests. A
+        // packed witness would keep, per row, the present runs' offsets
+        // (public) and their values, and serve `kern::Rows::cell`, the row
+        // commitments (already support-driven), the outer gather and the
+        // inner first fold through that index.
         let mut w = crate::kern::zeroed(shape.rows() * cols);
         let mut written = vec![false; shape.rows()];
         // Every present cell has a position of its own.
@@ -2729,6 +2757,35 @@ impl<F: Scalar> UniformCircuit<F> {
             if !arr.fixed {
                 release(&mut arr.values);
             }
+        }
+        if crate::prof::memory_enabled() {
+            // Measurement: how much of the dense witness a present cell
+            // touches, by 16 KiB page (public layout only).
+            let per_page = (16 << 10) / size_of::<F>().max(1);
+            let cells: usize = taken.iter().map(|w| w.count_ones() as usize).sum();
+            let pages = (shape.rows() * cols).div_ceil(per_page);
+            let touched = (0..pages)
+                .filter(|&page| {
+                    let (lo, hi) = (
+                        page * per_page,
+                        ((page + 1) * per_page).min(shape.rows() * cols),
+                    );
+                    (lo..hi).step_by(64).any(|x| {
+                        let word = taken[x / 64];
+                        let bits = (hi - x).min(64);
+                        let mask = if bits == 64 {
+                            u64::MAX
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        word & mask != 0
+                    })
+                })
+                .count();
+            println!(
+                "witness layout {label}: {cells} present of {} positions; {touched} of {pages} 16 KiB pages hold a present cell",
+                shape.rows() * cols
+            );
         }
         drop(taken);
         if std::env::var("ZKS_PLACE").is_ok() {
@@ -3091,8 +3148,8 @@ impl<F: Scalar> UniformCircuit<F> {
     /// commit input, measurement only): first-phase rows count their nonzero
     /// values at the row's bound, second-phase rows their present helper
     /// cells at full width; constant rows are the key's. It reads witness
-    /// values; the prover never calls it, and its constant-time commit reads
-    /// every entry of a committed row, zero or not.
+    /// values; the prover never calls it. Its Pippenger commit skips zero
+    /// digits, so zero entries cost no additions.
     pub fn width_classes(&self, w: &[F]) -> BTreeMap<u16, usize> {
         let (cols, active) = (self.shape.cols(), self.shape.active_cols());
         let mut out: BTreeMap<u16, usize> = BTreeMap::new();
@@ -3849,7 +3906,10 @@ impl<F: Scalar> UniformCircuit<F> {
 
     /// Zero a row's absent instances in its owned public coefficient buffer.
     fn masked(&self, mut term: Term<F>, a: usize) -> Term<F> {
-        if !matches!(term.src, Src::All { .. }) {
+        // A shared buffer is copied only when an absent r has a nonzero
+        // coefficient: zeroing the others changes no value.
+        let stale = |(r, c): (usize, &F)| !self.r_present(a, r) && !c.is_zero_vartime();
+        if !matches!(term.src, Src::All { .. }) && term.coef.iter().enumerate().any(stale) {
             for (r, coefficient) in term.coef.iter_mut().enumerate() {
                 if !self.r_present(a, r) {
                     *coefficient = F::ZERO;
@@ -3881,9 +3941,11 @@ impl<F: Scalar> UniformCircuit<F> {
             }
         };
         let active: Vec<usize> = (0..1usize << rho)
-            .filter(|r| map_at(*r).is_some() && !bool::from(term.coef[*r].is_zero()))
+            .filter(|r| map_at(*r).is_some() && !term.coef[*r].is_zero_vartime())
             .collect();
-        let constant_coef = active.iter().all(|r| term.coef[*r] == term.coef[active[0]]);
+        let constant_coef = active
+            .iter()
+            .all(|r| same_public(term.coef[*r], term.coef[active[0]]));
         if active.len() <= 1 || constant_coef {
             return (term, None);
         }
@@ -3897,7 +3959,7 @@ impl<F: Scalar> UniformCircuit<F> {
         // program is the same on every build).
         let mut freq: Vec<(usize, F)> = Vec::new();
         for &r in &active {
-            match freq.iter_mut().find(|(_, c)| *c == term.coef[r]) {
+            match freq.iter_mut().find(|(_, c)| same_public(*c, term.coef[r])) {
                 Some(e) => e.0 += 1,
                 None => freq.push((1, term.coef[r])),
             }
@@ -3916,7 +3978,7 @@ impl<F: Scalar> UniformCircuit<F> {
             base.coef[r] = mode;
             rest.coef[r] -= mode;
         }
-        let nonzero = rest.coef.iter().any(|c| !bool::from(c.is_zero()));
+        let nonzero = rest.coef.iter().any(|c| !c.is_zero_vartime());
         (base, nonzero.then_some(rest))
     }
 
@@ -4044,6 +4106,102 @@ impl<F: Scalar> UniformCircuit<F> {
         (p.muls, p.scales, p.regs.ops.len())
     }
 
+    /// The compiled matrix evaluation's products by a constant whose
+    /// canonical value or negation is below 2^16, 2^32 and 2^64, is another
+    /// power of two, or is none of these; then its additions, subtractions,
+    /// constant loads and squares (the native q benchmark's profile).
+    #[cfg(test)]
+    pub(crate) fn plan_op_profile(&self) -> ([usize; 5], [usize; 4]) {
+        let p = self.plan();
+        let class = |c: F| -> usize {
+            let words = |v: F| -> [u64; 4] {
+                let r = v.to_repr();
+                std::array::from_fn(|i| u64::from_le_bytes(r[8 * i..8 * i + 8].try_into().unwrap()))
+            };
+            let small = |w: [u64; 4], bits: u32| {
+                w[1..].iter().all(|x| *x == 0) && (bits == 64 || w[0] >> bits == 0)
+            };
+            let (a, b) = (words(c), words(-c));
+            for (i, bits) in [16, 32, 64].into_iter().enumerate() {
+                if small(a, bits) || small(b, bits) {
+                    return i;
+                }
+            }
+            let ones = |w: [u64; 4]| w.iter().map(|x| x.count_ones()).sum::<u32>();
+            if ones(a) == 1 || ones(b) == 1 { 3 } else { 4 }
+        };
+        let (mut scales, mut rest) = ([0; 5], [0; 4]);
+        for (op, _) in p.regs.ops.iter() {
+            match op {
+                Op::Scale(_, k) => scales[class(p.pool[k as usize])] += 1,
+                Op::Add(..) => rest[0] += 1,
+                Op::Sub(..) => rest[1] += 1,
+                Op::Const(_) => rest[2] += 1,
+                Op::Mul(a, b) if a == b => rest[3] += 1,
+                Op::Mul(..) => {}
+            }
+        }
+        (scales, rest)
+    }
+
+    /// Equivalent cheaper forms in the compiled matrix evaluation's
+    /// canonical instructions (the native q benchmark's profile): products
+    /// with a constant-load operand, scales of a single-use scale, sums or
+    /// differences of two single-use scales by one constant, scales by one
+    /// or minus one, and products with a single-use scale operand.
+    #[cfg(test)]
+    pub(crate) fn plan_rewrite_profile(&self) -> [usize; 5] {
+        let p = self.plan();
+        let ops: Vec<Op> = p.slot_instructions().collect();
+        let ni = p.inputs;
+        let mut uses = vec![0u32; ni + ops.len()];
+        for op in &ops {
+            let (src, k) = operands(*op);
+            for s in &src[..k] {
+                uses[*s as usize] += 1;
+            }
+        }
+        for o in p.out {
+            uses[o as usize] += 1;
+        }
+        let at = |s: Slot| (s as usize).checked_sub(ni).map(|i| ops[i]);
+        let single_scale = |s: Slot| match at(s) {
+            Some(Op::Scale(_, k)) if uses[s as usize] == 1 => Some(k),
+            _ => None,
+        };
+        let mut out = [0usize; 5];
+        for op in &ops {
+            match *op {
+                Op::Mul(a, b) => {
+                    if matches!(at(a), Some(Op::Const(_))) || matches!(at(b), Some(Op::Const(_))) {
+                        out[0] += 1;
+                    }
+                    if single_scale(a).is_some() || single_scale(b).is_some() {
+                        out[4] += 1;
+                    }
+                }
+                Op::Scale(a, k) => {
+                    if single_scale(a).is_some() {
+                        out[1] += 1;
+                    }
+                    let c = p.pool[k as usize];
+                    if c == F::ONE || c == -F::ONE {
+                        out[3] += 1;
+                    }
+                }
+                Op::Add(a, b) | Op::Sub(a, b) => {
+                    if let (Some(x), Some(y)) = (single_scale(a), single_scale(b))
+                        && p.pool[x as usize] == p.pool[y as usize]
+                    {
+                        out[2] += 1;
+                    }
+                }
+                Op::Const(_) => {}
+            }
+        }
+        out
+    }
+
     /// One array's part of `A~, B~, C~` (its own compiled program).
     pub fn evals_of(&self, a: usize, rx: &[F], ry: &[F], ch: &[F]) -> (F, F, F) {
         let k = if self.logup() { 2 } else { 0 };
@@ -4062,12 +4220,24 @@ impl<F: Scalar> UniformCircuit<F> {
     /// `evals` at many points `(ch, r_x, r_y)`: the compiled program over
     /// groups of lanes, in parallel (native q's evaluations).
     pub fn evals_many(&self, points: &[(&[F], &[F], &[F])]) -> Vec<(F, F, F)> {
+        self.plan().run_many(&self.batch_inputs(points))
+    }
+
+    /// Native Pasta evaluator for the installed operation programs.
+    pub(crate) fn evals_many_pasta(&self, points: &[(&[F], &[F], &[F])]) -> Vec<(F, F, F)>
+    where
+        F: PastaField,
+    {
+        let tape = self.plan();
+        tape.run_many_with(&self.batch_inputs(points), &tape.pasta_scales())
+    }
+
+    fn batch_inputs(&self, points: &[(&[F], &[F], &[F])]) -> Vec<Vec<F>> {
         let k = if self.logup() { 2 } else { 0 };
-        let inputs: Vec<Vec<F>> = points
+        points
             .iter()
             .map(|(ch, rx, ry)| rx.iter().chain(*ry).chain(&ch[..k]).copied().collect())
-            .collect();
-        self.plan().run_many(&inputs)
+            .collect()
     }
 
     /// The compiled program's batched form: its registers against its slots.
@@ -4080,7 +4250,7 @@ impl<F: Scalar> UniformCircuit<F> {
     /// witness half `1 - r_y[0]`, memoized by prefix from the top bit.
     fn fixed_y<'t>(
         &self,
-        cache: &mut HashMap<(usize, usize), V<'t, F>>,
+        cache: &mut CompileMap<(usize, usize), V<'t, F>>,
         memo: &mut Memo,
         ry: &[V<'t, F>],
         a2: usize,
@@ -4125,6 +4295,9 @@ impl<F: Scalar> UniformCircuit<F> {
     fn compile_program(&self, only: Option<usize>) -> (Builder<F>, [Slot; 3]) {
         let (sx, sw) = (self.shape.sx, self.shape.sw());
         let lookups = self.logup();
+        // Diagnostics, read once: the environment never changes the program.
+        let trace_terms = std::env::var("ZKS_EVALS_TRACE").is_ok();
+        let memory = crate::prof::memory_enabled();
         let cell = RefCell::new(Builder::<F>::new(sx + sw + 1 + if lookups { 2 } else { 0 }));
         let tb = &cell;
         let input = |i: usize| V {
@@ -4154,14 +4327,15 @@ impl<F: Scalar> UniformCircuit<F> {
         // Shared by every array: fixed y bits per block, r-bit tables of
         // target positions, fixed-bit products by prefix, single-point y
         // products, p sums and sum-row sides.
-        let mut fixed_y: HashMap<(usize, usize), V<'_, F>> = HashMap::new();
-        let mut ty: HashMap<Vec<usize>, Vec<V<'_, F>>> = HashMap::new();
+        let mut fixed_y: CompileMap<(usize, usize), V<'_, F>> = CompileMap::default();
+        let mut ty: CompileMap<Vec<usize>, Vec<V<'_, F>>> = CompileMap::default();
         let mut memo_x = Memo::default();
         let mut memo_y = Memo::default();
         let mut memo_ty = Memo::default();
-        let mut psums: HashMap<(usize, usize, usize, bool, Vec<usize>), V<'_, F>> = HashMap::new();
-        let mut sides: HashMap<(Vec<usize>, usize, (usize, usize, usize)), V<'_, F>> =
-            HashMap::new();
+        let mut psums: CompileMap<(usize, usize, usize, bool, Vec<usize>), V<'_, F>> =
+            CompileMap::default();
+        let mut sides: CompileMap<(Vec<usize>, usize, (usize, usize, usize)), V<'_, F>> =
+            CompileMap::default();
         let mut array_peak = (0usize, 0usize);
         for (a, arr) in self.arrays.iter().enumerate() {
             if only.is_some_and(|o| o != a) {
@@ -4179,10 +4353,10 @@ impl<F: Scalar> UniformCircuit<F> {
             let mut memo_tx = Memo::default();
             // Factors depend on the target's r-bit positions, not its cell:
             // the cells of one array share them.
-            let mut factors: HashMap<String, V<'_, F>> = HashMap::new();
-            let mut closed: HashMap<String, Option<V<'_, F>>> = HashMap::new();
+            let mut factors: CompileMap<FactorKey, V<'_, F>> = CompileMap::default();
+            let mut closed: CompileMap<PatternKey, Option<V<'_, F>>> = CompileMap::default();
             let mut tx: Option<Vec<V<'_, F>>> = None;
-            let mut tparts: HashMap<usize, Vec<V<'_, F>>> = HashMap::new();
+            let mut tparts: CompileMap<usize, Vec<V<'_, F>>> = CompileMap::default();
             for j in 0..arr.rows.len() {
                 let row = self.symbolic_row(a, j);
                 let base = self.row_base[a][j];
@@ -4202,7 +4376,9 @@ impl<F: Scalar> UniformCircuit<F> {
                 for (mat, lin) in row.into_iter().enumerate() {
                     let pieces = lin.into_iter().flat_map(|(term, factor)| {
                         let (base, rest) = self.pieces(self.masked(term, a), a);
-                        std::iter::once(base).chain(rest).map(move |piece| (piece, factor))
+                        std::iter::once(base)
+                            .chain(rest)
+                            .map(move |piece| (piece, factor))
                     });
                     for (term, fac) in pieces {
                         let (a2, map): (Option<(usize, usize)>, Option<&Vec<Option<usize>>>) =
@@ -4269,7 +4445,7 @@ impl<F: Scalar> UniformCircuit<F> {
                         let active: Vec<usize> = (0..n)
                             .filter(|r| {
                                 map.map_or(true, |mp| mp[*r].is_some())
-                                    && !bool::from(term.coef[*r].is_zero())
+                                    && !term.coef[*r].is_zero_vartime()
                             })
                             .collect();
                         if active.is_empty() {
@@ -4323,10 +4499,13 @@ impl<F: Scalar> UniformCircuit<F> {
                             Some((c0, q)) => {
                                 // The whole active set: terms with the same
                                 // ends but different gaps differ.
-                                let key = format!(
-                                    "pattern|{tag}|{wb:?}|{map:?}|{:?}|{active:?}",
-                                    q.to_repr()
-                                );
+                                let key = PatternKey {
+                                    tag,
+                                    wb: wb.clone(),
+                                    map: map.cloned(),
+                                    q: q.to_repr(),
+                                    active: active.clone(),
+                                };
                                 let found = *closed.entry(key).or_insert_with(|| {
                                     let target = match (&term.src, map) {
                                         (Src::One, _) => Target::One,
@@ -4334,12 +4513,21 @@ impl<F: Scalar> UniformCircuit<F> {
                                         (_, Some(mp)) => Target::Link(mp, &ys),
                                     };
                                     let mut unit = vec![F::ZERO; n];
-                                    for &r in &active {
-                                        unit[r] = if q == F::ONE {
-                                            F::ONE
-                                        } else {
-                                            q.pow_vartime([r as u64])
-                                        };
+                                    if same_public(q, F::ONE) {
+                                        for &r in &active {
+                                            unit[r] = F::ONE;
+                                        }
+                                    } else {
+                                        // q^r as a running product over the
+                                        // ascending active r.
+                                        let (mut at, mut power) = (0, F::ONE);
+                                        for &r in &active {
+                                            while at < r {
+                                                power *= q;
+                                                at += 1;
+                                            }
+                                            unit[r] = power;
+                                        }
                                     }
                                     r_closed(rho, n, &unit, &target, &xs, one)
                                 });
@@ -4405,7 +4593,7 @@ impl<F: Scalar> UniformCircuit<F> {
                             let (xs_lo, xs_hi) = xs.split_at(lo);
                             let (ys_lo, ys_hi) = ys.split_at(lo_t.min(ys.len()));
                             let (wb_lo, wb_hi) = wb.split_at(lo_t.min(wb.len()));
-                            let skey = format!("step|{tag}|{wb_lo:?}|{lo}|{:?}", sp.ls);
+                            let skey = FactorKey::Step(tag, wb_lo.to_vec(), lo, sp.ls.clone());
                             let step = *factors.entry(skey).or_insert_with(|| {
                                 let ind: Vec<F> = sp
                                     .ls
@@ -4428,7 +4616,8 @@ impl<F: Scalar> UniformCircuit<F> {
                             let c0_inv = c0.invert().unwrap();
                             let norm: Vec<F> = sp.cs.iter().map(|c| *c * c0_inv).collect();
                             let nkey: Vec<[u8; 32]> = norm.iter().map(|c| c.to_repr()).collect();
-                            let hkey = format!("slot|{tag}|{wb_hi:?}|{lo}|{:?}|{nkey:?}", sp.hs);
+                            let hkey =
+                                FactorKey::Slot(tag, wb_hi.to_vec(), lo, sp.hs.clone(), nkey);
                             let slot = match factors.get(&hkey) {
                                 Some(f) => *f,
                                 None => {
@@ -4498,9 +4687,7 @@ impl<F: Scalar> UniformCircuit<F> {
                             (sum, F::ONE)
                         };
                         cat[path] += muls() - m0;
-                        if (path == 9 || (path == 5 && muls() - m0 > 30))
-                            && std::env::var("ZKS_EVALS_TRACE").is_ok()
-                        {
+                        if trace_terms && (path == 9 || (path == 5 && muls() - m0 > 30)) {
                             let kind = match &term.src {
                                 Src::One => "one".to_string(),
                                 Src::Own(k) => format!("own {k}"),
@@ -4532,8 +4719,7 @@ impl<F: Scalar> UniformCircuit<F> {
                                 *e = *e + fx * s * high * sc;
                             }
                             Some((a2, k2)) => {
-                                let e =
-                                    grouped.entry((mat, a2, k2, fac, s.s)).or_insert((s, zero));
+                                let e = grouped.entry((mat, a2, k2, fac, s.s)).or_insert((s, zero));
                                 e.1 = e.1 + high * sc;
                             }
                         }
@@ -4600,14 +4786,17 @@ impl<F: Scalar> UniformCircuit<F> {
                 acc[mat] = acc[mat] + *sum * (fy * ps);
                 cat[11] += muls() - m0;
             }
-            if crate::prof::memory_enabled() {
-                let strings = closed
+            if memory {
+                let keys = closed
                     .keys()
-                    .chain(factors.keys())
-                    .map(|k| k.capacity() + 72)
-                    .sum::<usize>();
+                    .map(|key| key.heap_bytes() + size_of::<(PatternKey, Option<V<'_, F>>)>())
+                    .sum::<usize>()
+                    + factors
+                        .keys()
+                        .map(|key| key.heap_bytes() + size_of::<(FactorKey, V<'_, F>)>())
+                        .sum::<usize>();
                 let memo = memo_tx.nodes.capacity() * 17;
-                array_peak = array_peak.max((strings + memo, a));
+                array_peak = array_peak.max((keys + memo, a));
             }
         }
         if only.is_none() && std::env::var("ZKS_EVALS_BREAKDOWN").is_ok() {
@@ -4629,15 +4818,15 @@ impl<F: Scalar> UniformCircuit<F> {
             );
         }
         let out = acc.map(|v| v.s);
-        if crate::prof::memory_enabled() {
+        if memory {
             let keyed = |m: &Memo| (m.len(), m.nodes.capacity() * 17);
             let b = tb.borrow();
             println!(
                 "matrix compile tables {}: ops {} shared {} (cap {}) pool {}; memo x {:?} y {:?} ty {:?}; ty {} psums {} sides {} fixed_y {}; largest array tables {} B (array {})",
                 self.label,
                 b.ops.len(),
-                b.shared.iter().map(HashMap::len).sum::<usize>(),
-                b.shared.iter().map(HashMap::capacity).sum::<usize>(),
+                b.shared.iter().map(|m| m.len()).sum::<usize>(),
+                b.shared.iter().map(|m| m.capacity()).sum::<usize>(),
                 b.pool.len(),
                 keyed(&memo_x),
                 keyed(&memo_y),
@@ -4653,8 +4842,8 @@ impl<F: Scalar> UniformCircuit<F> {
         let mut builder = std::mem::replace(&mut *tb.borrow_mut(), Builder::new(0));
         // Only the instructions and the pool remain needed.
         builder.shared = Default::default();
-        builder.pool_index = HashMap::new();
-        builder.const_slot = HashMap::new();
+        builder.pool_index = CompileMap::default();
+        builder.const_slot = CompileMap::default();
         (builder, out)
     }
 
@@ -4922,12 +5111,61 @@ const POINTS: usize = 8;
 /// a map keyed by the whole prefix would, in a word per entry.
 #[derive(Default)]
 struct Memo {
-    nodes: HashMap<u64, (u32, Slot)>,
+    nodes: CompileMap<u64, (u32, Slot)>,
 }
 
 impl Memo {
     fn len(&self) -> usize {
         self.nodes.len()
+    }
+}
+
+/// The `closed` key of a constant or geometric term: its source tag, target
+/// r bits, map, ratio and whole active set (terms with the same ends but
+/// different gaps differ).
+#[derive(PartialEq, Eq, Hash)]
+struct PatternKey {
+    tag: u8,
+    wb: Vec<usize>,
+    map: Option<Vec<Option<usize>>>,
+    q: [u8; 32],
+    active: Vec<usize>,
+}
+
+impl PatternKey {
+    /// Heap bytes (the memory profile).
+    fn heap_bytes(&self) -> usize {
+        size_of::<usize>() * (self.wb.capacity() + self.active.capacity())
+            + self
+                .map
+                .as_ref()
+                .map_or(0, |m| size_of::<Option<usize>>() * m.capacity())
+    }
+}
+
+/// The `factors` key of a slot x step split's sums.
+#[derive(PartialEq, Eq, Hash)]
+enum FactorKey {
+    /// The step sum: source tag, low target r bits, split point, step map.
+    Step(u8, Vec<usize>, usize, Vec<Option<usize>>),
+    /// The slot sum: source tag, high target r bits, split point, slot map
+    /// and the slot coefficients over the first one.
+    Slot(u8, Vec<usize>, usize, Vec<Option<usize>>, Vec<[u8; 32]>),
+}
+
+impl FactorKey {
+    /// Heap bytes (the memory profile).
+    fn heap_bytes(&self) -> usize {
+        match self {
+            FactorKey::Step(_, wb, _, ls) => {
+                size_of::<usize>() * wb.capacity() + size_of::<Option<usize>>() * ls.capacity()
+            }
+            FactorKey::Slot(_, wb, _, hs, cs) => {
+                size_of::<usize>() * wb.capacity()
+                    + size_of::<Option<usize>>() * hs.capacity()
+                    + size_of::<[u8; 32]>() * cs.capacity()
+            }
+        }
     }
 }
 
@@ -4969,15 +5207,28 @@ enum Target<'a, T> {
     Link(&'a [Option<usize>], &'a [T]),
 }
 
+/// Equality of public values (template coefficients and program constants)
+/// in variable time: `a - b` is zero exactly when `a == b`.
+#[inline]
+fn same_public<F: Field>(a: F, b: F) -> bool {
+    (a - b).is_zero_vartime()
+}
+
 /// `(c0, q)` with `coef[r] = c0 * q^r` on every active `r`, if the
 /// coefficients are constant (`q = 1`) or geometric.
 fn coef_pattern<F: Field>(coef: &[F], active: &[usize]) -> Option<(F, F)> {
     let first = *active.first()?;
-    if active.iter().all(|r| coef[*r] == coef[first]) {
+    if active.iter().all(|r| same_public(coef[*r], coef[first])) {
         return Some((coef[first], F::ONE));
     }
     let second = *active.get(1)?;
-    if second != first + 1 || bool::from(coef[first].is_zero()) {
+    if second != first + 1 || coef[first].is_zero_vartime() {
+        return None;
+    }
+    // A third consecutive r must hold c_1^2 / c_0: checked before inverting.
+    if active.get(2) == Some(&(first + 2))
+        && !same_public(coef[first + 2] * coef[first], coef[second].square())
+    {
         return None;
     }
     let q = coef[second] * coef[first].invert().unwrap();
@@ -4988,12 +5239,16 @@ fn coef_pattern<F: Field>(coef: &[F], active: &[usize]) -> Option<(F, F)> {
             expect *= q;
             at += 1;
         }
-        if coef[r] != expect {
+        if !same_public(coef[r], expect) {
             return None;
         }
     }
-    let q_inv = q.invert().unwrap();
-    let c0 = (0..first).fold(coef[first], |acc, _| acc * q_inv);
+    let c0 = if first == 0 {
+        coef[first]
+    } else {
+        let q_inv = q.invert().unwrap();
+        (0..first).fold(coef[first], |acc, _| acc * q_inv)
+    };
     Some((c0, q))
 }
 
@@ -5017,7 +5272,7 @@ fn r_sum<'t, F: Scalar>(
         Target::Link(map, _) => map[r],
     };
     (0..r_count)
-        .filter(|r| map_at(*r).is_some() && !bool::from(coef[*r].is_zero()))
+        .filter(|r| map_at(*r).is_some() && !coef[*r].is_zero_vartime())
         .fold(one.c(F::ZERO), |s, r| {
             let y = match target {
                 Target::One => one,
@@ -5053,7 +5308,7 @@ fn r_closed<'t, F: Scalar>(
     let active: Vec<usize> = mapped
         .iter()
         .copied()
-        .filter(|r| !bool::from(coef[*r].is_zero()))
+        .filter(|r| !coef[*r].is_zero_vartime())
         .collect();
     if active.is_empty() {
         return Some(zero);
@@ -5199,7 +5454,7 @@ fn split_term<F: Field>(
                         cs[h] = coef[r];
                     }
                     Some(x) => {
-                        if x != th || cs[h] != coef[r] {
+                        if x != th || !same_public(cs[h], coef[r]) {
                             continue 'targets;
                         }
                     }
@@ -5623,6 +5878,8 @@ impl Op {
 pub struct Tape<F> {
     inputs: usize,
     pool: Vec<F>,
+    /// Derived only from the public pool when a native batch first needs it.
+    word_scales: OnceLock<Vec<WordScale>>,
     out: [Slot; 3],
     /// Products of two slots.
     pub muls: usize,
@@ -5630,6 +5887,53 @@ pub struct Tape<F> {
     pub scales: usize,
     /// The same program over reused registers, for many points at once.
     regs: Regs,
+}
+
+/// The magnitude of a public scale when it fits in one machine word.
+#[derive(Clone, Copy)]
+enum WordScale {
+    Positive(u64),
+    Negative(u64),
+    Full,
+}
+
+impl WordScale {
+    fn of<F: PastaField>(constant: F) -> Self {
+        if let [word, 0, 0, 0] = constant.to_canonical_limbs() {
+            Self::Positive(word)
+        } else if let [word, 0, 0, 0] = (-constant).to_canonical_limbs() {
+            Self::Negative(word)
+        } else {
+            Self::Full
+        }
+    }
+}
+
+/// Apply one public coefficient across independent native evaluation points.
+trait ScalePool<F>: Sync {
+    fn scale<const L: usize>(&self, x: &[F; L], k: usize) -> [F; L];
+}
+
+impl<F: Field> ScalePool<F> for [F] {
+    fn scale<const L: usize>(&self, x: &[F; L], k: usize) -> [F; L] {
+        let c = self[k];
+        std::array::from_fn(|l| x[l] * c)
+    }
+}
+
+struct PastaScales<'a, F> {
+    pool: &'a [F],
+    words: &'a [WordScale],
+}
+
+impl<F: PastaField> ScalePool<F> for PastaScales<'_, F> {
+    fn scale<const L: usize>(&self, x: &[F; L], k: usize) -> [F; L] {
+        match self.words[k] {
+            WordScale::Positive(word) => std::array::from_fn(|l| x[l].mul_u64(word)),
+            WordScale::Negative(word) => std::array::from_fn(|l| -x[l].mul_u64(word)),
+            WordScale::Full => self.pool.scale(x, k),
+        }
+    }
 }
 
 /// In-memory register instructions. The public artifact always uses its own
@@ -5644,18 +5948,26 @@ impl RegisterInstructions {
     const BITS: u32 = 20;
     const MASK: u32 = (1 << Self::BITS) - 1;
 
-    fn new(instructions: impl ExactSizeIterator<Item = (Op, Slot)>, count: u32, max_constant: u32) -> Self {
+    fn new(
+        instructions: impl ExactSizeIterator<Item = (Op, Slot)>,
+        count: u32,
+        max_constant: u32,
+    ) -> Self {
         if count > Self::MASK + 1 || max_constant > Self::MASK {
             return Self::Wide(instructions.collect());
         }
-        Self::Packed(instructions.map(|(op, dest)| {
-            let [tag, a, b] = program_artifact::op_words(op);
-            assert!(tag < 16 && a <= Self::MASK && b <= Self::MASK && dest <= Self::MASK);
-            u64::from(tag) << (3 * Self::BITS)
-                | u64::from(dest) << (2 * Self::BITS)
-                | u64::from(a) << Self::BITS
-                | u64::from(b)
-        }).collect())
+        Self::Packed(
+            instructions
+                .map(|(op, dest)| {
+                    let [tag, a, b] = program_artifact::op_words(op);
+                    assert!(tag < 16 && a <= Self::MASK && b <= Self::MASK && dest <= Self::MASK);
+                    u64::from(tag) << (3 * Self::BITS)
+                        | u64::from(dest) << (2 * Self::BITS)
+                        | u64::from(a) << Self::BITS
+                        | u64::from(b)
+                })
+                .collect(),
+        )
     }
 
     fn len(&self) -> usize {
@@ -5764,9 +6076,9 @@ impl Regs {
         drop(last);
         drop(free);
         let rops = RegisterInstructions::new(
-            ops.iter().enumerate().map(|(i, op)| {
-                (op.map_slots(|s| reg[s as usize]), reg[inputs + i])
-            }),
+            ops.iter()
+                .enumerate()
+                .map(|(i, op)| (op.map_slots(|s| reg[s as usize]), reg[inputs + i])),
             count,
             max_constant,
         );
@@ -5831,13 +6143,14 @@ impl<F: Scalar> Tape<F> {
     /// of its registers (independent products, no dispatch per point).
     fn run_lanes<const L: usize>(&self, points: &[impl AsRef<[F]>]) -> Vec<(F, F, F)> {
         let mut registers = vec![[F::ZERO; L]; self.registers()];
-        self.run_lanes_with(points, &mut registers)
+        self.run_lanes_with(points, &mut registers, self.pool.as_slice())
     }
 
     fn run_lanes_with<const L: usize>(
         &self,
         points: &[impl AsRef<[F]>],
         r: &mut [[F; L]],
+        scales: &(impl ScalePool<F> + ?Sized),
     ) -> Vec<(F, F, F)> {
         assert!(points.len() <= L, "at most one point per lane");
         let rg = &self.regs;
@@ -5860,10 +6173,7 @@ impl<F: Scalar> Tape<F> {
                     let (x, y) = (&r[a as usize], &r[b as usize]);
                     std::array::from_fn(|l| x[l] * y[l])
                 }
-                Op::Scale(a, k) => {
-                    let (x, c) = (&r[a as usize], self.pool[k as usize]);
-                    std::array::from_fn(|l| x[l] * c)
-                }
+                Op::Scale(a, k) => scales.scale(&r[a as usize], k as usize),
                 Op::Const(k) => [self.pool[k as usize]; L],
             };
             r[d as usize] = v;
@@ -5874,32 +6184,69 @@ impl<F: Scalar> Tape<F> {
             .collect()
     }
 
-    /// Keep one register file per parallel job and reuse it for that job's
-    /// consecutive lane groups. Only outputs from occupied lanes are read.
+    /// Keep one register file per worker and reuse it for every lane group
+    /// that worker claims. Workers claim the next group from a shared
+    /// counter, so cores of unequal speed (a phone's performance and
+    /// efficiency cores) share the groups by speed instead of a fixed split.
+    /// At most `max_concurrent_lanes / L` register files exist at once. The
+    /// tape and points are public; the outputs are put back in point order.
+    /// Only outputs from occupied lanes are read.
     fn run_groups<const L: usize>(
         &self,
         points: &[Vec<F>],
         max_concurrent_lanes: usize,
+        scales: &(impl ScalePool<F> + ?Sized),
     ) -> Vec<(F, F, F)> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let groups = points.len().div_ceil(L);
         let workers = (max_concurrent_lanes / L)
             .max(1)
-            .min(rayon::current_num_threads());
-        let chunk_size = groups.div_ceil(workers).max(1) * L;
-        points
-            .par_chunks(chunk_size)
-            .flat_map_iter(|chunk| {
+            .min(rayon::current_num_threads())
+            .min(groups.max(1));
+        let next = AtomicUsize::new(0);
+        let mut claimed: Vec<(usize, Vec<(F, F, F)>)> = (0..workers)
+            .into_par_iter()
+            .flat_map_iter(|_| {
                 let mut registers = vec![[F::ZERO; L]; self.registers()];
-                chunk
-                    .chunks(L)
-                    .flat_map(move |group| self.run_lanes_with(group, &mut registers))
+                let mut out = Vec::new();
+                loop {
+                    let group = next.fetch_add(1, Ordering::Relaxed);
+                    if group >= groups {
+                        break;
+                    }
+                    let lanes = &points[group * L..((group + 1) * L).min(points.len())];
+                    out.push((group, self.run_lanes_with(lanes, &mut registers, scales)));
+                }
+                out
             })
-            .collect()
+            .collect();
+        claimed.sort_unstable_by_key(|(group, _)| *group);
+        claimed.into_iter().flat_map(|(_, values)| values).collect()
     }
 
     /// Evaluate in order. Bound the simultaneous register files independently
     /// of the Rayon pool size. A single scalar file is always necessary.
     pub fn run_many(&self, points: &[Vec<F>]) -> Vec<(F, F, F)> {
+        self.run_many_with(points, self.pool.as_slice())
+    }
+
+    fn pasta_scales(&self) -> PastaScales<'_, F>
+    where
+        F: PastaField,
+    {
+        PastaScales {
+            pool: &self.pool,
+            words: self
+                .word_scales
+                .get_or_init(|| self.pool.iter().copied().map(WordScale::of).collect()),
+        }
+    }
+
+    fn run_many_with(
+        &self,
+        points: &[Vec<F>],
+        scales: &(impl ScalePool<F> + ?Sized),
+    ) -> Vec<(F, F, F)> {
         assert!(
             points.iter().all(|p| p.len() == self.inputs),
             "one value per input slot"
@@ -5908,10 +6255,10 @@ impl<F: Scalar> Tape<F> {
         let scalar_bytes = self.registers().saturating_mul(size_of::<F>()).max(1);
         let max_lanes = (REGISTER_BUDGET_BYTES / scalar_bytes).max(1);
         match q_lanes().min(max_lanes) {
-            16.. => self.run_groups::<16>(points, max_lanes),
-            8.. => self.run_groups::<8>(points, max_lanes),
-            4.. => self.run_groups::<4>(points, max_lanes),
-            _ => self.run_groups::<1>(points, max_lanes),
+            16.. => self.run_groups::<16>(points, max_lanes, scales),
+            8.. => self.run_groups::<8>(points, max_lanes, scales),
+            4.. => self.run_groups::<4>(points, max_lanes, scales),
+            _ => self.run_groups::<1>(points, max_lanes, scales),
         }
     }
 
@@ -5966,16 +6313,73 @@ fn hash_tape<F: Scalar>(
     }
 }
 
+/// A fixed-key hasher for the matrix compiler's lookup-only maps. Their keys
+/// are public program structure (slots, pool indices, bit positions, public
+/// coefficients), and no compiler map is iterated in an order the program
+/// depends on, so the hasher changes neither the instructions nor the pool,
+/// only the time to find an entry. Words fold Fx-style and finish with the
+/// MurmurHash3 mixer, so every key bit reaches the bucket bits.
+#[derive(Clone, Copy, Default)]
+struct CompileHasher(u64);
+
+impl std::hash::Hasher for CompileHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut words = bytes.chunks_exact(8);
+        for word in &mut words {
+            self.write_u64(u64::from_le_bytes(word.try_into().expect("an 8-byte word")));
+        }
+        let rest = words.remainder();
+        if !rest.is_empty() {
+            let mut last = [0u8; 8];
+            last[..rest.len()].copy_from_slice(rest);
+            self.write_u64(u64::from_le_bytes(last));
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, v: u8) {
+        self.write_u64(u64::from(v));
+    }
+    #[inline]
+    fn write_u16(&mut self, v: u16) {
+        self.write_u64(u64::from(v));
+    }
+    #[inline]
+    fn write_u32(&mut self, v: u32) {
+        self.write_u64(u64::from(v));
+    }
+    #[inline]
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    #[inline]
+    fn write_usize(&mut self, v: usize) {
+        self.write_u64(v as u64);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut h = self.0;
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        h ^ (h >> 33)
+    }
+}
+
+/// A map of the matrix compiler ([`CompileHasher`]).
+type CompileMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<CompileHasher>>;
+
 /// Builds a program: folds constants, shares equal instructions, and drops
 /// what the outputs never read.
 struct Builder<F> {
     inputs: usize,
     ops: Vec<Op>,
     pool: Vec<F>,
-    pool_index: HashMap<[u8; 32], u32>,
-    const_slot: HashMap<u32, Slot>,
+    pool_index: CompileMap<[u8; 32], u32>,
+    const_slot: CompileMap<u32, Slot>,
     // One map per opcode keeps the opcode out of every operand-pair key.
-    shared: [HashMap<(Slot, u32), Slot>; 4],
+    shared: [CompileMap<(Slot, u32), Slot>; 4],
     /// Products of two slots emitted so far (before dead-code removal).
     muls: usize,
 }
@@ -5989,8 +6393,8 @@ impl<F: Scalar> Builder<F> {
             inputs,
             ops: Vec::new(),
             pool: Vec::new(),
-            pool_index: HashMap::new(),
-            const_slot: HashMap::new(),
+            pool_index: CompileMap::default(),
+            const_slot: CompileMap::default(),
             shared: Default::default(),
             muls: 0,
         }
@@ -6045,8 +6449,8 @@ impl<F: Scalar> Builder<F> {
     fn add(&mut self, a: Slot, b: Slot) -> Slot {
         match (self.known(a), self.known(b)) {
             (Some(x), Some(y)) => return self.konst(x + y),
-            (Some(x), _) if bool::from(x.is_zero()) => return b,
-            (_, Some(y)) if bool::from(y.is_zero()) => return a,
+            (Some(x), _) if x.is_zero_vartime() => return b,
+            (_, Some(y)) if y.is_zero_vartime() => return a,
             _ => {}
         }
         // (p - q) + q = p.
@@ -6070,7 +6474,7 @@ impl<F: Scalar> Builder<F> {
         }
         match (self.known(a), self.known(b)) {
             (Some(x), Some(y)) => return self.konst(x - y),
-            (_, Some(y)) if bool::from(y.is_zero()) => return a,
+            (_, Some(y)) if y.is_zero_vartime() => return a,
             _ => {}
         }
         self.shared((1, a, b), Op::Sub(a, b))
@@ -6088,10 +6492,10 @@ impl<F: Scalar> Builder<F> {
     }
 
     fn scale(&mut self, a: Slot, c: F) -> Slot {
-        if bool::from(c.is_zero()) {
+        if c.is_zero_vartime() {
             return self.konst(F::ZERO);
         }
-        if c == F::ONE {
+        if same_public(c, F::ONE) {
             return a;
         }
         if let Some(x) = self.known(a) {
@@ -6101,7 +6505,7 @@ impl<F: Scalar> Builder<F> {
             let c2 = self.pool[k as usize] * c;
             return self.scale(b, c2);
         }
-        if c == -F::ONE {
+        if same_public(c, -F::ONE) {
             let z = self.konst(F::ZERO);
             return self.sub(z, a);
         }
@@ -6188,6 +6592,7 @@ impl<F: Scalar> Builder<F> {
         Tape {
             inputs: ni,
             pool: self.pool,
+            word_scales: OnceLock::new(),
             out,
             muls,
             scales,
@@ -6634,11 +7039,10 @@ impl<F: Scalar> UniformRel<'_, F> {
         let mut dense = crate::kern::zeroed::<F>(half);
         // The dense runs written: the inner round reads no other (their
         // pages stay unallocated).
-        let written: Vec<std::sync::atomic::AtomicU64> = (0..half
-            .div_ceil(crate::kern::SEGMENT)
-            .div_ceil(64))
-            .map(|_| std::sync::atomic::AtomicU64::new(0))
-            .collect();
+        let written: Vec<std::sync::atomic::AtomicU64> =
+            (0..half.div_ceil(crate::kern::SEGMENT).div_ceil(64))
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect();
         let sink = SplitDense {
             dense: OutPtr(dense.as_mut_ptr()),
             half,
@@ -7005,7 +7409,8 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
     }
     fn fixed_commitment_prefix(&self, shape: &Shape, k: usize) -> Vec<F> {
         let start = k * shape.cols();
-        self.fixed_values.nonzero_prefix(start..start + shape.active_cols())
+        self.fixed_values
+            .nonzero_prefix(start..start + shape.active_cols())
     }
     fn wallet_rows(&self) -> usize {
         self.wallet_rows
@@ -7785,6 +8190,28 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn native_word_pool_is_lazy_and_accounted() {
+        let (c, _, _) = small();
+        let rx = vec![Fv::from(3); c.shape.sx];
+        let ry = vec![Fv::from(5); c.shape.sz()];
+        let ch = [Fv::from(7), Fv::from(11)];
+        let points = [(ch.as_slice(), rx.as_slice(), ry.as_slice())];
+        let reference = c.evals_many(&points);
+        let before = c.proving_memory_accounting();
+        assert!(c.plan().word_scales.get().is_none());
+        assert_eq!(c.evals_many_pasta(&points), reference);
+        let words = c.plan().word_scales.get().unwrap();
+        let bytes = (words.capacity() * size_of::<WordScale>()) as u64;
+        assert!(bytes > 0);
+        let after = c.proving_memory_accounting();
+        assert_eq!(
+            after.matrix_program_bytes,
+            before.matrix_program_bytes + bytes
+        );
+        assert_eq!(after.retained_bytes, before.retained_bytes + bytes);
+    }
+
     /// The interval closed forms (one, own, identity, broadcast, shifts by
     /// -1 and +1, constant and geometric coefficients) equal brute-force sums.
     #[test]
@@ -8149,7 +8576,9 @@ pub(crate) mod tests {
                 rows: Vec::new(),
                 values: vec![
                     (0..16u64).map(|a| Fv::from(square(a))).collect(),
-                    (0..16u64).map(|a| Fv::from(square(a) * square(a))).collect(),
+                    (0..16u64)
+                        .map(|a| Fv::from(square(a) * square(a)))
+                        .collect(),
                 ],
             },
         ];
@@ -8244,7 +8673,10 @@ pub(crate) mod tests {
         assert!(owned > 0, "the hooks write rows");
         let (again, refilled) = run(&filled[..]);
         assert_eq!(refilled, filled, "the hooks are deterministic");
-        assert_eq!(again, owned, "rows taken by position, never by comparing values");
+        assert_eq!(
+            again, owned,
+            "rows taken by position, never by comparing values"
+        );
     }
 
     /// The build refuses a copy read unequal to the entry it names, comparing
@@ -8619,6 +9051,7 @@ pub(crate) mod tests {
             let tape = Tape::<iroha_pasta::Fp> {
                 inputs: inputs as usize,
                 pool: Vec::new(),
+                word_scales: OnceLock::new(),
                 out,
                 muls: 1,
                 scales: 1,
@@ -8630,15 +9063,36 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn pasta_batch_scales_match_full_products() {
+        fn check<F: PastaField>() {
+            let pool = [F::from(u64::MAX), -F::from(u64::MAX), F::from_u128(1 << 64)];
+            let words = pool.map(WordScale::of);
+            assert!(matches!(words[0], WordScale::Positive(u64::MAX)));
+            assert!(matches!(words[1], WordScale::Negative(u64::MAX)));
+            assert!(matches!(words[2], WordScale::Full));
+            let scales = PastaScales {
+                pool: &pool,
+                words: &words,
+            };
+            let x = [F::ZERO, F::ONE, -F::ONE, F::from(17)];
+            for k in 0..pool.len() {
+                assert_eq!(scales.scale(&x, k), pool.as_slice().scale(&x, k));
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
+    }
+
     /// Register reuse must retain inputs and outputs, including aliases,
     /// while releasing dead inputs and last-use operands exactly once.
     #[test]
     fn batched_register_tapes_match_scalar_on_both_fields() {
-        fn check<F: Scalar>() {
+        fn check<F: PastaField>() {
             let mut rng = SpikeRng::new(b"register lifetime parity");
             for inputs in [0, 1, 7] {
                 for seed in 0..24 {
-                    let pool: Vec<F> = (0..3).map(|_| rng.scalar()).collect();
+                    let pool: Vec<F> = vec![rng.scalar(), F::from(u64::MAX), -F::from(1 << 42)];
                     let mut ops = vec![Op::Const(0)];
                     for i in 1..64 {
                         let slots = inputs + ops.len();
@@ -8666,6 +9120,7 @@ pub(crate) mod tests {
                     let tape = Tape {
                         inputs,
                         pool,
+                        word_scales: OnceLock::new(),
                         out,
                         muls: 0,
                         scales: 0,
@@ -8711,7 +9166,10 @@ pub(crate) mod tests {
                         );
                         // Force consecutive groups to reuse a single register
                         // file, including a short final group and empty input.
-                        assert_eq!(tape.run_groups::<4>(&points, 4), expected);
+                        assert_eq!(
+                            tape.run_groups::<4>(&points, 4, &tape.pasta_scales()),
+                            expected
+                        );
                         assert_eq!(
                             points
                                 .chunks(4)
@@ -8916,7 +9374,9 @@ pub(crate) mod tests {
             )
         }
         fn check_helpers<C: iroha_pasta::PastaCurve>()
-        where F<C>: Scalar {
+        where
+            F<C>: Scalar,
+        {
             let (c, i, w, fill) = lookup_test_rows::<F<C>>();
             let start = c.p1_rows + c.pl_rows;
             let mut helpers = start..start + c.p2_rows;
@@ -8972,20 +9432,37 @@ pub(crate) mod tests {
             let (mut shared, _, _) = build();
             let template_bytes = shared.construction_breakdown()[2];
             shared.share_template_coefficients();
-            assert!(shared.construction_breakdown()[2] < template_bytes, "{}", shared.label);
+            assert!(
+                shared.construction_breakdown()[2] < template_bytes,
+                "{}",
+                shared.label
+            );
             assert_eq!(ordinary.program_digest(), shared.program_digest());
             let generators = crate::ipa::Gens::<Vesta>::new(shared.shape.cols());
             let prove = |c: &UniformCircuit<Fv>| {
                 crate::spartan::prove_circuit(
-                    &c.shape, &generators, &instance, &witness,
-                    &mut SpikeRng::new(b"shared coefficient parity"), c,
-                ).0.to_bytes()
+                    &c.shape,
+                    &generators,
+                    &instance,
+                    &witness,
+                    &mut SpikeRng::new(b"shared coefficient parity"),
+                    c,
+                )
+                .0
+                .to_bytes()
             };
             let proof = prove(&ordinary);
             assert_eq!(prove(&shared), proof);
-            assert!(crate::spartan::verify_circuit(
-                &shared.shape, &generators, &instance, &proof, &shared,
-            ).is_ok());
+            assert!(
+                crate::spartan::verify_circuit(
+                    &shared.shape,
+                    &generators,
+                    &instance,
+                    &proof,
+                    &shared,
+                )
+                .is_ok()
+            );
         }
     }
 
@@ -9020,8 +9497,16 @@ pub(crate) mod tests {
             }
             let counts = pi.iter().map(|p| 1 << p).collect();
             let (c, _, w, fill) = UniformCircuit::build_rows(
-                "occupancy", arrays, pi, counts, vec![], Copies::default(), 11, 4,
-                b"occupied rows", None,
+                "occupancy",
+                arrays,
+                pi,
+                counts,
+                vec![],
+                Copies::default(),
+                11,
+                4,
+                b"occupied rows",
+                None,
             );
             (c.program_digest(), w.w, fill)
         };

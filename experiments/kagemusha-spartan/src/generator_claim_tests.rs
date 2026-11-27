@@ -121,8 +121,10 @@ fn private_predecessor_schedules_match_the_complete_four_source_fold() {
     where
         F<C>: Scalar,
     {
-        let gens = Gens::<C>::new(16);
-        let claims = sources(&gens, 4);
+        // Leave rounds after the four leading challenges so that both the
+        // folded generator and every subsequent transcript message are tested.
+        let gens = Gens::<C>::new(64);
+        let claims = sources(&gens, 6);
         let relation = [17; 32];
         let purpose = b"compare complete private fold";
         let entropy = ProofEntropy::fresh().unwrap();
@@ -155,11 +157,19 @@ fn private_predecessor_schedules_match_the_complete_four_source_fold() {
             } else {
                 parents.iter().chain(&parents).cloned().collect()
             };
+            let (complete, _) = prove(&gens, relation, all.clone(), &entropy, purpose).unwrap();
+            assert_eq!(actual.lr, complete.lr);
+            // At depth zero every round uses its full coefficient halves
+            // and reduces the basis once, independently of the block kernel.
             let (expected, expected_trace) =
-                prove(&gens, relation, all, &entropy, purpose).unwrap();
+                prove_with_rng_at(&gens, relation, all, 0, &mut entropy.stream(purpose)).unwrap();
             assert_eq!(actual_trace.shared, expected_trace.shared);
+            assert_eq!(actual_trace.challenges, expected_trace.challenges);
+            assert_eq!(actual.masks, expected.masks);
             assert_eq!(actual.d, expected.d);
             assert_eq!(actual.lr, expected.lr);
+            assert_eq!(actual.c, expected.c);
+            assert_eq!(actual.output.us, expected.output.us);
             assert_eq!(actual.output.g, expected.output.g);
             assert!(verify(&gens, relation, &actual));
             let [mut wrong, other] = parents;

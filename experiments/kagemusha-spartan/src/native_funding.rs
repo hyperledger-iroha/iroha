@@ -807,7 +807,7 @@ mod tests {
                 witness: Arc::new(witness),
                 receipt_body: body,
                 receive: None,
-            archive: None,
+                archive: None,
                 predecessor: head.clone(),
             },
             head,
@@ -1331,10 +1331,7 @@ mod tests {
                 |previous| Ok(previous + Fp::ONE),
             )
         };
-        attempt(
-            &installed, &released, &verified, &valid.0, &valid.1, &empty,
-        )
-        .unwrap();
+        attempt(&installed, &released, &verified, &valid.0, &valid.1, &empty).unwrap();
 
         // Parameter scope of the installation, the head and the preparation.
         let mut other_id = *installed.id;
@@ -1355,7 +1352,14 @@ mod tests {
         let mut reissued_head = verified.clone();
         reissued_head.manifest_digest = other_manifest;
         assert!(matches!(
-            attempt(&installed, &released, &reissued_head, &valid.0, &valid.1, &empty),
+            attempt(
+                &installed,
+                &released,
+                &reissued_head,
+                &valid.0,
+                &valid.1,
+                &empty
+            ),
             Err(Error::AuthorityMismatch("released producer manifest"))
         ));
         assert!(matches!(
@@ -1470,9 +1474,7 @@ mod tests {
             Err(Error::AuthorityMismatch("Load receipt wallet scope"))
         ));
         assert!(matches!(
-            attempt(
-                &installed, &released, &verified, &ahead.0, &ahead.1, &empty
-            ),
+            attempt(&installed, &released, &verified, &ahead.0, &ahead.1, &empty),
             Err(Error::AuthorityMismatch(
                 "Load ordinal is ahead of the next ordinal"
             ))
@@ -1572,9 +1574,7 @@ mod tests {
         let (released, verified) = release(&f, first.clone(), after_load_profile(&profile, step));
         let loaded = &store.map;
         assert!(matches!(
-            attempt(
-                &installed, &released, &verified, &valid.0, &valid.1, loaded
-            ),
+            attempt(&installed, &released, &verified, &valid.0, &valid.1, loaded),
             Err(Error::AuthorityMismatch("Load ordinal already consumed"))
         ));
         assert!(matches!(
@@ -1588,15 +1588,10 @@ mod tests {
             ),
             Err(Error::Malformed("Load balance overflow"))
         ));
-        attempt(
-            &installed, &released, &verified, &ahead.0, &ahead.1, loaded,
-        )
-        .unwrap();
+        attempt(&installed, &released, &verified, &ahead.0, &ahead.1, loaded).unwrap();
         // A store that did not record the released Load cannot answer.
         assert!(matches!(
-            attempt(
-                &installed, &released, &verified, &ahead.0, &ahead.1, &empty
-            ),
+            attempt(&installed, &released, &verified, &ahead.0, &ahead.1, &empty),
             Err(Error::AuthorityMismatch("test store recovery root"))
         ));
     }
@@ -1644,8 +1639,13 @@ mod tests {
         let origin = engine
             .enrollment_origin(input, marker, &parameters)
             .unwrap();
-        let other_origin = engine.enrollment_origin(input, [0x58; 32], &parameters).unwrap();
-        assert!(matches!(engine.prepare(&boot, &other_origin, &parameters), Err(Error::AuthorityMismatch("bootstrap enrollment origin"))));
+        let other_origin = engine
+            .enrollment_origin(input, [0x58; 32], &parameters)
+            .unwrap();
+        assert!(matches!(
+            engine.prepare(&boot, &other_origin, &parameters),
+            Err(Error::AuthorityMismatch("bootstrap enrollment origin"))
+        ));
         let prepared = engine.prepare(&boot, &origin, &parameters).unwrap();
         let capsule = prepared.capsule().clone();
         let signed = sign(&prepared, &chain.sender_key.d);
@@ -1656,7 +1656,11 @@ mod tests {
         );
 
         let released = engine.resume(&capsule, &parameters).unwrap();
-        let certified = certify(vec![load_receipt(&chain.sender_bootstrap.credential, 0, 100)]);
+        let certified = certify(vec![load_receipt(
+            &chain.sender_bootstrap.credential,
+            0,
+            100,
+        )]);
         let mut store = RecoveryStore::of(&KagemushaWalletIndexedTreeV1::new());
         let funded = engine
             .load_from_finality(

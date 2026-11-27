@@ -1488,27 +1488,24 @@ pub async fn handler_post_da_ingest(
                 ))
             })?;
             let commitment_record = receipt.commitment_record(request.sequence, proof_scheme);
-            let pin_scope = build_da_pin_scope(
-                &request,
-                manifest.storage_ticket,
-                manifest.manifest_hash,
-                commitment_record.pin_scope_digest(),
-            )
-            .map_err(|(status, message)| {
-                ResponseError::from(build_error_response(status, &message, format))
-            })?;
-            let pin_scope_authorization =
-                submitted_pin_scope_authorization(&request, pin_scope.clone()).map_err(
-                    |(status, message)| {
+            let commitment_digest = commitment_record.pin_scope_digest();
+            let pin_scope =
+                build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
+                    .map_err(|(status, message)| {
                         ResponseError::from(build_error_response(status, &message, format))
-                    },
-                )?;
+                    })?;
+            let pin_scope_authorization =
+                submitted_pin_scope_authorization(&request, pin_scope.clone(), &commitment_digest)
+                    .map_err(|(status, message)| {
+                        ResponseError::from(build_error_response(status, &message, format))
+                    })?;
             let pin_intent = if let Some(authorization) = pin_scope_authorization {
                 let candidate = build_da_pin_intent(&request, authorization);
                 Some(
                     persistence::select_da_pin_intent_for_persistence(
                         &app.da_ingest.manifest_store_dir,
                         &candidate,
+                        &commitment_digest,
                         request.lane_id,
                         request.epoch,
                         request.sequence,
@@ -1536,6 +1533,7 @@ pub async fn handler_post_da_ingest(
                     request.sequence,
                     &manifest.storage_ticket,
                     &fingerprint,
+                    &commitment_digest,
                 ) {
                     Ok(existing) => {
                         if existing.pin_scope_authorization.scope != pin_scope {
@@ -1644,6 +1642,7 @@ pub async fn handler_post_da_ingest(
                     persistence::persist_da_pin_intent(
                         &spool_dir,
                         &pin_intent,
+                        &commitment_digest,
                         lane_id,
                         epoch,
                         sequence,
@@ -2056,7 +2055,7 @@ pub async fn handler_post_da_ingest(
                 },
                 duplicate,
                 receipt: Some(receipt),
-                pin_scope: Some(pin_scope),
+                pin_scope: Some(DaPinScopeProposalV1::new(pin_scope, commitment_digest)),
             };
             let mut http_response = utils::respond_with_format(&(response), format);
             if pin_intent.is_some() {
@@ -2223,16 +2222,21 @@ fn load_duplicate_da_artifacts(
         )));
     }
 
-    let pin_intent =
-        load_duplicate_pin_intent(spool_dir, lane_epoch, sequence, &pin_scope, &fingerprint)?;
     let commitment = receipt.commitment_record(sequence, DaProofScheme::SorafsPorBlake3);
-    if receipt.retention_policy != manifest_artifact.manifest.retention_policy
-        || commitment.pin_scope_digest() != pin_scope.commitment_digest
-    {
+    if receipt.retention_policy != manifest_artifact.manifest.retention_policy {
         return Err(DuplicateDaArtifactsError::Internal(eyre!(
             "durable DA receipt, manifest, and signed commitment scope disagree"
         )));
     }
+    // A durable pin intent's producer witnesses must cover this receipt's exact commitment.
+    let pin_intent = load_duplicate_pin_intent(
+        spool_dir,
+        lane_epoch,
+        sequence,
+        &pin_scope,
+        &fingerprint,
+        &commitment.pin_scope_digest(),
+    )?;
     let source = super::source::verify_completion(
         spool_dir,
         &manifest_artifact.manifest,
@@ -2266,6 +2270,7 @@ fn load_duplicate_pin_intent(
     sequence: u64,
     pin_scope: &DaPinScopeV1,
     fingerprint: &ReplayFingerprint,
+    commitment_digest: &BlobDigest,
 ) -> Result<Option<DaPinIntent>, DuplicateDaArtifactsError> {
     let pin_intent = match persistence::load_da_pin_intent(
         spool_dir,
@@ -2274,6 +2279,7 @@ fn load_duplicate_pin_intent(
         sequence,
         &pin_scope.storage_ticket,
         fingerprint,
+        commitment_digest,
     ) {
         Ok(intent) => Some(intent),
         Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -2430,6 +2436,7 @@ fn complete_verified_da_duplicate(
         request.sequence,
         &artifacts.pin_scope,
         &fingerprint,
+        &artifacts.commitment.pin_scope_digest(),
     )
     .map_err(|err| {
         duplicate_da_artifacts_response_error(err, "failed to recheck duplicate pin", format)
@@ -2479,8 +2486,9 @@ fn finalize_duplicate_da_pin_intent(
         .revalidate()
         .wrap_err("verified DA publication marker changed before finalization")
         .map_err(DuplicateDaArtifactsError::Internal)?;
+    let commitment_digest = artifacts.commitment.pin_scope_digest();
     let submitted_scope_authorization =
-        submitted_pin_scope_authorization(request, artifacts.pin_scope.clone())
+        submitted_pin_scope_authorization(request, artifacts.pin_scope.clone(), &commitment_digest)
             .map_err(|(status, message)| DuplicateDaArtifactsError::Client(status, message))?;
     if let Some(existing) = artifacts.pin_intent.take() {
         persistence::validate_da_pin_intent_retry_authorization(
@@ -2494,6 +2502,7 @@ fn finalize_duplicate_da_pin_intent(
                 persistence::select_da_pin_intent_for_persistence(
                     spool_dir,
                     &candidate,
+                    &commitment_digest,
                     lane_epoch.lane_id,
                     lane_epoch.epoch,
                     request.sequence,
@@ -2521,6 +2530,7 @@ fn finalize_duplicate_da_pin_intent(
         let intent = persistence::select_da_pin_intent_for_persistence(
             spool_dir,
             &candidate,
+            &commitment_digest,
             lane_epoch.lane_id,
             lane_epoch.epoch,
             request.sequence,
@@ -2539,6 +2549,7 @@ fn finalize_duplicate_da_pin_intent(
         persistence::persist_da_pin_intent(
             spool_dir,
             &intent,
+            &commitment_digest,
             lane_epoch.lane_id,
             lane_epoch.epoch,
             request.sequence,
@@ -2555,6 +2566,7 @@ fn finalize_duplicate_da_pin_intent(
                 request.sequence,
                 &artifacts.pin_scope.storage_ticket,
                 &fingerprint,
+                &commitment_digest,
             )
             .wrap_err("failed to reload canonical producer-authorized DA pin intent")
             .map_err(DuplicateDaArtifactsError::Internal)?,
@@ -2614,7 +2626,10 @@ fn duplicate_da_ingest_response_from_artifacts(
         },
         duplicate: true,
         receipt: Some(artifacts.receipt),
-        pin_scope: Some(artifacts.pin_scope),
+        pin_scope: Some(DaPinScopeProposalV1::new(
+            artifacts.pin_scope,
+            artifacts.commitment.pin_scope_digest(),
+        )),
     };
     let mut http_response = utils::respond_with_format(&(response), format);
     if finalized {
@@ -3743,7 +3758,6 @@ fn build_da_pin_scope(
     request: &DaIngestRequest,
     storage_ticket: StorageTicketId,
     manifest_hash: BlobDigest,
-    commitment_digest: BlobDigest,
 ) -> Result<DaPinScopeV1, (StatusCode, String)> {
     let alias = request
         .metadata
@@ -3759,19 +3773,21 @@ fn build_da_pin_scope(
         &request.authorization(),
         storage_ticket,
         ManifestDigest::new(*manifest_hash.as_bytes()),
-        commitment_digest,
         alias,
     ))
 }
+/// Project the producer's retry witnesses onto the scope and verify them against the
+/// digest of the paired commitment record that Torii proposed.
 fn submitted_pin_scope_authorization(
     request: &DaIngestRequest,
     scope: DaPinScopeV1,
+    commitment_digest: &BlobDigest,
 ) -> Result<Option<DaPinScopeAuthorizationV1>, (StatusCode, String)> {
     if request.pin_scope_signatures.is_empty() {
         return Ok(None);
     }
     let authorization = request.pin_scope_authorization(scope);
-    if !authorization.has_valid_canonical_signatures() {
+    if !authorization.has_valid_canonical_signatures(commitment_digest) {
         return Err((
             StatusCode::UNAUTHORIZED,
             "DA pin-scope signatures are invalid or non-canonical".to_owned(),
@@ -3966,7 +3982,7 @@ struct DaIngestResponse {
     status: &'static str,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
-    pin_scope: Option<DaPinScopeV1>,
+    pin_scope: Option<DaPinScopeProposalV1>,
 }
 #[cfg(test)]
 #[path = "tests.rs"]

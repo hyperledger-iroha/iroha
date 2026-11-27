@@ -206,8 +206,8 @@ fn previous_two_build_reference(
 ) -> SignedBlock {
     let parent_time = assembly.parent.header().creation_time();
     let minimum = parent_time.checked_add(assembly.cadence).unwrap();
-    // Match assemble_with_merges: authenticate the native parent service internally
-    // and include pending DA in both timestamp passes.
+    // Both passes mirror assemble_with_merges, which authenticates the parent
+    // service internally and includes pending DA commitments.
     let first = build_at(state, assembly, transactions, merges, minimum, None, true).unwrap();
     let canonical =
         ValidBlock::sumeragi_block_time_floor(&first, parent_time, assembly.cadence).unwrap();

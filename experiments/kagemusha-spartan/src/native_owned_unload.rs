@@ -230,7 +230,10 @@ where
                     "Unload quote ordinal is ahead of the next redemption",
                 ));
             }
-            (quote.body.online_charge, field(&quote.charge_quote_digest())?)
+            (
+                quote.body.online_charge,
+                field(&quote.charge_quote_digest())?,
+            )
         }
     };
     let ordinal_word = Fp::from_u128(ordinal);
@@ -357,7 +360,8 @@ mod tests {
             let key = WalletKey::labelled("owned Unload fixture wallet");
             let (ctx, mut boot) = bootstrap::fixture(&key, &Gens::<Vesta>::new(4096));
             let c = &mut boot.credential;
-            c.body[98..130].copy_from_slice(&kagemusha_wallet_account_digest_v1(&payout()).unwrap());
+            c.body[98..130]
+                .copy_from_slice(&kagemusha_wallet_account_digest_v1(&payout()).unwrap());
             c.signature = bootstrap::sign(
                 credential::message(c),
                 &BigUint::from_bytes_be(&ISSUER_SECRET),
@@ -526,7 +530,7 @@ mod tests {
                 witness: Arc::new(witness),
                 receipt_body: body,
                 receive: None,
-            archive: None,
+                archive: None,
                 predecessor: head.clone(),
             },
             head,
@@ -550,7 +554,11 @@ mod tests {
         map.insert(step.recovery.key.to_repr(), step.recovery.value.to_repr())
             .map_err(|e| e.to_string())
             .unwrap();
-        assert_eq!(map.root(), step.after_core[19].to_repr(), "canonical Load map");
+        assert_eq!(
+            map.root(),
+            step.after_core[19].to_repr(),
+            "canonical Load map"
+        );
         edit(&mut step.after_core, &mut map);
         step.after_core[19] = field(&map.root()).unwrap();
         step.statement[8] = step.after_core[0];
@@ -829,7 +837,12 @@ mod tests {
         );
         assert_eq!(
             destinations_of(&built)
-                .verify(&step.credential, &step.statement, &b.ctx.root.scheme, &b.ctx.root.root)
+                .verify(
+                    &step.credential,
+                    &step.statement,
+                    &b.ctx.root.scheme,
+                    &b.ctx.root.root
+                )
                 .unwrap(),
             (0, 40, 40)
         );
@@ -933,13 +946,7 @@ mod tests {
             Err(Error::AuthorityMismatch("Unload signed quote scope"))
         ));
         // A genuinely signed quote for another wallet.
-        let other_wallet = quote_with(
-            [0x99; 32],
-            0,
-            40,
-            3,
-            super::super::engine::TEST_ROOT_SECRET,
-        );
+        let other_wallet = quote_with([0x99; 32], 0, 40, 3, super::super::engine::TEST_ROOT_SECRET);
         assert!(attempt(&other_wallet).is_err(), "quote of another wallet");
         // A signer of another role or certified by another root.
         let mut wrong_role = charged(0, 40, 3);
@@ -980,9 +987,11 @@ mod tests {
         let exact = charged(0, 40, 3).to_original().unwrap();
         let mut trailing = exact.clone();
         trailing.push(0);
-        let compact =
-            norito::encode_canonical_with_layout(&charged(0, 40, 3), norito::core::WireLayout::Compact)
-                .unwrap();
+        let compact = norito::encode_canonical_with_layout(
+            &charged(0, 40, 3),
+            norito::core::WireLayout::Compact,
+        )
+        .unwrap();
         for (case, bytes) in [
             ("trailing byte", trailing),
             ("truncated", exact[..exact.len() - 1].to_vec()),
@@ -1025,7 +1034,10 @@ mod tests {
             Error::AuthorityMismatch("Unload insufficient spendable value")
         ));
         refused(attempt(&r, 4, &charged(0, 4, 5)), "charge above face");
-        refused(attempt(&r, 41, &charged(0, 40, 3)), "face other than quoted");
+        refused(
+            attempt(&r, 41, &charged(0, 40, 3)),
+            "face other than quoted",
+        );
         refused(attempt(&r, 40, &charged(0, 40, 0)), "zero quoted charge");
         // The full spendable value redeems and leaves exactly the lineage burn.
         let (full, _) = attempt(&r, 100, &ordinary());
@@ -1034,7 +1046,11 @@ mod tests {
         assert!(relation_holds(step_of(&full), r.profile));
 
         // Counters: the last representable ordinal redeems; overflow does not.
-        let last = released(|core, _| core[14] = Fp::from_u128(u128::MAX - 1), None, None);
+        let last = released(
+            |core, _| core[14] = Fp::from_u128(u128::MAX - 1),
+            None,
+            None,
+        );
         let (result, asked) = attempt(&last, 10, &ordinary());
         let last_step = result.unwrap();
         assert_eq!(asked, 1);
@@ -1046,7 +1062,10 @@ mod tests {
         ));
         let sequenced_out = released(|core, _| core[11] = Fp::from_u128(u128::MAX), None, None);
         assert!(matches!(
-            refused(attempt(&sequenced_out, 10, &ordinary()), "sequence overflow"),
+            refused(
+                attempt(&sequenced_out, 10, &ordinary()),
+                "sequence overflow"
+            ),
             Error::Malformed("Unload sequence overflow")
         ));
         // Integer widths and the lineage bound.
@@ -1088,7 +1107,10 @@ mod tests {
                 store.answer(),
                 |previous| Ok(if reused { previous } else { Fp::ZERO }),
             );
-            assert!(matches!(result, Err(Error::Unavailable("fresh state nonce"))));
+            assert!(matches!(
+                result,
+                Err(Error::Unavailable("fresh state nonce"))
+            ));
             assert_eq!(store.asked, 0);
         }
     }
@@ -1116,7 +1138,9 @@ mod tests {
             assert!(
                 matches!(
                     build(&r, face, &ordinary(), &mut store),
-                    Err(Error::AuthorityMismatch("Unload insufficient spendable value"))
+                    Err(Error::AuthorityMismatch(
+                        "Unload insufficient spendable value"
+                    ))
                 ),
                 "{case}"
             );
@@ -1238,7 +1262,11 @@ mod tests {
     }
 
     /// One attempt under `scope` and `head`, with the count of store requests.
-    fn scoped(r: &Released, scope: &Installed<'_>, head: &VerifiedWalletHead) -> (Result<()>, usize) {
+    fn scoped(
+        r: &Released,
+        scope: &Installed<'_>,
+        head: &VerifiedWalletHead,
+    ) -> (Result<()>, usize) {
         let mut store = Store::of(&r.map);
         let result = unload_witness(
             scope,
@@ -1289,15 +1317,55 @@ mod tests {
         let mut another_credential = r.head.clone();
         another_credential.credential.signature[0] ^= 1;
         for (case, scope, head, error) in [
-            ("parameter identity", foreign, &r.head, "Unload parameter identity"),
-            ("head parameter identity", scope, &foreign_head, "Unload parameter identity"),
-            ("producer manifest", reissued, &r.head, "released producer manifest"),
-            ("head producer manifest", scope, &reissued_head, "released producer manifest"),
+            (
+                "parameter identity",
+                foreign,
+                &r.head,
+                "Unload parameter identity",
+            ),
+            (
+                "head parameter identity",
+                scope,
+                &foreign_head,
+                "Unload parameter identity",
+            ),
+            (
+                "producer manifest",
+                reissued,
+                &r.head,
+                "released producer manifest",
+            ),
+            (
+                "head producer manifest",
+                scope,
+                &reissued_head,
+                "released producer manifest",
+            ),
             ("installed scheme", rescoped, &r.head, "released credential"),
-            ("another capsule", scope, &another_capsule, "released predecessor custody"),
-            ("enrollment origin", scope, &origin, "released predecessor custody"),
-            ("no recursive proof", scope, &unproved, "released predecessor custody"),
-            ("another credential", scope, &another_credential, "released credential"),
+            (
+                "another capsule",
+                scope,
+                &another_capsule,
+                "released predecessor custody",
+            ),
+            (
+                "enrollment origin",
+                scope,
+                &origin,
+                "released predecessor custody",
+            ),
+            (
+                "no recursive proof",
+                scope,
+                &unproved,
+                "released predecessor custody",
+            ),
+            (
+                "another credential",
+                scope,
+                &another_credential,
+                "released credential",
+            ),
         ] {
             let (result, asked) = scoped(&r, &scope, head);
             assert!(

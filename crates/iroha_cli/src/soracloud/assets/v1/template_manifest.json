@@ -5,8 +5,8 @@
   "assets": [
     {
       "path": "hayahi_app_readme.tmpl",
-      "byte_length": 2529,
-      "sha256": "e4402ed7a587f08010f77adbb078299316d78e6c4dea2cea6ce7c4069e590807",
+      "byte_length": 2602,
+      "sha256": "8278f5bbbf2e7328170f92763663e7c9b73aacd9fa05ed25ddee0e2b6ff9c3b4",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -82,8 +82,8 @@
     },
     {
       "path": "pii_app_readme.tmpl",
-      "byte_length": 2373,
-      "sha256": "0aa0a6cb317c2a4d7a2522321023c49d9530f0a023fb4a3a4f47106b1baf8d07",
+      "byte_length": 2446,
+      "sha256": "53e2e27b8c5e1f675f3594470ec924e402e7be0a03d68aad3b08e3d1d285b3c9",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -159,8 +159,8 @@
     },
     {
       "path": "site_readme.tmpl",
-      "byte_length": 955,
-      "sha256": "cc7b7f0ebc7d4f6e18a16122ed5040fdc5d7351cdc40f48e7a653d06020b60e0",
+      "byte_length": 1028,
+      "sha256": "ea2d35d1f89ae55d67065cfbbb3c2a6bf8f31baf4065b079f391f417051b1617",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
@@ -280,8 +280,8 @@
     },
     {
       "path": "webapp_readme.tmpl",
-      "byte_length": 1969,
-      "sha256": "9b01833f515cfa8ce2688060585fdef7a5ff60ca76f1e7d1dcf7921941a7ab1d",
+      "byte_length": 2042,
+      "sha256": "708646b406edbb42598fb777dc7d8d2d99badcc569bcd640c86592a868ae6233",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {

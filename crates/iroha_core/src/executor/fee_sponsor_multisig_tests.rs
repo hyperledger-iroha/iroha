@@ -148,7 +148,6 @@ fn inner(f: &Fixture, target: &AccountId) -> Vec<InstructionBox> {
         &f.alias,
         &f.selector.entrypoints[0],
         &Json::new(norito::json!({"document":"test"})),
-        None,
         &f.selector.code_hash,
         NonZeroU64::new(100).unwrap(),
     )
@@ -300,7 +299,6 @@ fn enrolled_multisig_binds_current_code_alias_entrypoint_and_entire_inner_vector
                 &f.alias,
                 entrypoint,
                 &Json::new(norito::json!({})),
-                None,
                 &code,
                 NonZeroU64::new(100).unwrap(),
             )

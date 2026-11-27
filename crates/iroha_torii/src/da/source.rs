@@ -184,7 +184,8 @@ pub(super) fn verify_completion(
     let mut data = 0_u64;
     let mut parity = 0_u64;
     let mut blob = blake3::Hasher::new();
-    let mut buffer = [0_u8; 32 * 1024];
+    // Heap-allocated: async handler stacks stay small.
+    let mut buffer = vec![0_u8; 32 * 1024];
     for (index, chunk) in manifest.chunks.iter().enumerate() {
         if index != chunk.index as usize || chunk.length == 0 || chunk.length > MAX_CHUNK_SIZE_BYTES
         {

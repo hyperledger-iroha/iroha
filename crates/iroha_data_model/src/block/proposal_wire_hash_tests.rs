@@ -532,12 +532,16 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
     let original = complete_comparison_proposal();
     let pin = &original.payload.da_pin_intents.as_ref().unwrap().intents[0];
     let key = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519).unwrap();
+    // The fixture's pin scope signs the digest of a default (zero) paired commitment.
+    let commitment = crate::da::types::BlobDigest::default();
     assert!(pin.authorization.has_valid_canonical_signatures());
-    assert!(pin.pin_scope_authorization.has_valid_canonical_signatures());
+    assert!(
+        pin.pin_scope_authorization
+            .has_valid_canonical_signatures(&commitment)
+    );
 
     let mut changed_request = pin.clone();
-    changed_request.authorization.request_content_hash =
-        crate::da::types::BlobDigest::from_hash(blake3::hash(b"changed pin request"));
+    changed_request.authorization.request_content_hash = Hash::new(b"changed pin request");
     changed_request.authorization.signatures[0].signature = iroha_crypto::Signature::try_new(
         key.private_key(),
         &changed_request.authorization.signing_digest(),
@@ -548,9 +552,9 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
             &changed_request.authorization,
             pin.storage_ticket,
             pin.manifest_hash,
-            Default::default(),
             pin.alias.clone(),
         ),
+        &commitment,
         &key,
     )
     .unwrap();
@@ -562,7 +566,7 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
     assert!(
         changed_request
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(&commitment)
     );
 
     // The witness-only variants deliberately sign another message. Neither
@@ -581,7 +585,7 @@ fn checked_resultless_comparison_binds_da_pin_authorization_and_witnesses() {
     assert!(
         !changed_scope_witness
             .pin_scope_authorization
-            .has_valid_canonical_signatures()
+            .has_valid_canonical_signatures(&commitment)
     );
 
     for (name, changed_pin) in [

@@ -103,7 +103,48 @@ impl Arithmetic {
     fn residue(&mut self, v: BigUint, modulus: usize) -> N {
         let m = if modulus == 0 { &self.p } else { &self.n };
         assert!(v < *m);
-        self.allocate(v, Some(m - 1u32)).0
+        let bound = m - 1u32;
+        let x = limbs(&v);
+        let difference = limbs(&(&bound - &v));
+        let limit = limbs(&bound);
+        let widths = [88, 88, 80];
+        // finish() addresses the three limbs as offsets from the first cell.
+        let cells = std::array::from_fn(|i| self.c.cell(fp(x[i].magnitude()), widths[i] as u16));
+        let mut carry = None;
+        for (i, width) in widths.into_iter().enumerate() {
+            let chunks = nonnative::chunk_widths(width);
+            let [value, gap] = [&x[i], &difference[i]].map(|limb| {
+                let first = self.c.a.values.len();
+                for (chunk, bits) in nonnative::chunk_values(limb.magnitude(), &chunks)
+                    .into_iter()
+                    .zip(&chunks)
+                {
+                    let cell = self.c.cell(chunk, *bits as u16);
+                    nonnative::range_lookups(&mut self.c.a.lookups, cell, *bits, 1);
+                }
+                nonnative::recompose(first, &chunks, 1)
+            });
+            self.c.eq(own(cells[i], 1), value);
+            let mut lhs = plus(&own(cells[i], 1), &gap);
+            if let Some(previous) = carry {
+                lhs = plus(&lhs, &own(previous, 1));
+            }
+            let mut rhs = constant(vec![fp(limit[i].magnitude())]);
+            if i < 2 {
+                // Adding x and its complement carries exactly when subtraction
+                // of the low prefix of x from the bound borrows.
+                let mask = pow2(88 * (i + 1)) - 1u32;
+                let next = self.c.bit((&v & &mask) > (&bound & &mask));
+                rhs = plus(&rhs, &scaled(&own(next, 1), fp(&pow2(width))));
+                carry = Some(next);
+            }
+            // With no outgoing carry on the top limb, x + difference = m - 1.
+            self.c.eq(lhs, rhs);
+        }
+        N {
+            value: v,
+            limbs: cells,
+        }
     }
     fn check(&mut self, a: &N, b: &N, lin: Vec<(i64, N)>, constant: i64, modulus: usize) {
         self.checks.push(Check {
@@ -724,6 +765,34 @@ mod tests {
             start.elapsed()
         );
     }
+
+    #[test]
+    fn canonical_residue_limbs_hold_across_carries() {
+        let mut wiring = Wiring::default();
+        let family = wiring.family(0, 1);
+        let mut arithmetic = Arithmetic::new(family, "P-256 canonical residues");
+        for (selector, modulus) in [p256::p(), p256::n()].into_iter().enumerate() {
+            let bound = modulus - 1u32;
+            let mut cases = vec![BigUint::zero(), BigUint::one(), bound.clone()];
+            for width in [88, 176] {
+                let radix = pow2(width);
+                let low_bound = &bound % &radix;
+                cases.extend([&radix - 1u32, radix, &low_bound + 1u32, low_bound]);
+            }
+            for value in cases {
+                let result = arithmetic.residue(value.clone(), selector);
+                let [low, middle, high] = result.limbs;
+                assert_eq!([middle, high], [low + 1, low + 2]);
+                for (cell, limb) in result.limbs.into_iter().zip(limbs(&value)) {
+                    assert_eq!(arithmetic.c.a.values[cell][0], fp(limb.magnitude()));
+                }
+            }
+        }
+        wiring.push(arithmetic.c.a);
+        operation_auth::ensure_range(&mut wiring, family);
+        assert!(holds(&finish(wiring, 12)));
+    }
+
     #[test]
     fn total_request_signature_layout_and_rows() {
         let key = WalletKey::stand_in();

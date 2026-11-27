@@ -254,7 +254,8 @@ fn maximum_peer_bytes(encoded_pair: usize) -> Result<usize> {
     let n = fixed
         .checked_add(encoded_pair)
         .ok_or(Error::ResourceLimit)?;
-    n.checked_add(payment_wire::HEADER_BYTES).ok_or(Error::ResourceLimit)
+    n.checked_add(payment_wire::HEADER_BYTES)
+        .ok_or(Error::ResourceLimit)
 }
 
 fn qualified_maximum(encoded_pair: usize) -> Result<usize> {

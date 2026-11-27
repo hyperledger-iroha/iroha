@@ -38,7 +38,7 @@ test("eligible exact finish ties exclude an earlier forfeited finisher and retai
   assert.deepEqual(decodeRaceValueV1("RaceResultV1", Buffer.from(outcome.result)).winners, [1, 2]);
 });
 test("timeout distance compares only eligible racers; one millimetre breaks distance but slot cannot break ties", () => {
-  const s = state(4, 5400); finish(s, 0, 6); s.cars[0].dnf_tick = 12;
+  const s = state(4, 8100); finish(s, 0, 6); s.cars[0].dnf_tick = 12;
   s.cars[1].progress_mm = 400_000; s.cars[2].progress_mm = 400_000; s.cars[3].progress_mm = 399_999;
   assert.deepEqual(derive(s).winners, [1, 2]);
   s.cars[2].progress_mm++; assert.deepEqual(derive(s).winners, [2]);
@@ -46,14 +46,14 @@ test("timeout distance compares only eligible racers; one millimetre breaks dist
 });
 test("unexceptional distance outcomes preserve all eight eligible winners on each track", () => {
   for (const kind of ["neon_tokyo", "harbor", "sakura"]) {
-    const s = state(8, 5400, kind), result = derive(s);
+    const s = state(8, 8100, kind), result = derive(s);
     assert.deepEqual(result.winners, [0, 1, 2, 3, 4, 5, 6, 7]);
     assert.deepEqual(deriveRaceOutcomeV1(s).winner_slots, result.winners);
   }
 });
 test("batch boundaries, one-car practice and unfinished nonterminal states match frozen native rules", () => {
   const solo = state(1, 0); assert.equal(isRaceTerminalStateV1(solo), false); assert.deepEqual(derive(solo).winners, []);
-  solo.tick = 5400; assert.equal(isRaceTerminalStateV1(solo), true); assert.deepEqual(derive(solo).winners, []);
+  solo.tick = 8100; assert.equal(isRaceTerminalStateV1(solo), true); assert.deepEqual(derive(solo).winners, []);
   const s = state(2, 23); s.cars[0].dnf_tick = 18;
   assert.equal(isRaceTerminalStateV1(s), false); assert.deepEqual(derive(s).winners, []);
   s.tick = 24; assert.equal(isRaceTerminalStateV1(s), true); assert.deepEqual(derive(s).winners, [1]);
@@ -62,9 +62,9 @@ test("batch boundaries, one-car practice and unfinished nonterminal states match
   finish(unfinished, 0, 6); assert.equal(isRaceTerminalStateV1(unfinished), false); assert.deepEqual(derive(unfinished).winners, [0]);
 });
 test("native state bounds reject impossible numbers, overflow, malformed shapes and inconsistent finish history", () => {
-  const changes = [s => { s.tick = 5401; }, s => { s.cars = []; }, s => { s.cars = Array(9).fill(s.cars[0]); },
+  const changes = [s => { s.tick = 8101; }, s => { s.cars = []; }, s => { s.cars = Array(9).fill(s.cars[0]); },
     s => { s.cars[0].progress_mm = -12001; }, s => { s.cars[0].progress_mm = 7_200_001; },
-    s => { s.cars[0].lateral_mm = 16201; }, s => { s.cars[0].lateral_mm = -16201; },
+    s => { s.cars[0].lateral_mm = 6521; }, s => { s.cars[0].lateral_mm = -6521; },
     s => { s.cars[0].speed_mm_per_tick = 3001; }, s => { s.cars[0].speed_mm_per_tick = -1; },
     s => { s.cars[0].lateral_velocity_mm_per_tick = 321; }, s => { s.cars[0].boost_energy = 1001; },
     s => { s.cars[0].finish_tick = 0; }, s => { finish(s, 0, 25); }, s => { s.cars[0].finish_tick = 6; },
@@ -72,7 +72,7 @@ test("native state bounds reject impossible numbers, overflow, malformed shapes 
     s => { s.cars[0].progress_mm = "1".repeat(1000); }, s => { s.cars[0].extra = "award"; },
     s => { s.cars[0].finish_tick = undefined; }, s => { s.track.value = 1; }];
   for (const mutation of changes) { const s = state(); mutation(s); assert.throws(() => derive(s)); }
-  const boundary = state(); Object.assign(boundary.cars[0], { progress_mm: -12000, lateral_mm: 16200, speed_mm_per_tick: 3000, lateral_velocity_mm_per_tick: -320, boost_energy: 0, dnf_tick: 0 });
+  const boundary = state(); Object.assign(boundary.cars[0], { progress_mm: -12000, lateral_mm: 6520, speed_mm_per_tick: 3000, lateral_velocity_mm_per_tick: -320, boost_energy: 0, dnf_tick: 0 });
   assert.equal(derive(boundary).standings.length, 4);
 });
 test("state preparation rejects accessors and sparse input without reading hidden mutable values", () => {

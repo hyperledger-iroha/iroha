@@ -327,17 +327,63 @@ fn extra_file_and_same_original_hardlink_refuse_sealing_without_cleanup() {
 
 #[cfg(unix)]
 #[test]
+fn ancestor_namespace_replacement_refuses_foreign_path_with_original_seal_unchanged() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temporary = tempfile::tempdir().unwrap();
+    let owner = OwnerDirectory::open_or_create(temporary.path().join("owner")).unwrap();
+    let batch = pending(&owner, "batch").seal().unwrap();
+    let moved = temporary.path().join("moved-owner");
+    // The writable ancestor can move without changing the sealed leaf's mode.
+    std::fs::rename(owner.path(), &moved).unwrap();
+    assert_eq!(
+        std::fs::metadata(moved.join("batch"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o500
+    );
+    std::fs::create_dir(owner.path()).unwrap();
+    std::fs::set_permissions(owner.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(batch.revalidate().is_err());
+    std::fs::remove_dir(owner.path()).unwrap();
+    std::fs::rename(&moved, owner.path()).unwrap();
+    // This closed observation regains the same original ancestry and seal.
+    // Leaf mutations, including restored modes, are covered separately below.
+    batch.revalidate().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn parent_namespace_replacement_and_restored_mutation_remain_rejected() {
     use std::os::unix::fs::PermissionsExt as _;
     let temporary = tempfile::tempdir().unwrap();
     let owner = OwnerDirectory::open_or_create(temporary.path().join("owner")).unwrap();
     let batch = pending(&owner, "batch").seal().unwrap();
     let path = batch.path().to_owned();
+    // The hosted Darwin runner refuses renaming the 0500 fixture.
+    // Restore the seal before observing either substituted namespace.
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::rename(&path, owner.path().join("moved")).unwrap();
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(
+        owner.path().join("moved"),
+        std::fs::Permissions::from_mode(0o500),
+    )
+    .unwrap();
     std::fs::create_dir(&path).unwrap();
     assert!(batch.revalidate().is_err());
     std::fs::remove_dir(&path).unwrap();
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(
+        owner.path().join("moved"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
     std::fs::rename(owner.path().join("moved"), &path).unwrap();
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500)).unwrap();
     assert!(batch.revalidate().is_err());
     let fresh = ReaderDirectory::open(owner.path())
         .unwrap()
