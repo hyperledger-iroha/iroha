@@ -5,7 +5,7 @@
 
 use super::*;
 use iroha_allocation::AllocationBudget;
-use iroha_core::sumeragi::certified_chain::{CertifiedChain, QcVerification};
+use iroha_core::sumeragi::certified_chain::QcVerification;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     provider_admission::discovery::{
@@ -100,23 +100,29 @@ pub async fn handler(
             if u64::try_from(view.height()).ok() != Some(height) {
                 return Err(unavailable());
             }
-            let admitted =
-                iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
+            let (admitted, certified) =
+                iroha_core::query::provider_admission::read_finalized_provider_admission_with_block_v1(
                     &view, provider, now,
                 )
                 .map_err(|_| unavailable())?
                 .ok_or_else(unavailable)?;
-            let chain = CertifiedChain::new(&view).map_err(|_| unavailable())?;
-            let certified = chain.certified(height).map_err(|_| unavailable())?;
             if certified.verification() != QcVerification::Verified {
                 return Err(unavailable());
             }
             let tip = certified.into_committed();
-            drop(chain);
             drop(view);
             let guard = cache.blocking_read();
+            // The native registry and handler share the same certified admission only when
+            // they use this exact State. The snapshot below rechecks the tip and generation.
+            let observed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| unavailable())?
+                .as_secs();
+            if observed < admitted.envelope().issued_at || observed >= admitted.envelope().retention_epoch {
+                return Err(unavailable());
+            }
             let advert = guard
-                .admitted_record_by_provider(provider.as_bytes(), now)
+                .signed_candidate_for_discovery_snapshot(&state, provider.as_bytes(), now)
                 .ok_or_else(unavailable)?
                 .advert();
             sorafs_manifest::provider_admission::verify_advert_against_record(advert, &admitted)

@@ -2536,3 +2536,36 @@ fn storage_request_digest_charges_one_exact_frame_without_renewal() {
         );
     });
 }
+
+#[test]
+fn only_typed_retryable_http_425_marks_an_original_operation_busy() {
+    use MusubiPublicationServiceErrorCodeV1::{OperationBusy, StorageCoordinationUnavailable};
+    let response = service_backend_error(
+        StorageCoordinationUnavailable,
+        MusubiPublicationServiceBackendErrorV1::StoragePending,
+    )
+    .into_response();
+    assert_eq!(response.status, 425);
+    assert!(remote_transport_error(StatusCode::TOO_EARLY, &response.body).is_operation_busy());
+    assert!(
+        !remote_transport_error(StatusCode::SERVICE_UNAVAILABLE, &response.body)
+            .is_operation_busy()
+    );
+    for (version, code, retryable) in [
+        (2, OperationBusy, true),
+        (1, OperationBusy, false),
+        (1, StorageCoordinationUnavailable, true),
+    ] {
+        let bytes = norito::encode_canonical(&MusubiPublicationServiceErrorResponseV1 {
+            version,
+            code,
+            retryable,
+        })
+        .unwrap();
+        assert!(!remote_transport_error(StatusCode::TOO_EARLY, &bytes).is_operation_busy());
+    }
+    assert!(
+        !remote_transport_error(StatusCode::TOO_EARLY, OperationBusy.as_str().as_bytes())
+            .is_operation_busy()
+    );
+}

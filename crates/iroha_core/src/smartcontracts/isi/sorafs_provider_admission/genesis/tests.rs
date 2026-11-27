@@ -323,6 +323,43 @@ fn indirect_or_network_scoped_execution_cannot_acquire_genesis_authority() {
 }
 
 #[test]
+fn paired_genesis_admission_reuses_only_its_current_view_and_preserves_outer_reads() {
+    let fixture = Fixture::new();
+    let provider = fixture.provider();
+    let mut chain = chain(vec![initializer(&fixture).into()], None).expect("signed genesis");
+    chain.commit_at((NOW + 1) * 1000, Vec::new());
+    let state = Arc::clone(chain.state());
+    let read = || {
+        native::ORIGINAL_GENESIS_READS.with(|count| count.set(0));
+        let pair = native::read_finalized_provider_admission_with_block_v1(
+            &state.view(),
+            provider,
+            NOW + 1,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(pair.0.is_genesis_material());
+        assert_eq!(pair.1.height(), 2);
+        native::ORIGINAL_GENESIS_READS.with(|count| count.get())
+    };
+    assert_eq!(read(), 1);
+    assert_eq!(read(), 1, "each new lookup must reread original H1");
+    assert_eq!(
+        crate::query::signer_check::with_native_check_read_limits(read),
+        2,
+        "the caller owns both cumulative source reads",
+    );
+    state
+        .kura()
+        .corrupt_canonical_body_for_testing(std::num::NonZeroUsize::MIN)
+        .unwrap();
+    assert!(
+        native::read_finalized_provider_admission_with_block_v1(&state.view(), provider, NOW + 1,)
+            .is_err()
+    );
+}
+
+#[test]
 fn source_bound_current_admission_preserves_signed_genesis_material_expiry_and_custody() {
     use crate::query::{
         provider_admission::read_provider_admission_at_native_current_v1,
@@ -352,6 +389,23 @@ fn source_bound_current_admission_preserves_signed_genesis_material_expiry_and_c
     let public_facade = native::read_finalized_provider_admission_v1(&view, provider, NOW + 1)
         .unwrap()
         .unwrap();
+    let (paired, block) =
+        native::read_finalized_provider_admission_with_block_v1(&view, provider, NOW + 1)
+            .unwrap()
+            .unwrap();
+    assert_eq!(paired.envelope(), public_facade.envelope());
+    assert_eq!(block.height(), 2);
+    assert_eq!(
+        Some(block.block_hash()),
+        view.block_hashes().last().copied()
+    );
+    assert_eq!(
+        block.verification(),
+        crate::sumeragi::certified_chain::QcVerification::Verified
+    );
+    assert!(
+        native::read_finalized_provider_admission_with_block_v1(&view, provider, NOW + 3).is_err()
+    );
     with_native_check_read_limits(|| {
         let reader = SignerCertifiedWalkV1::new(&view).unwrap();
         let current = reader.walk(2, 2).next().unwrap().unwrap();

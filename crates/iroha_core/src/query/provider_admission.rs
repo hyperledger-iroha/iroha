@@ -4,9 +4,9 @@ mod originals;
 pub use originals::with_genesis_provider_admission_originals_v1;
 
 use crate::{
-    query::signer_finality::verify_signer_finality_v1,
+    query::signer_finality::certified_block_v1,
     state::{StateReadOnly, WorldReadOnly},
-    sumeragi::certified_chain::committed_block,
+    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, CommittedBlock, committed_block},
 };
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -132,12 +132,13 @@ pub(crate) fn council(
     .map_err(|_| ProviderAdmissionErrorV1)
 }
 fn active_record(
-    view: &impl StateReadOnly,
+    genesis: &mut GenesisRead<'_, impl StateReadOnly>,
     provider: ProviderId,
     policy: &ProviderAdmissionCouncilPolicyV1,
     now_secs: u64,
     expiry_time_secs: u64,
 ) -> Result<Option<AdmissionRecord>, Error> {
+    let view = genesis.view;
     let world = view.world();
     let Some(head) = read_head(world, Some(provider))? else {
         return Ok(None);
@@ -181,7 +182,8 @@ fn active_record(
         }
     }
     if head.genesis_origin.is_some() {
-        let material = authenticate_genesis_record(view, Some(provider), &head)?
+        let material = genesis
+            .authenticate(Some(provider), &head)?
             .ok_or(ProviderAdmissionErrorV1)?;
         if (envelope.policy_id, envelope.policy_revision) != (policy.policy_id, policy.revision)
             || envelope.policy_digest
@@ -225,8 +227,24 @@ pub fn read_finalized_provider_admission_v1(
     provider: ProviderId,
     now_secs: u64,
 ) -> Result<Option<AdmissionRecord>, Error> {
-    authenticate_current(view)?;
+    certify_current_block(view)?;
     read_current_provider_admission(view, provider, now_secs)
+}
+
+/// Return the admission together with the exact certified block used to authenticate it.
+///
+/// # Errors
+/// Rejects the same finality, native history, policy and expiry failures as the record-only lookup.
+pub fn read_finalized_provider_admission_with_block_v1(
+    view: &impl StateReadOnly,
+    provider: ProviderId,
+    now_secs: u64,
+) -> Result<Option<(AdmissionRecord, CertifiedBlock)>, Error> {
+    let certified = certify_current_block(view)?;
+    Ok(
+        read_current_provider_admission(view, provider, now_secs)?
+            .map(|record| (record, certified)),
+    )
 }
 
 fn read_current_provider_admission(
@@ -234,6 +252,9 @@ fn read_current_provider_admission(
     provider: ProviderId,
     now_secs: u64,
 ) -> Result<Option<AdmissionRecord>, Error> {
+    // The council and provider attest to different heads of this one original State view.
+    let mut genesis = GenesisRead::new(view);
+    authenticate_current_head(&mut genesis)?;
     let finalized_secs = view
         .authenticated_query_ledger_time_ms()
         .ok_or(ProviderAdmissionErrorV1)?
@@ -250,7 +271,7 @@ fn read_current_provider_admission(
         return Err(ProviderAdmissionErrorV1);
     }
     active_record(
-        view,
+        &mut genesis,
         provider,
         &policy,
         now_secs,
@@ -274,29 +295,36 @@ pub(crate) fn read_provider_admission_at_native_current_v1(
     {
         return Err(ProviderAdmissionErrorV1);
     }
-    authenticate_current_head(view)?;
     read_current_provider_admission(view, provider, now_secs)
 }
 
 fn authenticate_current(view: &impl StateReadOnly) -> Result<(), Error> {
+    certify_current_block(view)?;
+    authenticate_current_head(&mut GenesisRead::new(view))
+}
+
+fn certify_current_block(view: &impl StateReadOnly) -> Result<CertifiedBlock, Error> {
     let height = u64::try_from(view.block_hashes().len()).map_err(|_| ProviderAdmissionErrorV1)?;
     let hash = view
         .block_hashes()
         .last()
         .map(|hash| *hash.as_ref())
         .ok_or(ProviderAdmissionErrorV1)?;
-    verify_signer_finality_v1(view, height, hash).map_err(|_| ProviderAdmissionErrorV1)?;
-    authenticate_current_head(view)
+    let chain = CertifiedChain::new(view).map_err(|_| ProviderAdmissionErrorV1)?;
+    certified_block_v1(&chain, height, hash).map_err(|_| ProviderAdmissionErrorV1)
 }
 
-fn authenticate_current_head(view: &impl StateReadOnly) -> Result<(), Error> {
+fn authenticate_current_head(
+    genesis: &mut GenesisRead<'_, impl StateReadOnly>,
+) -> Result<(), Error> {
+    let view = genesis.view;
     let height = u64::try_from(view.block_hashes().len()).map_err(|_| ProviderAdmissionErrorV1)?;
     if let Some(head) = read_head(view.world(), None)? {
         if head.height > height {
             return Err(ProviderAdmissionErrorV1);
         }
         if head.genesis_origin.is_some() {
-            authenticate_genesis_record(view, None, &head)?;
+            genesis.authenticate(None, &head)?;
         }
     }
     Ok(())
@@ -355,10 +383,63 @@ pub fn read_finalized_admission_council_v1(
 }
 
 /// Authenticate the actual successful direct initializer in this State's exact signed genesis.
+/// A single synchronous admission lookup may use the same H1 execution receipt for
+/// both signed heads. Neither the source view nor the receipt leaves this lookup.
+struct GenesisRead<'a, V> {
+    view: &'a V,
+    block: Option<CommittedBlock>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static ORIGINAL_GENESIS_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl<'a, V: StateReadOnly> GenesisRead<'a, V> {
+    fn new(view: &'a V) -> Self {
+        Self { view, block: None }
+    }
+
+    fn authenticate(
+        &mut self,
+        subject: Option<ProviderId>,
+        head: &AdmissionHistoryRecordV1,
+    ) -> Result<
+        Option<sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1>,
+        Error,
+    > {
+        let invalid = ProviderAdmissionErrorV1;
+        let origin = head.genesis_origin.as_ref().ok_or(invalid)?;
+        if head.height != 1 || head.revision != 1 || head.predecessor.is_some() || head.revoked {
+            return Err(invalid);
+        }
+        // An outer decoder owns cumulative physical source work. Perform both original
+        // walks on its thread and retain neither result across the two head checks.
+        let read = || {
+            #[cfg(test)]
+            ORIGINAL_GENESIS_READS.with(|count| count.set(count.get() + 1));
+            committed_block(self.view, 1).map_err(|_| invalid)
+        };
+        let fresh;
+        let committed = if norito::core::decode_limits_active() {
+            fresh = read()?;
+            &fresh
+        } else {
+            match &mut self.block {
+                Some(block) => block,
+                missing => missing.insert(read()?),
+            }
+        };
+        authenticate_genesis_record(self.view, committed, subject, head, origin)
+    }
+}
+
 fn authenticate_genesis_record(
     view: &impl StateReadOnly,
+    committed: &CommittedBlock,
     subject: Option<ProviderId>,
     head: &AdmissionHistoryRecordV1,
+    origin: &GenesisAdmissionOriginV1,
 ) -> Result<Option<sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1>, Error>
 {
     use iroha_data_model::{
@@ -366,13 +447,6 @@ fn authenticate_genesis_record(
         transaction::{Executable, TransactionEntrypoint},
     };
     let invalid = ProviderAdmissionErrorV1;
-    let origin = head.genesis_origin.as_ref().ok_or(invalid)?;
-    if head.height != 1 || head.revision != 1 || head.predecessor.is_some() || head.revoked {
-        return Err(invalid);
-    }
-    // The signed genesis is the chain's trust root: its frame's result-only certificate commits
-    // its executed wire, which anchors the initializer's entry and output.
-    let committed = committed_block(view, 1).map_err(|_| invalid)?;
     let genesis = committed.block();
     let hash = genesis.hash();
     if hash.as_ref() != view.network_id().as_bytes()

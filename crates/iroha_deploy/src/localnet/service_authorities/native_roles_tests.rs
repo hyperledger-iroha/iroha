@@ -120,8 +120,10 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
             for role in NETWORK_ROLES {
                 let entry = manifest.network.authority(role).unwrap();
                 let permissions = match role {
-                    NetworkServiceAuthorityRole::ReserveOperations
-                    | NetworkServiceAuthorityRole::MusubiPin => BTreeSet::new(),
+                    NetworkServiceAuthorityRole::ReserveOperations => BTreeSet::new(),
+                    NetworkServiceAuthorityRole::MusubiPin => {
+                        BTreeSet::from([Permission::from(CanIssueSorafsReplicationOrder)])
+                    }
                     NetworkServiceAuthorityRole::ReputationRecorder => {
                         BTreeSet::from([Permission::from(CanRecordSorafsReputationJournal)])
                     }
@@ -173,7 +175,7 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
                         Json::new(role),
                         permissions,
                         if role == StreamTokenAuthorityRole::IssuerOperator {
-                            Quantity::from(34_u64)
+                            Quantity::from(58_u64)
                         } else {
                             Quantity::from(SERVICE_FEE_BALANCE)
                         },

@@ -3600,6 +3600,7 @@ pub enum PublicationBackendFailureClass {
 pub struct PublicationBackendError {
     class: PublicationBackendFailureClass,
     code: String,
+    pending_storage: bool,
 }
 impl PublicationBackendError {
     /// Construct a retryable backend failure from a bounded stable code.
@@ -3624,7 +3625,20 @@ impl PublicationBackendError {
         } else {
             "MUSUBI_BACKEND_FAILURE".to_owned()
         };
-        Self { class, code }
+        Self {
+            class,
+            code,
+            pending_storage: false,
+        }
+    }
+    pub(crate) fn pending_storage() -> Self {
+        Self {
+            pending_storage: true,
+            ..Self::retryable("MUSUBI_PUBLICATION_OPERATION_BUSY")
+        }
+    }
+    pub(crate) fn is_pending_storage(&self) -> bool {
+        self.pending_storage
     }
     /// Return whether the same idempotent call may be retried.
     #[must_use]

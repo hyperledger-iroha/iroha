@@ -109,7 +109,8 @@ impl GeneratedServiceRuntime {
         for (index, enrollment) in selected.into_iter().enumerate() {
             require_deadline(deadline)?;
             let provider = selection.plans[index].provider_id();
-            let mut custody = ManagedStreamTokenCustody::open(&self.authority.prepared, provider)?;
+            let mut custody =
+                ManagedStreamTokenCustody::open_from_original(&self.authority, provider)?;
             let component = self.reconstruct_provider(
                 &selection,
                 index,

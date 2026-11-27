@@ -112,6 +112,17 @@ impl ManagedGatewayCompliance {
         Self::from_authority(authority)
     }
 
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        Self::from_authority(ServiceAuthority::open_provider_from_original(
+            parent,
+            provider,
+            ProviderPurpose::GatewayCompliance,
+        )?)
+    }
+
     /// Reopen the existing private catalog writer lock to authenticate its serving head.
     /// A missing journal cannot satisfy a maintenance read.
     pub(super) fn read_from_original(

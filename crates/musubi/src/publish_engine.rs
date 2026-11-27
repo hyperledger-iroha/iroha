@@ -10,6 +10,12 @@ impl<'a> PublicationEngine<'a> {
     pub const fn new(store: &'a PublicationJournalStore) -> Self {
         Self { store }
     }
+    pub(crate) fn journal_phase(
+        &self,
+        operation_id: PublicationOperationIdV1,
+    ) -> Result<PublicationPhaseV1, PublicationError> {
+        self.store.load(operation_id).map(|journal| journal.phase)
+    }
     /// Persist a detached operation and return its resumable identifier.
     ///
     /// # Errors

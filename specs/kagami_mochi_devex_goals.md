@@ -82,6 +82,10 @@ Prepared archive clients retain their exclusive build-registry discovery journal
 lifetime. Startup and Ready maintenance use an independent service-observation journal and lock;
 both authenticate the original profile and fresh native finality. A build holding its archive
 client therefore does not block the worker's bounded freshness observations.
+Each provider starts discovery at its own original validator and can use the remaining three.
+If a row receives only explicit current-proof unavailability responses, the worker may
+authenticate one strictly newer height and repeat all three reads within the original deadline.
+It accepts the three providers together at the same certified height.
 Generation leaves token services disabled. The startup worker composes one reserve activation,
 three independent funded provider/custody/gateway histories and one reputation policy through
 their native owners. It promotes each signed compliance catalog and restarts all four owned peers

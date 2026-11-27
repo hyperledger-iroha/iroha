@@ -743,6 +743,21 @@ impl ServiceAuthority {
         self.profile.original_publication_plan()
     }
 
+    /// Sign this provider's deterministic refresh under its live, exclusive original purpose.
+    pub(super) fn sign_provider_advert(
+        &self,
+        now_seconds: u64,
+    ) -> Result<sorafs_manifest::provider_advert::ProviderAdvertV1> {
+        let provider = self.provider_id()?;
+        if !self.shares_original_for_read() {
+            return self.prepared.provider_advert(provider, now_seconds);
+        }
+        self.validate_profile()?;
+        let advert = self.profile.sign_provider_advert(provider, now_seconds)?;
+        self.validate_profile()?;
+        Ok(advert)
+    }
+
     /// Sign through the sole generated catalog owner, retaining full source and lock custody.
     pub(super) fn sign_gateway_compliance_catalog(
         &self,

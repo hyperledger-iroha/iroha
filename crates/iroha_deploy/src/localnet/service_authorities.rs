@@ -15,10 +15,10 @@ use iroha_executor_data_model::permission::account::{
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanCheckSorafsStreamToken, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
-    CanManageSorafsReputationJournalPolicy, CanManageSorafsStreamTokenCustody,
-    CanManageSorafsStreamTokenGateway, CanOperateSorafsRepair, CanOperateSorafsStreamToken,
-    CanRecordSorafsProofOutcome, CanRecordSorafsReputationJournal, CanSetSorafsReservePolicy,
-    CanUpsertSorafsProviderCredit,
+    CanIssueSorafsReplicationOrder, CanManageSorafsReputationJournalPolicy,
+    CanManageSorafsStreamTokenCustody, CanManageSorafsStreamTokenGateway, CanOperateSorafsRepair,
+    CanOperateSorafsStreamToken, CanRecordSorafsProofOutcome, CanRecordSorafsReputationJournal,
+    CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
 };
 use iroha_genesis::{
     RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1, init_instruction_registry,
@@ -1022,6 +1022,15 @@ impl GeneratedAuthorities {
                 }
             }
         }
+        // Only fresh generated networks provision the publication signer as an order issuer.
+        // Retained networks reopen their original signed genesis and keep its governed grants.
+        builder = builder.append_instruction(Grant::account_permission(
+            Permission::from(CanIssueSorafsReplicationOrder),
+            network
+                .authority(NetworkServiceAuthorityRole::MusubiPin)?
+                .account
+                .clone(),
+        ));
         for (account, permission) in grants(manager, &network, &providers)? {
             builder = builder.append_instruction(Grant::account_permission(permission, account));
         }

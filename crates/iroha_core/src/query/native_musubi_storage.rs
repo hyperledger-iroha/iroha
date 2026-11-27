@@ -18,6 +18,7 @@ use crate::{
 use iroha_data_model::{
     account::AccountId,
     block::consensus::SumeragiRootScope,
+    isi::sorafs::IssueReplicationOrder,
     musubi::{
         ArchiveId, MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
         MusubiArchiveLocationV1, MusubiArchiveRecordV1, MusubiReplicationOrderLocationLifecycleV1,
@@ -25,8 +26,9 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            ManifestDigest, PinManifestRecord, PinStatus, ReplicationOrderRecord,
-            ReplicationOrderStatus, derive_sorafs_auto_replication_order_id_v1,
+            ManifestDigest, PinManifestRecord, PinStatus, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus,
+            derive_sorafs_auto_replication_order_id_v1,
         },
     },
 };
@@ -39,6 +41,9 @@ pub enum NativeMusubiStorageReadErrorV1 {
     /// Exact selected pin, archive, assignment, authority or lifecycle differs.
     #[error("native Musubi storage binding rejected")]
     Rejected,
+    /// The authenticated purpose slot and its reciprocal binding are both absent.
+    #[error("native Musubi purpose order has not been issued")]
+    OrderNotIssued,
     /// Original certified history or bounded read resources are unavailable.
     #[error("native Musubi storage observation unavailable")]
     Unavailable,
@@ -51,7 +56,7 @@ pub struct NativeMusubiStorageObservationV1<'a> {
     pub archive: &'a MusubiArchiveRecordV1,
     /// Current pin bound to the independently selected submitter and archive.
     pub pin: &'a PinManifestRecord,
-    /// Exact native automatic replication order.
+    /// Exact purpose-issued order with its consensus archive binding.
     pub order: &'a ReplicationOrderRecord,
     /// Strictly sorted providers with current authenticated completion and admission.
     pub completed_providers: &'a [ProviderId],
@@ -61,7 +66,45 @@ pub struct NativeMusubiStorageObservationV1<'a> {
     pub location: Option<&'a MusubiArchiveLocationV1>,
 }
 
-/// Authenticate one exact automatic order and invoke a bounded borrower without cloning rows.
+/// Select the stable purpose-issued order for one exact publication archive and paid pin.
+/// Its high bit stays clear so ordinary automatic orders keep their disjoint namespace.
+#[must_use]
+pub fn native_musubi_replication_order_id_v1(
+    archive_id: ArchiveId,
+    manifest: ManifestDigest,
+) -> ReplicationOrderId {
+    let mut hasher = blake3::Hasher::new_derive_key("iroha:musubi:native-replication-order:v1");
+    hasher.update(archive_id.as_bytes());
+    hasher.update(manifest.as_bytes());
+    let mut bytes = *hasher.finalize().as_bytes();
+    bytes[0] &= 0x7f;
+    ReplicationOrderId::new(bytes)
+}
+
+/// Plan an unsigned purpose issuance from the native paid pin's certified automatic schedule.
+/// Returns an instruction only while neither the purpose order nor its reciprocal binding exists.
+/// An existing purpose order must independently satisfy the full observation predicate.
+/// # Errors
+/// Refuses expired or partial authority, missing originals and inconsistent stored rows.
+pub fn plan_native_musubi_replication_order_v1(
+    view: &StateView<'_>,
+    pin_authority: &AccountId,
+    selected: (ArchiveId, ManifestDigest, u64),
+    seed_provider: ProviderId,
+    now_secs: u64,
+) -> Result<Option<IssueReplicationOrder>, NativeMusubiStorageReadErrorV1> {
+    select_native_storage(
+        view,
+        pin_authority,
+        selected,
+        seed_provider,
+        now_secs,
+        |plan| Ok(Some(plan)),
+        |_| None,
+    )
+}
+
+/// Authenticate one exact purpose-issued order and borrow its current consensus rows.
 /// `floor_height` is independently supplied original successful pin inclusion; this reader does
 /// not replace the caller's exact-envelope carrier verification.
 /// # Errors
@@ -73,6 +116,26 @@ pub fn with_native_musubi_storage_v1<R>(
     (archive_id, manifest, floor_height): (ArchiveId, ManifestDigest, u64),
     seed_provider: ProviderId,
     now_secs: u64,
+    consume: impl FnOnce(NativeMusubiStorageObservationV1<'_>) -> R,
+) -> Result<R, NativeMusubiStorageReadErrorV1> {
+    select_native_storage(
+        view,
+        pin_authority,
+        (archive_id, manifest, floor_height),
+        seed_provider,
+        now_secs,
+        |_| Err(NativeMusubiStorageReadErrorV1::OrderNotIssued),
+        consume,
+    )
+}
+
+fn select_native_storage<R>(
+    view: &StateView<'_>,
+    pin_authority: &AccountId,
+    (archive_id, manifest, floor_height): (ArchiveId, ManifestDigest, u64),
+    seed_provider: ProviderId,
+    now_secs: u64,
+    missing: impl FnOnce(IssueReplicationOrder) -> Result<R, NativeMusubiStorageReadErrorV1>,
     consume: impl FnOnce(NativeMusubiStorageObservationV1<'_>) -> R,
 ) -> Result<R, NativeMusubiStorageReadErrorV1> {
     use NativeMusubiStorageReadErrorV1::{Rejected, Unavailable};
@@ -116,11 +179,8 @@ pub fn with_native_musubi_storage_v1<R>(
         let archive = world.musubi_archives().get(&archive_id).ok_or(Rejected)?;
         archive.validate().map_err(|_| Rejected)?;
         let pin = world.pin_manifests().get(&manifest).ok_or(Rejected)?;
-        let order_id = derive_sorafs_auto_replication_order_id_v1(&manifest);
-        let order = world.replication_orders().get(&order_id).ok_or(Rejected)?;
-        let lifecycle = validate_replication_order_archive_binding(archive, &order_id, world)
-            .map_err(|_| Rejected)?;
-        if pin.submitted_by != *pin_authority
+        if archive.archive_id != archive_id
+            || pin.submitted_by != *pin_authority
             || pin.digest != manifest
             || !matches!(pin.status, PinStatus::Approved(_))
             || pin.policy.retention_epoch <= now
@@ -130,10 +190,15 @@ pub fn with_native_musubi_storage_v1<R>(
             || pin.chunk_digest_sha3_256 != *archive.commitment.chunk_plan_digest.as_bytes()
             || pin.por_root != *archive.commitment.por_root.as_bytes()
             || pin.content_length != archive.commitment.content_length
-            || order.order_id != order_id
-            || order.manifest_digest != manifest
-            || order.manifest_root_cid != pin.root_cid
-            || order.musubi_archive != Some(archive_id)
+        {
+            return Err(Rejected);
+        }
+        let order_id = native_musubi_replication_order_id_v1(archive_id, manifest);
+        let Some((order, lifecycle)) = bound_purpose_order(world, archive, pin)? else {
+            let plan = plan_missing_purpose(world, archive, pin, seed_provider, now, finalized)?;
+            return missing(plan);
+        };
+        if order.manifest_root_cid != pin.root_cid
             || order.assignment_revision == 0
             || order.issued_epoch > finalized
             || !matches!(
@@ -231,6 +296,105 @@ pub fn with_native_musubi_storage_v1<R>(
             location,
         }))
     })
+}
+
+pub(crate) fn bound_purpose_order<'world>(
+    world: &'world impl WorldReadOnly,
+    archive: &MusubiArchiveRecordV1,
+    pin: &PinManifestRecord,
+) -> Result<
+    Option<(
+        &'world ReplicationOrderRecord,
+        &'world MusubiReplicationOrderLocationLifecycleV1,
+    )>,
+    NativeMusubiStorageReadErrorV1,
+> {
+    use NativeMusubiStorageReadErrorV1::Rejected;
+
+    let id = native_musubi_replication_order_id_v1(archive.archive_id, pin.digest);
+    let Some(order) = world.replication_orders().get(&id) else {
+        if world
+            .musubi_locations_by_replication_order()
+            .get(&id)
+            .is_some()
+        {
+            return Err(Rejected);
+        }
+        return Ok(None);
+    };
+    if order.order_id != id
+        || order.manifest_digest != pin.digest
+        || order.musubi_archive != Some(archive.archive_id)
+        || order.issued_by != pin.submitted_by
+    {
+        return Err(Rejected);
+    }
+    let lifecycle =
+        validate_replication_order_archive_binding(archive, &id, world).map_err(|_| Rejected)?;
+    Ok(Some((order, lifecycle)))
+}
+
+pub(crate) fn plan_missing_purpose(
+    world: &impl WorldReadOnly,
+    archive: &MusubiArchiveRecordV1,
+    pin: &PinManifestRecord,
+    seed_provider: ProviderId,
+    now: u64,
+    finalized: u64,
+) -> Result<IssueReplicationOrder, NativeMusubiStorageReadErrorV1> {
+    use NativeMusubiStorageReadErrorV1::{Rejected, Unavailable};
+
+    if !crate::smartcontracts::isi::sorafs::has_sorafs_permission(
+        world,
+        &pin.submitted_by,
+        "CanIssueSorafsReplicationOrder",
+    ) {
+        return Err(Rejected);
+    }
+    let purpose_id = native_musubi_replication_order_id_v1(archive.archive_id, pin.digest);
+    let automatic_id = derive_sorafs_auto_replication_order_id_v1(&pin.digest);
+    let template = world
+        .replication_orders()
+        .get(&automatic_id)
+        .ok_or(Rejected)?;
+    // Only the ordinary pin owner selects the original capacity and full 24-hour SLA. The
+    // purpose order names those same bytes and assignments and cannot extend either epoch.
+    let mut canonical =
+        crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+            pin,
+            template,
+            &hex::encode(automatic_id.as_bytes()),
+        )
+        .map_err(|_| Rejected)?;
+    if !matches!(
+        template.status,
+        ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_)
+    ) || template.issued_by != pin.submitted_by
+        || template.issued_epoch > finalized
+        || template.deadline_epoch < now
+        || canonical.assignments.len() < usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)
+        || canonical.assignments.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
+        || !canonical
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *seed_provider.as_bytes())
+    {
+        return Err(Rejected);
+    }
+    canonical.order_id = *purpose_id.as_bytes();
+    let length = norito::canonical_frame_len(&canonical).map_err(|_| Unavailable)?;
+    if length > 256 * 1024 {
+        return Err(Rejected);
+    }
+    norito::core::reserve_decode_allocation(length).map_err(|_| Unavailable)?;
+    let bytes = norito::encode_canonical(&canonical).map_err(|_| Unavailable)?;
+    Ok(IssueReplicationOrder::new(
+        purpose_id,
+        bytes,
+        template.issued_epoch,
+        template.deadline_epoch,
+    )
+    .for_musubi_archive(archive.archive_id))
 }
 
 #[cfg(test)]

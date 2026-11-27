@@ -86,7 +86,7 @@ impl Sender {
             }
             self.directory.revalidate()?;
             if let Some(mut connection) = self.listener.accept()? {
-                connection.set_deadline(deadline)?;
+                connection.set_listener_handoff_deadline(deadline)?;
                 let pid = connection.peer_process_id()?;
                 let Some(seat) = pids.iter().position(|&original| original == pid) else {
                     return Err(invalid(
@@ -271,7 +271,7 @@ fn receive_listeners(
     let record = read_record(directory)?;
     let mut connection = loop {
         let deadline = continuous_deadline(deadline_ns)?;
-        match transport::connect_until(directory, deadline) {
+        match transport::connect_listener_handoff_until(directory, deadline) {
             Ok(connection) => break connection,
             Err(Error::Io(error))
                 if matches!(
@@ -284,7 +284,7 @@ fn receive_listeners(
             Err(error) => return Err(error),
         }
     };
-    connection.set_deadline(continuous_deadline(deadline_ns)?)?;
+    connection.set_listener_handoff_deadline(continuous_deadline(deadline_ns)?)?;
     if connection.peer_process_id()? != record.pid {
         return Err(invalid(
             "listener adoption endpoint belongs to another process",
@@ -298,7 +298,7 @@ fn receive_listeners(
     let listeners = connection.receive_tcp_listeners(expected.len())?;
     validate_listener_addresses(&listeners, Some(expected))?;
     require_record(directory, &record)?;
-    connection.set_deadline(continuous_deadline(deadline_ns)?)?;
+    connection.set_listener_handoff_deadline(continuous_deadline(deadline_ns)?)?;
     connection.reply(&Adopted {
         count: listeners.len(),
     })?;
@@ -540,6 +540,11 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_child_waits_beyond_control_timeout_for_original_listeners() {
+        run_native_worker(Some("slow-transfer"));
+    }
+
+    #[test]
     fn native_committee_handoff_refuses_repeat_request_from_an_adopted_child() {
         run_native_worker(Some("repeat"));
     }
@@ -616,7 +621,11 @@ mod tests {
             + Duration::from_secs(8).as_nanos();
         let held = WorkerListeners::receive(&directory, &expected, deadline_ns).unwrap();
         if let Some(mode) = committee_mode(&directory) {
-            check_committee_handoff(&held, &expected, &mode);
+            if mode == "slow-transfer" {
+                check_slow_original_handoff(&held, &expected);
+            } else {
+                check_committee_handoff(&held, &expected, &mode);
+            }
         } else {
             let mut child = spawn_runtime(&held, &expected, 0);
             let sent = held.send_to_child(0, &mut child, Instant::now() + Duration::from_secs(5));
@@ -654,6 +663,37 @@ mod tests {
             .stdin(Stdio::piped())
             .spawn()
             .unwrap()
+    }
+
+    fn check_slow_original_handoff(held: &WorkerListeners, expected: &[SocketAddr]) {
+        let mut child = spawn_runtime(held, expected, 0);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut connection = loop {
+            if let Some(connection) = held.sender.listener.accept().unwrap() {
+                break connection;
+            }
+            wait_poll(deadline).unwrap();
+        };
+        connection.set_listener_handoff_deadline(deadline).unwrap();
+        assert_eq!(connection.peer_process_id().unwrap(), child.id());
+        let request = connection.receive().unwrap();
+        assert_eq!(request.action, ControlAction::ListenerAdoption);
+        assert!(same_token(&request.token, &held.sender.record.token));
+        // Start the delay only after this exact child sent its authenticated request.
+        // The worker can still be finishing the other validators' launch fences.
+        std::thread::sleep(transport::IO_TIMEOUT + Duration::from_millis(200));
+        require_live_child(&mut child).unwrap();
+        require_record(&held.sender.directory, &held.sender.record).unwrap();
+        connection.send_tcp_listeners(&held.listeners[0]).unwrap();
+        assert_eq!(connection.receive_reply::<Adopted>().unwrap().count, 2);
+        assert!(
+            connection
+                .set_listener_handoff_deadline(Instant::now())
+                .is_err()
+        );
+        assert!(connection.set_listener_handoff_deadline(deadline).is_err());
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
     }
 
     fn check_committee_handoff(held: &WorkerListeners, expected: &[SocketAddr], mode: &str) {
@@ -708,6 +748,13 @@ mod tests {
                     wait_poll(deadline).unwrap();
                 }
             }
+        }
+        if mode.as_deref() == Some("slow-transfer") {
+            let expired = iroha_primitives::time::native_continuous_clock_nanos().unwrap();
+            assert!(matches!(
+                adopt_runtime_listeners(directory, p2p, torii, expired),
+                Err(Error::NativeDeadline)
+            ));
         }
         let adopted = adopt_runtime_listeners(directory, p2p, torii, deadline_ns).unwrap();
         assert_eq!(adopted.p2p.local_addr().unwrap(), p2p);

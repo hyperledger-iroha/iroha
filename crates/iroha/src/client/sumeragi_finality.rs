@@ -3,6 +3,73 @@
 const SUMERAGI_FINALITY_RESPONSE_MAX_BYTES: usize =
     2 * iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
 
+/// Torii returned its explicit 503 for a provider discovery proof at the requested height.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("current certified provider discovery is unavailable")]
+pub struct ProviderDiscoveryUnavailable;
+
+fn current_proof_unavailable(response: &Response<Vec<u8>>, code: &str) -> Option<crate::ApiError> {
+    if response.status() != StatusCode::SERVICE_UNAVAILABLE
+        || !response.headers().contains_key(http::header::CONTENT_TYPE)
+    {
+        return None;
+    }
+    crate::ApiError::from_response(response).filter(|error| error.code() == code)
+}
+
+impl ProviderDiscoveryUnavailable {
+    fn matches(response: &Response<Vec<u8>>) -> bool {
+        current_proof_unavailable(response, "provider_discovery_unavailable").is_some()
+    }
+}
+
+fn unavailable_custody_response(response: &Response<Vec<u8>>) -> Option<crate::Error> {
+    current_proof_unavailable(response, "stream_token_custody_unavailable").map(|error| {
+        crate::Error::Api {
+            operation: "sorafs.stream_token_custody.read",
+            error: Box::new(error),
+        }
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn provider_discovery_unavailability_requires_the_exact_http_status_and_error_envelope() {
+    let unavailable = ErrorEnvelope::new("provider_discovery_unavailable", "unavailable");
+    let other = ErrorEnvelope::new("stream_token_custody_unavailable", "unavailable");
+    for (media, body) in [
+        (APPLICATION_NORITO, norito::to_bytes(&unavailable).unwrap()),
+        (
+            APPLICATION_JSON,
+            norito::json::to_vec(&unavailable).unwrap(),
+        ),
+    ] {
+        let mut response = Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header(http::header::CONTENT_TYPE, media)
+            .body(body)
+            .unwrap();
+        assert!(ProviderDiscoveryUnavailable::matches(&response));
+        assert!(!unavailable_custody_response(&response).is_some());
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        assert!(!ProviderDiscoveryUnavailable::matches(&response));
+        *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        *response.body_mut() = if media == APPLICATION_JSON {
+            norito::json::to_vec(&other).unwrap()
+        } else {
+            norito::to_bytes(&other).unwrap()
+        };
+        assert!(!ProviderDiscoveryUnavailable::matches(&response));
+        assert!(unavailable_custody_response(&response).is_some());
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        assert!(!unavailable_custody_response(&response).is_some());
+        *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        *response.body_mut() = b"provider_discovery_unavailable".to_vec();
+        assert!(!unavailable_custody_response(&response).is_some());
+        assert!(!ProviderDiscoveryUnavailable::matches(&response));
+    }
+}
+
 /// One bounded finality response retaining its exact requested height, scope and deadline.
 ///
 /// This is untrusted transport ownership, not authenticated finality. It has no public
@@ -264,7 +331,17 @@ impl Client {
             StatusCode::OK,
             MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1,
             "Failed to get native custody state",
-        )?;
+        )
+        .map_err(|error| {
+            if !norito::core::decode_limits_active()
+                && response.body().len() <= MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1
+                && let Some(unavailable) = unavailable_custody_response(&response)
+            {
+                error.wrap_err(unavailable)
+            } else {
+                error
+            }
+        })?;
         let proof = StreamTokenCustodyProofV1::decode_frame(body)?;
         let verified = proof.verify(
             self.network_id,
@@ -311,7 +388,17 @@ impl Client {
             StatusCode::OK,
             MAX_PROVIDER_DISCOVERY_BYTES_V1,
             "Failed to get provider discovery",
-        )?;
+        )
+        .map_err(|error| {
+            if !norito::core::decode_limits_active()
+                && response.body().len() <= MAX_PROVIDER_DISCOVERY_BYTES_V1
+                && ProviderDiscoveryUnavailable::matches(&response)
+            {
+                error.wrap_err(ProviderDiscoveryUnavailable)
+            } else {
+                error
+            }
+        })?;
         ProviderDiscoveryProofV1::decode_frame(body).map_err(Into::into)
     }
 
