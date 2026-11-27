@@ -50,26 +50,18 @@ fn definition_info(entry: &StateEntry) -> DefinitionInfo {
 #[derive(Clone, Debug)]
 pub(crate) struct LedgerSnapshot {
     pub(crate) accounts: StatePage,
-    pub(crate) holdings: StatePage,
+    balances: BTreeMap<String, Vec<Holding>>,
     /// Asset definitions in query order, by literal; presentation only.
     definitions: Vec<(String, DefinitionInfo)>,
 }
 
 /// One balance of one account.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Holding<'a> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Holding {
     /// Exact asset literal, including any dataspace scope.
-    pub(crate) asset: &'a str,
-    pub(crate) definition: &'a str,
-    pub(crate) value: &'a str,
-}
-
-fn holding(entry: &StateEntry) -> Option<Holding<'_>> {
-    Some(Holding {
-        asset: &entry.title,
-        definition: entry.asset_definition.as_deref()?,
-        value: entry.detail.strip_prefix("Value ").unwrap_or(&entry.detail),
-    })
+    pub(crate) asset: String,
+    pub(crate) definition: String,
+    pub(crate) value: String,
 }
 
 /// Whether an account may mint a definition, judged from the definition record alone.
@@ -92,9 +84,23 @@ impl LedgerSnapshot {
             .iter()
             .map(|entry| (entry.title.clone(), definition_info(entry)))
             .collect();
+        let mut balances = BTreeMap::<String, Vec<Holding>>::new();
+        for entry in holdings.entries {
+            if let (Some(owner), Some(definition)) = (entry.owner, entry.asset_definition) {
+                let mut value = entry.detail;
+                if value.starts_with("Value ") {
+                    value.drain(.."Value ".len());
+                }
+                balances.entry(owner).or_default().push(Holding {
+                    asset: entry.title,
+                    definition,
+                    value,
+                });
+            }
+        }
         Self {
             accounts,
-            holdings,
+            balances,
             definitions,
         }
     }
@@ -147,13 +153,8 @@ impl LedgerSnapshot {
     }
 
     /// Balances owned by `account`, in query order.
-    pub(crate) fn holdings_of(&self, account: &str) -> Vec<Holding<'_>> {
-        self.holdings
-            .entries
-            .iter()
-            .filter(|entry| entry.owner.as_deref() == Some(account))
-            .filter_map(holding)
-            .collect()
+    pub(crate) fn holdings_of(&self, account: &str) -> &[Holding] {
+        self.balances.get(account).map_or(&[], Vec::as_slice)
     }
 
     /// Account literals in query order.
@@ -481,7 +482,7 @@ impl QuickActions {
     ) {
         if let Some(holding) = ledger
             .holdings_of(developer)
-            .into_iter()
+            .iter()
             .find(|holding| holding.definition == definition)
         {
             self.asset = holding.asset.to_owned();
@@ -658,12 +659,12 @@ impl Desktop {
                                 "{} {}  {}",
                                 icon::COINS,
                                 holding.value,
-                                ledger.asset_label(holding.definition)
+                                ledger.asset_label(&holding.definition)
                             ),
                             palette.text,
                             palette.inset,
                         )
-                        .on_hover_text(holding.asset);
+                        .on_hover_text(&holding.asset);
                     }
                 });
             }
@@ -727,23 +728,23 @@ impl Desktop {
                     for holding in holdings {
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(holding.value)
+                                RichText::new(&holding.value)
                                     .size(20.0)
                                     .strong()
                                     .color(palette.text),
                             );
                             ui.label(
-                                RichText::new(ledger.asset_label(holding.definition))
+                                RichText::new(ledger.asset_label(&holding.definition))
                                     .strong()
                                     .color(palette.sakura),
                             )
-                            .on_hover_text(holding.asset);
-                            if ledger.mint_right(holding.definition, developer) == MintRight::Owner
+                            .on_hover_text(&holding.asset);
+                            if ledger.mint_right(&holding.definition, developer) == MintRight::Owner
                             {
                                 widgets::pill(ui, "yours", palette.matcha, palette.matcha_soft)
                                     .on_hover_text("You own this token and can mint more of it");
                             }
-                            widgets::copy_button(ui, holding.asset, "asset ID");
+                            widgets::copy_button(ui, &holding.asset, "asset ID");
                         });
                     }
                 }
@@ -1123,10 +1124,10 @@ impl Desktop {
         let holdings = ledger
             .map(|ledger| ledger.holdings_of(developer))
             .unwrap_or_default();
-        let label = |holding: &Holding<'_>| {
+        let label = |holding: &Holding| {
             let token = ledger.map_or_else(
-                || widgets::short_middle(holding.definition, 4),
-                |ledger| ledger.asset_label(holding.definition),
+                || widgets::short_middle(&holding.definition, 4),
+                |ledger| ledger.asset_label(&holding.definition),
             );
             format!("{token} · {} held", holding.value)
         };
@@ -1148,10 +1149,10 @@ impl Desktop {
                 .selected_text(selected_text)
                 .width(ui.available_width() - 8.0)
                 .show_ui(ui, |ui| {
-                    for holding in &holdings {
+                    for holding in holdings {
                         if ui
                             .selectable_label(self.quick.asset == holding.asset, label(holding))
-                            .on_hover_text(holding.asset)
+                            .on_hover_text(&holding.asset)
                             .clicked()
                         {
                             self.quick.asset = holding.asset.to_owned();
@@ -1398,18 +1399,50 @@ mod tests {
             ledger.holdings_of("alice"),
             [
                 Holding {
-                    asset: "rose#alice",
-                    definition: "rose",
-                    value: "10"
+                    asset: "rose#alice".into(),
+                    definition: "rose".into(),
+                    value: "10".into()
                 },
                 Holding {
-                    asset: "tea#alice#dataspace:3",
-                    definition: "tea",
-                    value: "2.5"
+                    asset: "tea#alice#dataspace:3".into(),
+                    definition: "tea".into(),
+                    value: "2.5".into()
                 },
             ]
         );
-        assert_eq!(ledger.holdings_of("ALICE"), []);
+        assert!(ledger.holdings_of("ALICE").is_empty());
+        assert!(ledger.holdings_of("carol").is_empty());
+    }
+
+    #[test]
+    #[ignore = "times balance lookups for a full Accounts page"]
+    fn time_full_page_balance_lookups() {
+        let owners = (0..100).map(|i| format!("account-{i}")).collect::<Vec<_>>();
+        let balances = (0..200)
+            .map(|i| {
+                entry(
+                    &format!("asset-{i}"),
+                    Some(&owners[i % 100]),
+                    Some("xor"),
+                    "Value 1",
+                )
+            })
+            .collect();
+        let ledger = LedgerSnapshot::new(
+            page(mochi_core::StateQueryKind::Accounts, vec![]),
+            page(mochi_core::StateQueryKind::Assets, balances),
+            &page(mochi_core::StateQueryKind::AssetDefinitions, vec![]),
+        );
+        let started = std::time::Instant::now();
+        let mut count = 0;
+        for _ in 0..1000 {
+            for owner in &owners {
+                count += std::hint::black_box(ledger.holdings_of(owner)).len();
+            }
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(count, 200_000);
+        eprintln!("1,000 full-page balance lookups: {elapsed:?}");
     }
 
     /// The localnet shape: genesis owns XOR, the developer owns Coffee and Spent is closed.

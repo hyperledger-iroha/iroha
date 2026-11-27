@@ -155,6 +155,16 @@ impl RuntimePrograms {
         Ok((self.launcher.pin()?, self.daemon.pin()?))
     }
 
+    /// Join the recorded launcher to this startup's still-open, content-verified executable.
+    pub(super) fn worker_launcher(&self, recorded: &BinaryPin) -> Result<&Path> {
+        if self.launcher.path() != recorded.path
+            || self.launcher.pin_for_path(&recorded.path)?.blake3 != recorded.blake3
+        {
+            return Err(invalid("worker launcher differs from the prepared generation").into());
+        }
+        Ok(self.launcher.path())
+    }
+
     pub(super) fn require_paths(&self, launcher: &Path, daemon: &Path) -> Result<()> {
         if launcher != self.launcher.path() || daemon != self.daemon.path() {
             return Err(invalid("startup paths differ from the selected installed runtime").into());
@@ -631,6 +641,28 @@ mod tests {
         std::fs::rename(&path, &moved).unwrap();
         std::fs::rename(&moved, &path).unwrap();
         NativeProgram::matching(&pin).unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn worker_spawn_reuses_only_the_original_launcher_without_another_content_hash() {
+        let _resources = super::super::native_test_guard();
+        let (_directory, runtime) = installed_pair();
+        let request = runtime.localnet_request("selected", std::time::Duration::from_secs(30));
+        let programs = request.admit_programs().unwrap();
+        let (launcher, daemon) = programs.pins().unwrap();
+        let _hashes = ContentHashProbe::begin();
+        assert_eq!(programs.worker_launcher(&launcher).unwrap(), launcher.path);
+        assert!(programs.worker_launcher(&daemon).is_err());
+        let mut wrong_hash = launcher.clone();
+        wrong_hash.blake3.clear();
+        assert!(programs.worker_launcher(&wrong_hash).is_err());
+        #[cfg(unix)]
+        {
+            std::fs::rename(&launcher.path, launcher.path.with_extension("old")).unwrap();
+            std::fs::copy(&daemon.path, &launcher.path).unwrap();
+            assert!(programs.worker_launcher(&launcher).is_err());
+        }
+        assert_eq!(ContentHashProbe::count(), 0);
     }
 
     #[test]

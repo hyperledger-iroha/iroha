@@ -20,7 +20,7 @@ use std::{
 };
 
 /// How often Home compares the validators' newest blocks.
-const BLOCK_TIP_INTERVAL: Duration = Duration::from_secs(2);
+pub(super) const BLOCK_TIP_INTERVAL: Duration = Duration::from_secs(2);
 /// How long one validator may take to report its newest block.
 const BLOCK_TIP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -288,10 +288,9 @@ impl Desktop {
             return;
         };
         let (network, handle) = (selected.network.clone(), runtime.handle().clone());
-        let (sender, epoch) = (self.sender.clone(), self.epoch);
         self.block_tips.pending = true;
         self.block_tips.started = Some(Instant::now());
-        std::thread::spawn(move || {
+        self.sender.spawn(self.epoch, move || {
             let tips = handle
                 .block_on(network.block_tips(BLOCK_TIP_TIMEOUT))
                 .map(|tips| {
@@ -301,7 +300,7 @@ impl Desktop {
                 })
                 .map_err(|error| error.to_string());
             let prepared = network.prepared().clone();
-            let _ = sender.send((epoch, Message::BlockTips { prepared, tips }));
+            Message::BlockTips { prepared, tips }
         });
     }
 
@@ -512,9 +511,8 @@ impl Desktop {
         let Some(selected) = &self.selected else {
             return;
         };
-        let prepared = selected.network.prepared().clone();
+        let prepared = selected.network.prepared();
         let phase = selected.phase;
-        let attachment = selected.attachment.clone();
         let context = &prepared.context;
         ui.horizontal(|ui| {
             ui.label(
@@ -606,6 +604,7 @@ impl Desktop {
                 });
             });
         });
+        let account = context.account_id.clone();
         if let Some(index) = observe {
             self.observe_peer(index);
         }
@@ -620,7 +619,6 @@ impl Desktop {
         self.chain_pulse(ui, 32);
         ui.add_space(12.0);
         let ready = phase == ManagedPhase::Ready;
-        let account = context.account_id.clone();
         let mut opened = None;
         ui.columns(2, |columns| {
             widgets::card(&mut columns[0], |ui| {
@@ -639,13 +637,13 @@ impl Desktop {
                         }
                         for holding in holdings.iter().take(4) {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(holding.value).size(18.0).strong().color(palette.text));
+                                ui.label(RichText::new(&holding.value).size(18.0).strong().color(palette.text));
                                 ui.label(
-                                    RichText::new(ledger.asset_label(holding.definition))
+                                    RichText::new(ledger.asset_label(&holding.definition))
                                         .strong()
                                         .color(palette.sakura),
                                 )
-                                .on_hover_text(holding.asset);
+                                .on_hover_text(&holding.asset);
                             });
                         }
                     }
@@ -742,13 +740,14 @@ impl Desktop {
                 self.preview = None;
             }
         }
-        if let Ok(Some(status)) = &attachment {
+        let attachment = self.selected.as_ref().map(|selected| &selected.attachment);
+        if let Some(Ok(Some(status))) = attachment {
             ui.add_space(12.0);
             widgets::card(ui, |ui| {
                 widgets::card_title(ui, icon::PRIVATE, "Parent attachment");
                 super::attachment_details(ui, status);
             });
-        } else if let Err(error) = &attachment {
+        } else if let Some(Err(error)) = attachment {
             ui.add_space(12.0);
             widgets::banner(
                 ui,

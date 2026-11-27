@@ -6797,6 +6797,7 @@ dependencies = [
  "norito",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "winit",
 ]
 
@@ -10795,6 +10796,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

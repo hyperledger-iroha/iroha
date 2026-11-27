@@ -156,6 +156,15 @@ form, without launching validators, opening a window,
 or needing a terminal. It reuses incremental builds; the first build still
 compiles both applications' dependencies. Omit the flag for the full Mochi gate.
 
+The fast checks also cover idle window repaints, stream wakeups and starting a
+foreground action during a balance refresh. The balance lookup benchmark uses
+100 accounts and 200 synthetic holdings. Use the same build profile for both
+runs.
+
+```sh
+cargo test --locked -p mochi-ui --features gui --bin mochi time_full_page_balance_lookups -- --ignored --nocapture
+```
+
 ```sh
 scripts/cargo_fast.sh --stable-local-metadata --incremental -- check -p mochi-ui --features gui --bin mochi
 cargo test -p mochi-core

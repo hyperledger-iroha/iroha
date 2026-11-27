@@ -9,6 +9,7 @@ if [[ $# == 1 && $1 == --ui-fast ]]; then
     exec scripts/cargo_fast.sh --stable-local-metadata --incremental -- test --locked \
         -p mochi-ui -p izanami --features mochi-ui/gui --bin mochi --bin izanami -- \
         gui::tests::activity_ every_empty_workspace_view_renders gui::widgets::tests:: \
+        gui::responsiveness_tests:: gui::updates::tests:: holdings_group_by_exact_owner \
         deployment_review_keeps_decision_buttons_reachable_in_a_small_viewport \
         publication_form_requires_explicit_click_and_respects_disabled_actions tui::tests::
 elif [[ $# != 0 ]]; then

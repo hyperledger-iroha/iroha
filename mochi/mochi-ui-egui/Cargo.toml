@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-gui = ["dep:eframe", "dep:egui", "dep:winit"]
+gui = ["dep:eframe", "dep:egui", "dep:tokio-stream", "dep:winit"]
 
 [dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
@@ -24,6 +24,7 @@ egui = { version = "0.37.0", default-features = false, features = ["monochrome_e
 # default ab_glyph backend brings the retired ttf-parser implementation.
 winit = { version = "0.30.13", default-features = false, features = ["wayland-csd-adwaita-crossfont"], optional = true }
 tokio = { workspace = true, features = ["signal"] }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 
 [dev-dependencies]
