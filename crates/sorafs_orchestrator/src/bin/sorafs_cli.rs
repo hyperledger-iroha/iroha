@@ -1,5 +1,7 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
+#[path = "sorafs_cli/deploy_da.rs"]
+mod deploy_da;
 #[path = "sorafs_cli/deploy_prepared.rs"]
 mod deploy_prepared;
 #[path = "sorafs_cli/deploy_publication.rs"]
@@ -8,6 +10,8 @@ mod deploy_publication;
 mod fetch_spool;
 #[path = "sorafs_cli/pdp.rs"]
 mod pdp;
+#[path = "sorafs_cli/recover_da.rs"]
+mod recover_da;
 use base64::{
     Engine,
     engine::general_purpose::{
@@ -345,6 +349,7 @@ fn run() -> Result<(), String> {
             }
         }
         "deploy" => deploy(args.collect()),
+        "da-recover" => recover_da::run(args.collect()),
         "fetch" => fetch_gateway(args.collect()),
         "pdp" => pdp::run(args.collect()),
         "proof" => {
@@ -589,6 +594,7 @@ struct ManifestSubmitRequest<'a> {
     alias_inputs: Option<&'a AliasInputs>,
 }
 fn deploy(raw_args: Vec<String>) -> Result<(), String> {
+    let mut da_source: Option<PathBuf> = None;
     let mut prepared_path: Option<PathBuf> = None;
     let mut prepared_digest: Option<String> = None;
     let mut finality_checkpoint: Option<PathBuf> = None;
@@ -610,6 +616,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             .split_once('=')
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
+            "--da-source" => da_source = Some(PathBuf::from(value)),
             "--prepared-package" => prepared_path = Some(PathBuf::from(value)),
             "--prepared-package-blake3-hex" => prepared_digest = Some(value.to_owned()),
             "--finality-checkpoint" => finality_checkpoint = Some(PathBuf::from(value)),
@@ -628,23 +635,36 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
+    if da_source.is_some()
+        && (prepared_path.is_some() || prepared_digest.is_some() || payload_path.is_some())
+    {
+        return Err("select exactly one deployment source".into());
+    }
     let prepared =
         deploy_prepared::select(prepared_path, prepared_digest, payload_path.as_deref())?;
-    let payload_path = payload_path
-        .or_else(|| prepared.as_ref().map(|value| value.payload_path()))
-        .ok_or_else(|| {
-            "deploy requires --payload=PATH or a pinned --prepared-package=PATH".to_owned()
-        })?;
     let client_config_path = client_config_path.ok_or_else(|| {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
     let client_config = load_deploy_client_config(&client_config_path)?;
     let finality_checkpoint = finality_checkpoint.ok_or_else(|| "deploy requires --finality-checkpoint=PATH containing an independently trusted canonical SumeragiFinalityCheckpoint for the configured network and chain".to_owned())?;
-    let checkpoint = deploy_publication::load_checkpoint(
+    let (checkpoint, tip) = deploy_publication::load_checkpoint(
         &finality_checkpoint,
         &client_config.network_id,
         &client_config.chain_id,
     )?;
+    let da_package = da_source
+        .as_deref()
+        .map(|path| deploy_da::prepare(path, &tip, &client_config))
+        .transpose()?;
+    drop(tip);
+    let payload_path = payload_path
+        .or_else(|| prepared.as_ref().map(|value| value.payload_path()))
+        .or_else(|| {
+            da_package
+                .as_ref()
+                .map(|package| package.directory.path().to_owned())
+        })
+        .ok_or_else(|| "deploy requires --payload, --prepared-package or --da-source".to_owned())?;
     let torii_url = torii_url_override
         .or(client_config.torii_url.clone())
         .ok_or_else(|| {
@@ -656,6 +676,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     deploy_publication::endpoint(&torii_base_url, "v1/sorafs/publish/prepare")?;
     let deploy_name = sanitize_deploy_name(
         name.as_deref()
+            .or_else(|| da_package.as_ref().map(|package| package.ticket.as_str()))
             .or_else(|| payload_path.file_name().and_then(|name| name.to_str()))
             .unwrap_or("payload"),
     );
@@ -699,11 +720,24 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             &pack_summary_path,
             &manifest_path,
             &manifest_json_path,
+            da_package.as_ref().map(|package| package.policy.clone()),
         )
     };
     let mut receipt = Map::new();
     insert_value!(receipt["name"] = deploy_name.clone());
-    insert_value!(receipt["payload_path"] = payload_path.display().to_string());
+    insert_value!(
+        receipt["payload_path"] = da_source
+            .as_ref()
+            .unwrap_or(&payload_path)
+            .display()
+            .to_string()
+    );
+    if let Some(package) = &da_package {
+        insert_value!(receipt["da_storage_ticket"] = package.ticket.clone());
+        insert_value!(receipt["da_manifest_hash"] = package.manifest_hash.clone());
+        insert_value!(receipt["da_block_height"] = checkpoint.height());
+        insert_value!(receipt["da_block_hash"] = checkpoint.block_hash().to_string());
+    }
     insert_value!(receipt["client_config_path"] = client_config_path.display().to_string());
     insert_value!(receipt["torii_url"] = torii_url.clone());
     insert_value!(receipt["out_dir"] = out_dir.display().to_string());
@@ -738,10 +772,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         insert_value!(artifact_paths["manifest_to"] = manifest_path.display().to_string());
         insert_value!(artifact_paths["manifest_json"] = manifest_json_path.display().to_string());
     }
-    insert_value!(
-        artifact_paths["pin_register_response"] = register_response_path.display().to_string()
-    );
-    insert_json!(receipt["artifacts"] = Value::Object(artifact_paths));
     let authority = AccountId::new(client_config.public_key.clone());
     let authority_literal =
         authority_payload_literal(&authority, Some(client_config.chain_discriminant))?;
@@ -753,15 +783,42 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         private_key: &client_config.private_key,
         alias_inputs: None,
     };
-    let registration = submit_pin_register(&submit_request, &artifacts.manifest, None);
+    let session =
+        deploy_publication::PublicationSession::begin(&client, &torii_base_url, &client_config);
+    let registration = deploy_publication::register_if_absent(
+        session,
+        &submit_request,
+        &artifacts.manifest,
+        &out_dir,
+    );
     let mut registration_summary = Map::new();
     insert_value!(registration_summary["authority"] = authority_literal);
-    insert_value!(
-        registration_summary["response_path"] = register_response_path.display().to_string()
-    );
     let mut registration_hash = None;
     let paid_pin_fee = match registration {
-        Ok(response) => {
+        Ok(deploy_publication::Registration::Existing) => {
+            insert_value!(registration_summary["submission_mode"] = "existing_pin");
+            insert_value!(registration_summary["success"] = true);
+            Value::Null
+        }
+        Ok(deploy_publication::Registration::Observed(hash)) => {
+            registration_hash = Some(hash);
+            insert_value!(registration_summary["transaction_hash"] = hash.to_string());
+            insert_value!(registration_summary["submission_mode"] = "retained_transaction");
+            insert_value!(registration_summary["success"] = true);
+            Value::Null
+        }
+        Ok(deploy_publication::Registration::Submitted(response)) => {
+            insert_value!(
+                registration_summary["transaction_hash"] = response.transaction_hash.to_string()
+            );
+            insert_value!(
+                artifact_paths["pin_register_response"] =
+                    register_response_path.display().to_string()
+            );
+            insert_value!(
+                registration_summary["response_path"] =
+                    register_response_path.display().to_string()
+            );
             registration_hash = Some(response.transaction_hash);
             write_bytes(&register_response_path, &response.response_bytes)?;
             let registration_ok = response.status.is_success();
@@ -787,6 +844,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             Value::Null
         }
     };
+    insert_json!(receipt["artifacts"] = Value::Object(artifact_paths));
     insert_json!(receipt["registration"] = Value::Object(registration_summary));
     // Submission HTTP is not a finalized fee receipt. Keep the endpoint's claim explicitly
     // labelled until a native finalized-ledger proof authenticates the exact transaction.
@@ -823,11 +881,9 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         insert_value!(discovery_json["warning"] = err.clone());
     }
     insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
-    let publication = if let Some(registration_hash) =
-        registration_hash.filter(|_| errors.is_empty())
-    {
+    let publication = if errors.is_empty() {
         deploy_publication::qualify(
-            deploy_publication::PublicationSession::begin(&client, &torii_base_url, &client_config),
+            session,
             &mut artifacts,
             registration_hash,
             checkpoint,
@@ -992,6 +1048,7 @@ fn build_deploy_artifacts(
     pack_summary_path: &Path,
     manifest_path: &Path,
     manifest_json_path: &Path,
+    negotiated_policy: Option<PinPolicy>,
 ) -> Result<DeployPackArtifacts, String> {
     let handle = DEFAULT_CHUNKER_HANDLE;
     let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
@@ -1031,6 +1088,11 @@ fn build_deploy_artifacts(
                 payload_path.display()
             ));
         };
+    if plan.content_length > PREPARED_STORAGE_MAX_PAYLOAD_BYTES {
+        return Err(format!(
+            "deployment payload exceeds the {PREPARED_STORAGE_MAX_PAYLOAD_BYTES}-byte preparation limit"
+        ));
+    }
     let car_file = open_output_file(car_path)?;
     let mut writer = BufWriter::new(car_file);
     let mut payload_reader = payload_cursor;
@@ -1081,15 +1143,18 @@ fn build_deploy_artifacts(
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: StorageClass::Hot,
-            retention_epoch: deploy_publication::default_deploy_retention_epoch(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|_| "system clock precedes Unix epoch".to_owned())?
-                    .as_secs(),
-            )?,
+        .pin_policy(match negotiated_policy {
+            Some(policy) => policy,
+            None => PinPolicy {
+                min_replicas: 1,
+                storage_class: StorageClass::Hot,
+                retention_epoch: deploy_publication::default_deploy_retention_epoch(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|_| "system clock precedes Unix epoch".to_owned())?
+                        .as_secs(),
+                )?,
+            },
         })
         .build()
         .map_err(format_manifest_error)?;
@@ -1105,8 +1170,13 @@ fn build_deploy_artifacts(
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let (payload_bytes, storage_files, payload_kind) =
-        load_prepared_storage_payload(payload_path, &manifest)?;
+    // Carry the exact bytes written to the CAR into publication and gateway verification.
+    let payload_bytes = payload_reader.into_inner();
+    validate_prepared_storage_payload(&manifest, &plan, &payload_bytes)?;
+    let (storage_files, payload_kind) = match input_summary {
+        InputSummary::Directory { .. } => (Some(storage_file_inventory(&plan)), "directory"),
+        InputSummary::File { .. } => (None, "file"),
+    };
     let gateway_expectations =
         build_gateway_expectations(storage_files.as_deref(), &payload_bytes)?;
     let payload_digest_hex = hex_encode(blake3_hash(&payload_bytes).as_bytes());
@@ -1177,11 +1247,15 @@ fn submit_pin_register(
     manifest: &ManifestV1,
     successor_digest: Option<[u8; 32]>,
 ) -> Result<ManifestRegisterSubmission, String> {
-    let endpoint = request
-        .torii_base_url
-        .join("v1/sorafs/pin/register")
-        .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
-    let requested_endpoint = endpoint.as_str().to_string();
+    let transaction = prepare_pin_registration(request, manifest, successor_digest)?;
+    send_pin_registration(request, &transaction)
+}
+
+fn prepare_pin_registration(
+    request: &ManifestSubmitRequest<'_>,
+    manifest: &ManifestV1,
+    successor_digest: Option<[u8; 32]>,
+) -> Result<iroha_data_model::transaction::SignedTransaction, String> {
     let transaction = build_pin_register_transaction(
         request.network_id,
         request.authority,
@@ -1190,12 +1264,23 @@ fn submit_pin_register(
         request.alias_inputs,
         successor_digest,
     )?;
-    let transaction = deploy_publication::quote_and_sign(
+    deploy_publication::quote_and_sign(
         request.client,
         request.torii_base_url,
         request.private_key,
         transaction.payload().clone(),
-    )?;
+    )
+}
+
+fn send_pin_registration(
+    request: &ManifestSubmitRequest<'_>,
+    transaction: &iroha_data_model::transaction::SignedTransaction,
+) -> Result<ManifestRegisterSubmission, String> {
+    let endpoint = request
+        .torii_base_url
+        .join("v1/sorafs/pin/register")
+        .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
+    let requested_endpoint = endpoint.as_str().to_string();
     // Bind later rejection observations to the exact fee-quoted signed input,
     // never to a server-supplied hash or the unsigned manifest digest.
     let transaction_hash = transaction.hash();
@@ -2987,7 +3072,8 @@ fn format_car_error(err: CarWriteError) -> String {
 }
 fn usage() -> String {
     "Usage:
-  sorafs_cli deploy (--payload=PATH | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli da-recover --gateway=URL [--gateway=URL...] --cid=BASE32 --manifest-hash=HEX --output=PATH
+  sorafs_cli deploy (--payload=PATH | --da-source=TICKET_DIRECTORY | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
@@ -14476,16 +14562,18 @@ fn load_prepared_storage_payload(
     manifest: &ManifestV1,
 ) -> Result<PreparedStoragePayload, String> {
     let (plan, payload, kind) = load_prepared_storage_plan(input, manifest)?;
-    let files = (kind == "directory").then(|| {
-        plan.files
-            .iter()
-            .map(|file| StorageFileEntryOwned {
-                path: file.path.clone(),
-                size: file.size,
-            })
-            .collect()
-    });
+    let files = (kind == "directory").then(|| storage_file_inventory(&plan));
     Ok((payload, files, kind))
+}
+
+fn storage_file_inventory(plan: &CarBuildPlan) -> Vec<StorageFileEntryOwned> {
+    plan.files
+        .iter()
+        .map(|file| StorageFileEntryOwned {
+            path: file.path.clone(),
+            size: file.size,
+        })
+        .collect()
 }
 fn load_prepared_storage_plan(
     input: &Path,
@@ -19713,7 +19801,7 @@ mod tests {
     use std::{fs, path::Path};
     use tempfile::tempdir;
     include!("sorafs_cli/appeal_verdict_parser_tests.rs");
-    fn sample_manifest() -> ManifestV1 {
+    pub(super) fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         ManifestBuilder::new()
             .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x01; 32]))

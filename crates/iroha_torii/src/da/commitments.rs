@@ -390,8 +390,8 @@ mod tests {
             ManifestDigest::new(
                 [u8::try_from(epoch).expect("fixture epoch fits in a digest byte"); 32],
             ),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed(
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new(
                 [u8::try_from(sequence).expect("fixture sequence fits in a digest byte"); 32],
             ),
             None,
@@ -447,8 +447,8 @@ mod tests {
             "the removed lane must be absent from authoritative runtime state"
         );
         let stale_geometry_catalog = lane_catalog_with_entries(&[
-            (LaneId::new(0), DaProofScheme::MerkleSha256),
-            (stale_lane, DaProofScheme::MerkleSha256),
+            (LaneId::new(0), DaProofScheme::SorafsPorBlake3),
+            (stale_lane, DaProofScheme::SorafsPorBlake3),
         ]);
         let mut nexus = app.state.nexus.write();
         nexus.lane_config = ConfigLaneConfig::from_catalog(&stale_geometry_catalog);
@@ -472,7 +472,7 @@ mod tests {
             id: lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: format!("elastic-lane-{}", lane_id.as_u32()),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             ..ModelLaneConfig::default()
         };
         elastic_lane
@@ -522,7 +522,7 @@ mod tests {
         );
     }
     fn nexus_for_records(records: &[DaCommitmentRecord]) -> Nexus {
-        let mut lane_entries = BTreeSet::from([(LaneId::new(0), DaProofScheme::MerkleSha256)]);
+        let mut lane_entries = BTreeSet::from([(LaneId::new(0), DaProofScheme::SorafsPorBlake3)]);
         lane_entries.extend(
             records
                 .iter()
@@ -831,8 +831,8 @@ mod tests {
         );
         header.set_da_commitments_hash(bundle.merkle_commitment());
         let config = lane_config_with_entries(&[
-            (LaneId::new(1), DaProofScheme::MerkleSha256),
-            (LaneId::new(2), DaProofScheme::MerkleSha256),
+            (LaneId::new(1), DaProofScheme::SorafsPorBlake3),
+            (LaneId::new(2), DaProofScheme::SorafsPorBlake3),
         ]);
         let policies = iroha_core::da::proof_policy_bundle(&config);
         header.set_da_proof_policies_hash(Some(iroha_crypto::HashOf::new(&policies)));
@@ -874,7 +874,7 @@ mod tests {
             0,
         );
         header.set_da_commitments_hash(bundle.merkle_commitment());
-        let config = lane_config_with_entries(&[(LaneId::new(2), DaProofScheme::MerkleSha256)]);
+        let config = lane_config_with_entries(&[(LaneId::new(2), DaProofScheme::SorafsPorBlake3)]);
         let policies = iroha_core::da::proof_policy_bundle(&config);
         header.set_da_proof_policies_hash(Some(iroha_crypto::HashOf::new(&policies)));
         assert!(verify_da_commitment_proof(&proof, &header, &policies).is_ok());

@@ -232,7 +232,7 @@ state_test! { sync hydrate_da_indexes_rejects_kura_body_hash_mismatch
 state_test! { sync hydrate_da_indexes_rejects_cursor_regression
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
-    let_row! { make_record = |sequence: u64| { DaCommitmentRecord::new( LaneId::new(0), 1, sequence, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::MerkleSha256, Hash::prehashed([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) } };
+    let_row! { make_record = |sequence: u64| { DaCommitmentRecord::new( LaneId::new(0), 1, sequence, BlobDigest::new([0xAA; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([0xCC; 32]), None, RetentionClass::default(), StorageTicketId::new([0xEE; 32]), checked_da_ack_signature(0x11), ) } };
     let first_bundle = DaCommitmentBundle::new(vec![make_record(1)]);
     let_row! { first_block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(first_bundle)) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed_first: SignedBlock = first_block.into();
@@ -278,7 +278,7 @@ state_test! { sync hydrate_da_indexes_rejects_cursor_regression
 state_test! { sync hydrate_da_indexes_rejects_receipt_sequence_gap
     let (state, kura) = blank_test_state_with_kura();
     let keypair = crate::state::checked_keypair();
-    let_row! { make_record = |sequence, seed| { DaCommitmentRecord::new( LaneId::new(0), 1, sequence, BlobDigest::new([seed; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([seed.wrapping_add(1); 32]), DaProofScheme::MerkleSha256, Hash::prehashed([seed.wrapping_add(2); 32]), None, RetentionClass::default(), StorageTicketId::new([seed.wrapping_add(3); 32]), checked_da_ack_signature(seed.wrapping_add(4)), ) } };
+    let_row! { make_record = |sequence, seed| { DaCommitmentRecord::new( LaneId::new(0), 1, sequence, BlobDigest::new([seed; 32]), iroha_data_model::sorafs::pin_registry::ManifestDigest::new([seed.wrapping_add(1); 32]), DaProofScheme::SorafsPorBlake3, BlobDigest::new([seed.wrapping_add(2); 32]), None, RetentionClass::default(), StorageTicketId::new([seed.wrapping_add(3); 32]), checked_da_ack_signature(seed.wrapping_add(4)), ) } };
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .with_da_commitments(Some(DaCommitmentBundle::new(vec![make_record(1, 0x31)]))) .sign(keypair.private_key()) .unpack(|_| {}) .into() };
     kura.store_block(crate::block::reserve_block_for_tests().initialize(first_block.clone()))
         .expect("store first block");

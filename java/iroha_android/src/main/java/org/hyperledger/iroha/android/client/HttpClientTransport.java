@@ -298,17 +298,6 @@ public final class HttpClientTransport implements IrohaClient {
         .observers(config.observers());
   }
 
-  /** Creates a typed DA proof client that reuses this transport's configuration. */
-  public DaToriiClient newDaToriiClient() {
-    return DaToriiClient.builder()
-        .setExecutor(executor)
-        .setBaseUri(config.baseUri())
-        .setTimeout(config.requestTimeout())
-        .setDefaultHeaders(config.defaultHeaders())
-        .setObservers(config.observers())
-        .build();
-  }
-
   /**
    * Creates the exact-route private-settlement client without inheriting request observers.
    *

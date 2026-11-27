@@ -36,6 +36,9 @@ const RESUBSCRIBE_DELAY: Duration = Duration::from_millis(50);
 
 /// The relay's inputs.
 pub struct NetworkRelay {
+    pub(crate) state: Arc<iroha_core::state::State>,
+    pub(crate) local_peer: PeerId,
+    pub(crate) da_relay_period: Duration,
     pub(crate) tx_gossiper: TransactionGossiperHandle,
     pub(crate) peers_gossiper: PeersGossiperHandle,
     pub(crate) network: IrohaNetwork,
@@ -45,7 +48,10 @@ pub struct NetworkRelay {
     pub(crate) emergency_fast: bool,
 }
 
+type IncomingDa = (Arc<Vec<u8>>, PeerMessageRetentionGuard);
+
 struct Shared {
+    da_inbox: Option<mpsc::Sender<IncomingDa>>,
     tx_gossiper: TransactionGossiperHandle,
     peers_gossiper: PeersGossiperHandle,
     network: IrohaNetwork,
@@ -68,7 +74,13 @@ impl NetworkRelay {
             (false, true) => RelayStartup::Managed,
             (false, false) => RelayStartup::Ordinary,
         };
+        let da = (!self.emergency_fast).then(|| mpsc::channel::<IncomingDa>(1));
+        let (da_inbox, da_work) = match da {
+            Some((sender, receiver)) => (Some(sender), Some(receiver)),
+            None => (None, None),
+        };
         let shared = Arc::new(Shared {
+            da_inbox,
             tx_gossiper: self.tx_gossiper,
             peers_gossiper: self.peers_gossiper,
             network: self.network,
@@ -100,6 +112,15 @@ impl NetworkRelay {
             };
             if open {
                 shared.torii_started.store(true, Ordering::Release);
+                if let Some(receiver) = da_work {
+                    tasks.spawn(run_da_relay(
+                        self.state,
+                        self.local_peer,
+                        shared.network.clone(),
+                        self.da_relay_period,
+                        receiver,
+                    ));
+                }
                 for (filter, capacity) in subscriptions_after_torii(startup, base) {
                     let receiver = subscribe(&shared, &filter, capacity);
                     tasks.spawn(subscribe_and_relay(
@@ -114,6 +135,40 @@ impl NetworkRelay {
             tasks.shutdown().await;
         };
         (started, task)
+    }
+}
+
+/// One physical worker and one waiting frame. Dropped or refused attempts are retried by the
+/// originating durable queue on its periodic pass until the pair is committed.
+async fn run_da_relay(
+    state: Arc<iroha_core::state::State>,
+    local: PeerId,
+    network: IrohaNetwork,
+    period: Duration,
+    mut incoming: mpsc::Receiver<IncomingDa>,
+) {
+    let mut timer = tokio::time::interval(period);
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut cursor = 0;
+    loop {
+        tokio::select! {
+            _ = timer.tick() => {
+                tokio::task::block_in_place(|| {
+                    if let Err(error) = state.relay_da_proposal_candidate(&local, &mut cursor, &network) {
+                        iroha_logger::debug!(%error, "DA candidate relay deferred");
+                    }
+                });
+            }
+            message = incoming.recv() => {
+                let Some((bytes, retention)) = message else {break};
+                tokio::task::block_in_place(|| {
+                    if let Err(error) = state.accept_relayed_da_proposal_candidate(&local, &bytes) {
+                        iroha_logger::debug!(%error, "DA candidate relay refused");
+                    }
+                    drop(retention);
+                });
+            }
+        }
     }
 }
 
@@ -230,6 +285,12 @@ impl Shared {
                     && let Err(error) = self.streaming.process_control_frame(&peer, frame.as_ref())
                 {
                     iroha_logger::warn!(%peer, ?error, "failed to process streaming control frame");
+                }
+            }
+            DaProposal(data) => {
+                if let Some(inbox) = &self.da_inbox {
+                    // Original transport credit follows the body through signature and disk work.
+                    let _ = inbox.try_send((data, retention));
                 }
             }
             TransactionGossiper(data) => {

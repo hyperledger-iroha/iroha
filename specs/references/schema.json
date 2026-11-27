@@ -6924,7 +6924,7 @@
       },
       {
         "name": "chunk_root",
-        "type": "Hash"
+        "type": "BlobDigest"
       },
       {
         "name": "proof_digest",
@@ -6976,7 +6976,7 @@
       },
       {
         "name": "request_content_hash",
-        "type": "Hash"
+        "type": "BlobDigest"
       },
       {
         "name": "signatures",
@@ -7212,7 +7212,7 @@
     "Enum": [
       {
         "discriminant": 0,
-        "tag": "MerkleSha256"
+        "tag": "SorafsPorBlake3"
       }
     ]
   },

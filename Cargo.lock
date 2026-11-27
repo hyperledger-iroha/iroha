@@ -4260,6 +4260,7 @@ dependencies = [
  "ed25519-dalek",
  "eyre",
  "hex",
+ "httpmock",
  "iroha",
  "iroha_cli_lib",
  "iroha_core",
@@ -5777,6 +5778,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "flate2",
  "futures-util",
  "hex",
  "hkdf",
@@ -5792,6 +5794,7 @@ dependencies = [
  "sha2 0.11.1",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "zstd",
 ]
 
 [[package]]

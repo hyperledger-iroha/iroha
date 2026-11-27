@@ -11,6 +11,7 @@ pub mod confidential_store;
 pub mod pin_intents;
 pub mod pin_store;
 pub mod proofs;
+pub(crate) mod proposal_queue;
 pub(crate) mod quota;
 pub mod receipts;
 pub mod replay_cache;
@@ -209,6 +210,9 @@ pub enum DaCommitmentValidationError {
 /// Errors returned when a DA pin intent violates invariants.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DaPinIntentValidationError {
+    /// The DA commitments and producer-authorized pin scopes do not form exact pairs.
+    #[error("DA commitment records do not match the producer-authorized pin scopes")]
+    CommitmentScopeMismatch,
     /// Pin intent bundle version is unsupported.
     #[error("unsupported DA pin-intent bundle version {version}")]
     UnsupportedVersion {
@@ -522,10 +526,7 @@ fn enforce_record_proof_scheme(
             observed: record.proof_scheme,
         });
     }
-    let chunk_root = record.chunk_root.as_ref();
-    let chunk_root_zero_like = chunk_root[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
-        && chunk_root[Hash::LENGTH - 1] <= 1;
-    if chunk_root_zero_like {
+    if record.chunk_root.is_zero() {
         return Err(DaProofPolicyError::ZeroChunkRoot {
             lane: record.lane_id,
         });
@@ -1238,7 +1239,7 @@ pub(crate) fn signed_test_ingest_authorization(
         sequence,
         payload_hash: BlobDigest::new([0xA5; 32]),
         payload_bytes,
-        request_content_hash: Hash::prehashed([0x5A; 32]),
+        request_content_hash: BlobDigest::new([0x5A; 32]),
         signatures: Vec::new(),
     };
     let signature =
@@ -1249,6 +1250,28 @@ pub(crate) fn signed_test_ingest_authorization(
         signature,
     });
     authorization
+}
+#[cfg(test)]
+/// Matching commitment used by pin-scope fixtures that exercise the first-release wire.
+pub(crate) fn test_pin_commitment(
+    authorization: &iroha_data_model::da::ingest::DaIngestAuthorizationV1,
+    storage_ticket: iroha_data_model::da::types::StorageTicketId,
+    manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest,
+) -> DaCommitmentRecord {
+    DaCommitmentRecord::new(
+        authorization.lane_id,
+        authorization.epoch,
+        authorization.sequence,
+        authorization.payload_hash,
+        manifest_hash,
+        DaProofScheme::SorafsPorBlake3,
+        iroha_data_model::da::types::BlobDigest::new([0x6c; 32]),
+        None,
+        Default::default(),
+        storage_ticket,
+        iroha_crypto::Signature::try_from_bytes(&[0x66; 64])
+            .expect("test DA acknowledgement encoding"),
+    )
 }
 #[cfg(test)]
 /// Build a canonically signed exact pin-scope authorization for unit-test pin intents.
@@ -1263,6 +1286,7 @@ pub(crate) fn signed_test_pin_scope_authorization(
         authorization,
         storage_ticket,
         manifest_hash,
+        test_pin_commitment(authorization, storage_ticket, manifest_hash).pin_scope_digest(),
         alias,
     );
     iroha_data_model::da::ingest::DaPinScopeAuthorizationV1::try_sign(scope, key_pair)
@@ -1867,7 +1891,7 @@ mod proof_policy_tests {
             sequence,
             payload_hash: BlobDigest::new([0xC1; 32]),
             payload_bytes: 17,
-            request_content_hash: Hash::prehashed([0xC2; 32]),
+            request_content_hash: BlobDigest::new([0xC2; 32]),
             signatures: Vec::new(),
         };
         let digest = authorization.signing_digest();
@@ -1891,7 +1915,13 @@ mod proof_policy_tests {
         alias: Option<String>,
         signers: &[&iroha_crypto::KeyPair],
     ) -> DaPinScopeAuthorizationV1 {
-        let scope = DaPinScopeV1::new(authorization, storage_ticket, manifest_hash, alias);
+        let scope = DaPinScopeV1::new(
+            authorization,
+            storage_ticket,
+            manifest_hash,
+            test_pin_commitment(authorization, storage_ticket, manifest_hash).pin_scope_digest(),
+            alias,
+        );
         let digest = scope.signing_digest();
         let mut signatures = signers
             .iter()
@@ -2259,7 +2289,6 @@ mod tests {
     };
 
     use iroha_model_base::topology::DataSpaceId;
-    use norito::to_bytes;
     use std::{collections::BTreeMap, num::NonZeroU32};
     fn test_pin_authorization(
         lane: LaneId,
@@ -2339,8 +2368,8 @@ mod tests {
             1,
             BlobDigest::new([0x11; 32]),
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x22; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0x33; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([0x33; 32]),
             Some(Hash::prehashed([0x44; 32])),
             RetentionClass::default(),
             StorageTicketId::new([0x55; 32]),
@@ -2354,14 +2383,14 @@ mod tests {
             id: LaneId::new(1),
             alias: "merkle-lane".to_string(),
             dataspace_id: DataSpaceId::new(7),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             ..ModelLaneConfig::default()
         };
         let lane_b = ModelLaneConfig {
             id: LaneId::new(2),
             alias: "second-merkle-lane".to_string(),
             dataspace_id: DataSpaceId::new(9),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
             ..ModelLaneConfig::default()
         };
         let lane_config = lane_config_with(vec![lane_a.clone(), lane_b.clone()]);
@@ -2470,7 +2499,7 @@ mod tests {
                 id: inactive_lane,
                 dataspace_id: DataSpaceId::new(7),
                 alias: "missing-dataspace-da".to_owned(),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ]);
@@ -2556,7 +2585,7 @@ mod tests {
                 id: drifted_lane,
                 alias: "catalog-da".to_owned(),
                 dataspace_id: DataSpaceId::new(7),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ]);
@@ -2566,7 +2595,7 @@ mod tests {
                 id: drifted_lane,
                 alias: "drifted-da".to_owned(),
                 dataspace_id: DataSpaceId::new(9),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ]);
@@ -2615,7 +2644,8 @@ mod tests {
         let expected_hash = HashOf::new(&bundle);
         assert_eq!(hash, expected_hash);
         assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
-        let encoded = to_bytes(&bundle.policies().to_vec()).expect("encode policies");
+        let encoded =
+            norito::encode_canonical(&bundle.policies().to_vec()).expect("encode policies");
         assert_eq!(bundle.policy_hash(), Hash::new(encoded));
     }
     #[test]
@@ -2635,11 +2665,14 @@ mod tests {
     fn rejects_zero_chunk_root() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = DaCommitmentRecord {
-            chunk_root: Hash::prehashed([0u8; 32]),
+            chunk_root: BlobDigest::new([0u8; 32]),
             ..merkle_record(0)
         };
         let err = enforce_lane_proof_policy(&record, &lane_config).expect_err("should fail");
         assert!(matches!(err, DaProofPolicyError::ZeroChunkRoot { .. }));
+        let mut adjacent = record;
+        adjacent.chunk_root.0[31] = 1;
+        assert!(enforce_lane_proof_policy(&adjacent, &lane_config).is_ok());
     }
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_key() {
@@ -2865,7 +2898,7 @@ mod tests {
             ModelLaneConfig {
                 id: LaneId::new(2),
                 alias: "lane-b".to_string(),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
                 ..ModelLaneConfig::default()
             },
         ];
@@ -2881,7 +2914,7 @@ mod tests {
             lane_id: LaneId::new(7),
             dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             alias: "lane-seven".to_owned(),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         };
         let bundle = DaProofPolicyBundle::new(vec![policy.clone(), policy]);
         assert_eq!(

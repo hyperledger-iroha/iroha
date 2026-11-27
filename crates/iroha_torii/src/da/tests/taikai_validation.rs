@@ -814,60 +814,6 @@ fn normalize_payload_rejects_size_mismatch() {
     };
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
-struct CountingReader {
-    remaining: usize,
-    emitted: usize,
-}
-impl CountingReader {
-    fn new(remaining: usize) -> Self {
-        Self {
-            remaining,
-            emitted: 0,
-        }
-    }
-}
-impl Read for CountingReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.remaining == 0 {
-            return Ok(0);
-        }
-        let n = self.remaining.min(buf.len());
-        buf[..n].fill(0xA5);
-        self.remaining -= n;
-        self.emitted += n;
-        Ok(n)
-    }
-}
-#[test]
-fn decompress_reader_stops_after_advertised_len_plus_one() {
-    let mut reader = CountingReader::new(64);
-    let err = decompress_reader(&mut reader, 8, "test")
-        .expect_err("overlong decompressed stream should reject");
-    assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        reader.emitted, 9,
-        "decompressor should read only one byte beyond advertised length"
-    );
-    assert!(
-        err.1
-            .contains("test payload decompressed to 9 bytes but total_size advertises 8 bytes"),
-        "unexpected error message: {}",
-        err.1
-    );
-}
-#[test]
-fn decompress_reader_rejects_unbounded_expected_len_without_reading() {
-    let mut reader = CountingReader::new(1);
-    let err = decompress_reader(&mut reader, usize::MAX, "test")
-        .expect_err("unbounded expected length should reject");
-    assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert_eq!(reader.emitted, 0);
-    assert!(
-        err.1.contains("supported decompression boundary"),
-        "unexpected error message: {}",
-        err.1
-    );
-}
 #[test]
 fn build_receipt_includes_pdp_commitment() {
     let request = sample_request();
@@ -899,6 +845,7 @@ fn build_receipt_includes_pdp_commitment() {
         encoded.clone(),
         rent_quote.clone(),
         DaStripeLayout::default(),
+        request.retention_policy.clone(),
     )
     .expect("build receipt");
     assert_eq!(receipt.pdp_commitment, Some(encoded));
@@ -919,15 +866,18 @@ fn build_receipt_signs_with_operator_key() {
         Vec::new(),
         DaRentQuote::default(),
         DaStripeLayout::default(),
+        request.retention_policy.clone(),
     )
     .expect("build receipt");
-    let unsigned_bytes =
-        persistence::unsigned_receipt_bytes(&receipt, request.sequence).expect("unsigned receipt");
+    let unsigned_bytes = receipt
+        .operator_signing_bytes(request.sequence)
+        .expect("unsigned receipt");
     receipt
         .operator_signature
         .verify(signer.public_key(), &unsigned_bytes)
         .expect("signature verifies");
-    let wrong_sequence_bytes = persistence::unsigned_receipt_bytes(&receipt, request.sequence + 1)
+    let wrong_sequence_bytes = receipt
+        .operator_signing_bytes(request.sequence + 1)
         .expect("wrong-sequence unsigned receipt");
     assert!(
         receipt
@@ -959,7 +909,6 @@ fn build_receipt_computes_chunk_root_from_payload() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
-        canonical.as_slice(),
         1_701_000_000,
     )
     .expect("pdp commitment");
@@ -988,6 +937,7 @@ fn build_receipt_computes_chunk_root_from_payload() {
         encoded_commitment,
         manifest.manifest.rent_quote,
         stripe_layout,
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
     assert_eq!(receipt.chunk_root, manifest.chunk_root);
@@ -1069,7 +1019,6 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
-        canonical.as_slice(),
         1_701_000_123,
     )
     .expect("pdp commitment");
@@ -1088,6 +1037,7 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
         encoded_commitment,
         manifest.manifest.rent_quote,
         stripe_layout,
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
     assert_eq!(receipt.chunk_root, manifest_chunk_root);

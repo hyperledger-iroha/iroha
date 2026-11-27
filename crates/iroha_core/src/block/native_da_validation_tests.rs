@@ -45,8 +45,8 @@ fn native_validation_rejects_unknown_da_lane() {
         1,
         BlobDigest::new([0xAA; 32]),
         ManifestDigest::new([0xBB; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0xCC; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([0xCC; 32]),
         None,
         RetentionClass::default(),
         StorageTicketId::new([0xEE; 32]),
@@ -82,8 +82,8 @@ fn native_validation_rejects_duplicate_da_manifest() {
             sequence,
             BlobDigest::new([tag; 32]),
             ManifestDigest::new([0xBB; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([tag; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([tag; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new([tag; 32]),
@@ -117,8 +117,8 @@ fn native_validation_rejects_duplicate_da_storage_ticket() {
             sequence,
             BlobDigest::new([tag; 32]),
             ManifestDigest::new([tag; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([tag; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([tag; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xDD; 32]),
@@ -151,8 +151,8 @@ fn native_validation_rejects_da_commitment_hash_mismatch() {
         1,
         BlobDigest::new([0xAA; 32]),
         ManifestDigest::new([0xBB; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0xCC; 32]),
+        DaProofScheme::SorafsPorBlake3,
+        BlobDigest::new([0xCC; 32]),
         None,
         RetentionClass::default(),
         StorageTicketId::new([0xDD; 32]),
@@ -414,6 +414,13 @@ fn native_validation_rejects_committed_da_pin_intent_identity_reuse() {
         ManifestDigest::new([0xB1; 32]),
     );
     let mut proposal = fixture.proposal(vec![fixture.transaction(2_001, None)], fixture.cadence());
+    proposal.set_da_commitments(Some(DaCommitmentBundle::new(vec![
+        crate::da::test_pin_commitment(
+            &original.authorization,
+            original.storage_ticket,
+            original.manifest_hash,
+        ),
+    ])));
     proposal.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![original.clone()])));
     fixture.chain.commit_proposal(
         proposal,
@@ -581,8 +588,8 @@ fn native_validation_rejects_da_cursor_regression() {
             sequence,
             BlobDigest::new([byte; 32]),
             ManifestDigest::new([byte; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([byte; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([byte; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new([byte; 32]),
@@ -653,4 +660,227 @@ fn native_validation_rejects_da_cursor_regression() {
     );
     assert_eq!(fixture.chain.state().state_view_generation(), generation);
     assert_eq!(fixture.chain.state().view().height(), 3);
+}
+
+#[test]
+fn native_da_proposal_queue_authors_verified_pairs_with_ordinary_work_and_retries_after_commit() {
+    let mut fixture = NativeValidationFixture::new();
+    fixture.install_da_policy();
+    let intent = fixture.pin_intent(
+        LaneId::SINGLE,
+        1,
+        1,
+        StorageTicketId::new([0x71; 32]),
+        ManifestDigest::new([0x72; 32]),
+    );
+    let record = crate::da::test_pin_commitment(
+        &intent.authorization,
+        intent.storage_ticket,
+        intent.manifest_hash,
+    );
+    let state = Arc::clone(fixture.chain.state());
+    let mut changed = record.clone();
+    changed.proof_digest = Some(Hash::prehashed([0x73; 32]));
+    assert!(
+        state
+            .enqueue_da_proposal_candidate(&changed, &intent)
+            .is_err()
+    );
+    state
+        .enqueue_da_proposal_candidate(&record, &intent)
+        .unwrap();
+    state
+        .enqueue_da_proposal_candidate(&record, &intent)
+        .unwrap();
+
+    let parent = fixture.chain.committed(fixture.chain.height());
+    let assembly = Assembly {
+        parent: parent.block(),
+        view: 0,
+        cadence: fixture.cadence(),
+        proposed_time: Duration::ZERO,
+    };
+    assert!(matches!(
+        payload::assemble(&state, assembly, &[]),
+        Err(payload::PayloadError::EmptyBlock)
+    ));
+    let proposal = fixture.proposal(vec![fixture.transaction(2_010, None)], fixture.cadence());
+    assert_eq!(proposal.external_entrypoint_count(), 1);
+    assert_eq!(
+        proposal.da_commitments().unwrap().commitments(),
+        std::slice::from_ref(&record)
+    );
+    assert_eq!(
+        proposal.da_pin_intents().unwrap().intents,
+        vec![intent.clone()]
+    );
+
+    // Recompute a consistent block header over the substituted record. The independently
+    // verified producer scope, rather than the proposal header, rejects its altered contents.
+    let mut forged = proposal.clone();
+    forged.set_da_commitments(Some(DaCommitmentBundle::new(vec![changed])));
+    let (_, error) = fixture.validate(forged).unpack(|_| {}).err().unwrap();
+    assert!(matches!(
+        *error,
+        BlockValidationError::DaPinIntentBundle(
+            DaPinIntentValidationError::CommitmentScopeMismatch
+        )
+    ));
+    let mut unpaired = proposal.clone();
+    unpaired.set_da_commitments(None);
+    let (_, error) = fixture.validate(unpaired).unpack(|_| {}).err().unwrap();
+    assert!(matches!(
+        *error,
+        BlockValidationError::DaPinIntentBundle(
+            DaPinIntentValidationError::CommitmentScopeMismatch
+        )
+    ));
+
+    fixture.chain.commit_proposal(
+        proposal,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    // The ordinary relay timer sweeps a finalized entry without requiring another upload.
+    // Reopening the actual owner-directory journal must observe that same empty inventory.
+    assert!(crate::da::proposal_queue::pending_after_sweep(&state).is_empty());
+    let local = fixture
+        .chain
+        .committed(fixture.chain.height())
+        .commitment()
+        .schedule
+        .current
+        .committee[0]
+        .validator
+        .clone();
+    let frame = crate::da::proposal_queue::relay_bytes_for_test(&record, &intent);
+    state
+        .accept_relayed_da_proposal_candidate(&local, &frame)
+        .unwrap();
+    state
+        .enqueue_da_proposal_candidate(&record, &intent)
+        .unwrap();
+    assert!(crate::da::proposal_queue::pending_after_sweep(&state).is_empty());
+    let next = fixture.proposal(vec![fixture.transaction(2_020, None)], fixture.cadence());
+    assert!(next.da_commitments().is_none() && next.da_pin_intents().is_none());
+}
+
+#[test]
+fn native_da_relay_rejects_stale_cursors_and_reclaims_retired_epochs() {
+    use iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1;
+    use std::io::ErrorKind;
+    let mut fixture = NativeValidationFixture::new();
+    fixture.install_da_policy();
+    let state = Arc::clone(fixture.chain.state());
+    let offer = |fixture: &NativeValidationFixture, epoch: u64, seq: u8| {
+        let tag = seq + 16 * u8::try_from(epoch).unwrap();
+        let intent = fixture.pin_intent(
+            LaneId::SINGLE,
+            epoch,
+            u64::from(seq),
+            StorageTicketId::new([tag; 32]),
+            ManifestDigest::new([tag; 32]),
+        );
+        let record = crate::da::test_pin_commitment(
+            &intent.authorization,
+            intent.storage_ticket,
+            intent.manifest_hash,
+        );
+        (record, intent)
+    };
+    let (first, pin) = offer(&fixture, 1, 4);
+    state.enqueue_da_proposal_candidate(&first, &pin).unwrap();
+    let committed = fixture.proposal(vec![fixture.transaction(2_010, None)], fixture.cadence());
+    fixture.chain.commit_proposal(
+        committed,
+        crate::sumeragi::test_chain::Signers::Quorum,
+        Default::default(),
+    );
+    let local = fixture
+        .chain
+        .committed(fixture.chain.height())
+        .commitment()
+        .schedule
+        .current
+        .committee[0]
+        .validator
+        .clone();
+    let relay = |record, intent| {
+        state.accept_relayed_da_proposal_candidate(
+            &local,
+            &crate::da::proposal_queue::relay_bytes_for_test(record, intent),
+        )
+    };
+    let (stale, pin) = offer(&fixture, 1, 2);
+    assert_eq!(
+        relay(&stale, &pin).unwrap_err().kind(),
+        ErrorKind::AlreadyExists
+    );
+    let (six, six_pin) = offer(&fixture, 1, 6);
+    assert_eq!(
+        relay(&six, &six_pin).unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
+    let (five, five_pin) = offer(&fixture, 1, 5);
+    relay(&five, &five_pin).unwrap();
+    relay(&six, &six_pin).unwrap();
+    assert_eq!(
+        crate::da::proposal_queue::pending_after_sweep(&state),
+        vec![five.clone(), six.clone()]
+    );
+
+    // A remote proposer can commit a governance transition without these local candidates.
+    let rotate = |fixture: &mut NativeValidationFixture, stamp: u64, epoch, grace_epoch| {
+        let custom = state
+            .view()
+            .world()
+            .parameters()
+            .custom()
+            .get(&DaIngestAdmissionPolicyV1::parameter_id())
+            .unwrap()
+            .clone();
+        let previous = DaIngestAdmissionPolicyV1::from_custom_parameter(&custom)
+            .unwrap()
+            .unwrap();
+        let mut policy = previous.clone();
+        policy.revision += 1;
+        policy.expected_previous_policy_hash = Some(previous.policy_hash());
+        policy.lanes[0].current_epoch = epoch;
+        policy.lanes[0].grace_epoch = grace_epoch;
+        policy.validate_transition(Some(&previous)).unwrap();
+        let tx = fixture.chain.sign(
+            &fixture.user,
+            [InstructionBox::from(
+                iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+                    policy.into_custom_parameter(),
+                )),
+            )],
+            stamp,
+        );
+        let mut block = fixture.proposal(vec![tx], fixture.cadence());
+        block.set_da_commitments(None);
+        block.set_da_pin_intents(None);
+        fixture.chain.commit_proposal(
+            block,
+            crate::sumeragi::test_chain::Signers::Quorum,
+            Default::default(),
+        );
+    };
+    rotate(&mut fixture, 2_021, 2, Some(1));
+    assert_eq!(
+        crate::da::proposal_queue::pending_after_sweep(&state),
+        vec![five.clone(), six]
+    );
+    rotate(&mut fixture, 2_035, 3, Some(2));
+    assert!(crate::da::proposal_queue::pending_after_sweep(&state).is_empty());
+    assert_eq!(
+        relay(&five, &five_pin).unwrap_err().kind(),
+        ErrorKind::AlreadyExists
+    );
+    let (new, pin) = offer(&fixture, 3, 1);
+    relay(&new, &pin).unwrap();
+    assert_eq!(
+        crate::da::proposal_queue::pending_after_sweep(&state),
+        vec![new]
+    );
 }

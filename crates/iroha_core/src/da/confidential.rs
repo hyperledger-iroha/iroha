@@ -73,7 +73,7 @@ fn is_zero_manifest(digest: &ManifestDigest) -> bool {
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::Signature;
     use iroha_data_model::da::confidential_compute::ConfidentialComputeMechanism;
     use iroha_data_model::{
         da::{
@@ -113,8 +113,8 @@ mod tests {
             1,
             BlobDigest::new(blob),
             ManifestDigest::new([0xBB; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0xCC; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([0xCC; 32]),
             None,
             RetentionClass::default(),
             StorageTicketId::new(ticket),

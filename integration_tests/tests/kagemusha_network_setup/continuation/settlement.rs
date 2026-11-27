@@ -2,6 +2,7 @@
 use super::*;
 use iroha_data_model::{
     ValidationFail,
+    block::execution_output::TransactionResultRef,
     isi::error::{AssetTransferAdmissionError, InstructionExecutionError},
     transaction::{TransactionResult, error::TransactionRejectionReason},
 };
@@ -35,10 +36,13 @@ pub(super) fn state_rejection(
 }
 
 fn claim_failure<'a>(
-    result: &'a TransactionResult,
+    result: impl Into<TransactionResultRef<'a>>,
     expected: &TransactionRejectionReason,
 ) -> Result<&'a TransactionRejectionReason> {
     let reason = result
+        .into()
+        .baseline()
+        .ok_or_else(|| eyre!("claim evidence requires the selected baseline result family"))?
         .0
         .as_ref()
         .err()

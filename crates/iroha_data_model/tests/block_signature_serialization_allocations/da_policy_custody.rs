@@ -16,13 +16,13 @@ fn fixture() -> DaProofPolicyBundle {
             lane_id: LaneId::new(3),
             dataspace_id: DataSpaceId::new(9),
             alias: "a".repeat(11),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         },
         DaProofPolicy {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
             alias: "é漢🙂".repeat(3),
-            proof_scheme: DaProofScheme::MerkleSha256,
+            proof_scheme: DaProofScheme::SorafsPorBlake3,
         },
     ])
 }
@@ -86,7 +86,7 @@ fn da_policy_array_utf8_and_control_are_prepaid_before_fill_and_follow_last_read
                 lane_id: LaneId::SINGLE,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: String::new(),
-                proof_scheme: DaProofScheme::MerkleSha256,
+                proof_scheme: DaProofScheme::SorafsPorBlake3,
             }]),
         ] {
             let pool = AllocationBudget::new(1 << 20);

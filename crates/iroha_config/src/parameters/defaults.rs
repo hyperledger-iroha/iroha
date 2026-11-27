@@ -3031,6 +3031,8 @@ pub mod torii {
     pub const DA_REPLAY_CACHE_MAX_SEQUENCE_LAG: u64 = 4_096;
     /// Maximum number of concurrent CPU-intensive DA ingest jobs.
     pub const DA_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(1usize);
+    /// Total retained DA shard custody charge per manifest spool (4 GiB).
+    pub const DA_SOURCE_STORAGE_BUDGET_BYTES: std::num::NonZeroU64 = nonzero!(4_294_967_296u64);
     /// Maximum number of DA spool batches queued for async disk persistence.
     pub const DA_SPOOL_QUEUE_CAPACITY: NonZeroUsize = nonzero!(1024usize);
     /// Maximum number of DA spool batches flushed by one worker write pass.

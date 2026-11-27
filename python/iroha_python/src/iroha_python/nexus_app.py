@@ -51,7 +51,7 @@ _NEXUS_LANE_VISIBILITIES = frozenset(("public", "restricted"))
 _NEXUS_LANE_STORAGE_PROFILES = frozenset(
     ("full_replica", "commitment_only", "split_replica")
 )
-_NEXUS_LANE_PROOF_SCHEMES_V1 = frozenset(("merkle_sha256",))
+_NEXUS_LANE_PROOF_SCHEMES_V1 = frozenset(("sorafs_por_blake3",))
 _NEXUS_DA_MANIFEST_POLICIES = frozenset(("strict", "audit"))
 _NEXUS_CONFIDENTIAL_MECHANISMS = frozenset(("encryption", "secret_sharing"))
 _NEXUS_CONFIDENTIAL_COMPUTE_FIELDS = (
@@ -148,7 +148,7 @@ def _strict_nexus_lane_config(
     if not isinstance(proof_scheme, str):
         raise TypeError(f"{context} `proof_scheme` must be a string")
     if proof_scheme not in _NEXUS_LANE_PROOF_SCHEMES_V1:
-        raise ValueError(f"{context} `proof_scheme` must be `merkle_sha256` in V1")
+        raise ValueError(f"{context} `proof_scheme` must be `sorafs_por_blake3` in V1")
 
     manifest_policy = lane["manifest_policy"]
     if not isinstance(manifest_policy, str):

@@ -93,7 +93,7 @@ def lane_config(
         "governance": None,
         "settlement": None,
         "storage": "full_replica",
-        "proof_scheme": "merkle_sha256",
+        "proof_scheme": "sorafs_por_blake3",
         "manifest_policy": "strict",
         "confidential_compute": None,
         "scheduler": None,
@@ -809,7 +809,8 @@ def test_nexus_lane_lifecycle_rejects_incomplete_lane_before_status_fetch(
         ("description", 7, "description.*string or null"),
         ("visibility", "Public", "visibility.*public.*restricted"),
         ("storage", "full-replica", "storage.*full_replica"),
-        ("proof_scheme", "merkle", "proof_scheme.*merkle_sha256"),
+        ("proof_scheme", "merkle", "proof_scheme.*sorafs_por_blake3"),
+        ("proof_scheme", "merkle_sha256", "proof_scheme.*sorafs_por_blake3"),
         ("manifest_policy", "Strict", "manifest_policy.*strict.*audit"),
         ("confidential_compute", True, "confidential_compute.*object or null"),
         (

@@ -2,8 +2,8 @@
 #[cfg(test)]
 mod duration_clamp_tests {
     use super::{
-        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism,
-        DaManifestPolicy, DomainId, Emitter, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
+        Emitter, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
         SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
         SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
         SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, Url,
@@ -93,6 +93,169 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         toml::from_str(MINIMAL_CONFIG).expect("parse minimal config")
     }
     include!("user/torii_https_transport_tests.rs");
+
+    mod da_replication_policy_tests {
+        use super::{MINIMAL_CONFIG, Table, TomlSource, actual};
+        use iroha_data_model::{da::types::BlobClass, taikai::TaikaiAvailabilityClass};
+
+        const RETENTION: &str = r#"{hot_retention_secs = 14400, cold_retention_secs = 604800, required_replicas = 4, storage_class = "warm", governance_tag = "da.test"}"#;
+
+        fn read_policy(fields: &str) -> Result<actual::DaReplicationPolicy, String> {
+            let input = format!("{MINIMAL_CONFIG}\n[torii.da_ingest.replication_policy]\n{fields}");
+            let table: Table = toml::from_str(&input).expect("valid policy TOML");
+            actual::Root::from_toml_source(TomlSource::inline(table))
+                .map(|root| root.torii.da_ingest.replication_policy)
+                .map_err(|error| format!("{error:?}"))
+        }
+
+        #[test]
+        fn default_and_class_overrides_keep_unspecified_builtin_profiles() {
+            let baseline = RETENTION.replace("da.test", "da.new.baseline");
+            let policy = read_policy(&format!(
+                r#"default_retention = {baseline}
+overrides = [{{ class = "nexus_lane_sidecar", retention = {RETENTION} }}, {{ class = "custom:42", retention = {RETENTION} }}]"#
+            )).unwrap();
+            let prescribed = actual::DaReplicationPolicy::default();
+            let sidecar = policy.retention_for(BlobClass::NexusLaneSidecar, None);
+            assert_eq!(sidecar.governance_tag.0, "da.test");
+            assert_eq!(sidecar.hot_retention_secs, 14400);
+            assert_eq!(policy.retention_for(BlobClass::Custom(42), None), sidecar);
+            assert_eq!(
+                policy
+                    .retention_for(BlobClass::Custom(43), None)
+                    .governance_tag
+                    .0,
+                "da.new.baseline"
+            );
+            assert_eq!(
+                policy.retention_for(BlobClass::GovernanceArtifact, None),
+                prescribed.retention_for(BlobClass::GovernanceArtifact, None)
+            );
+            for class in [
+                None,
+                Some(TaikaiAvailabilityClass::Hot),
+                Some(TaikaiAvailabilityClass::Warm),
+                Some(TaikaiAvailabilityClass::Cold),
+            ] {
+                assert_eq!(
+                    policy.retention_for(BlobClass::TaikaiSegment, class),
+                    prescribed.retention_for(BlobClass::TaikaiSegment, class)
+                );
+            }
+        }
+
+        #[test]
+        fn taikai_only_override_preserves_sibling_availability_and_blob_classes() {
+            let policy = read_policy(&format!(r#"taikai_availability = [{{ availability_class = "warm", retention = {RETENTION} }}]"#)).unwrap();
+            let warm = policy.retention_for(
+                BlobClass::TaikaiSegment,
+                Some(TaikaiAvailabilityClass::Warm),
+            );
+            assert_eq!(warm.governance_tag.0, "da.test");
+            assert_eq!(warm.required_replicas, 4);
+            let prescribed = actual::DaReplicationPolicy::default();
+            for class in [
+                None,
+                Some(TaikaiAvailabilityClass::Hot),
+                Some(TaikaiAvailabilityClass::Cold),
+            ] {
+                assert_eq!(
+                    policy.retention_for(BlobClass::TaikaiSegment, class),
+                    prescribed.retention_for(BlobClass::TaikaiSegment, class)
+                );
+            }
+            for class in [
+                BlobClass::GovernanceArtifact,
+                BlobClass::NexusLaneSidecar,
+                BlobClass::Custom(42),
+            ] {
+                assert_eq!(
+                    policy.retention_for(class, None),
+                    prescribed.retention_for(class, None)
+                );
+            }
+        }
+
+        #[test]
+        fn empty_override_lists_keep_prescribed_replication_policies() {
+            let policy = read_policy("overrides = []\ntaikai_availability = []").unwrap();
+            let prescribed = actual::DaReplicationPolicy::default();
+            for (class, _) in crate::parameters::defaults::torii::da_replication_overrides() {
+                assert_eq!(
+                    policy.retention_for(class, None),
+                    prescribed.retention_for(class, None)
+                );
+            }
+            for (availability, _) in
+                crate::parameters::defaults::torii::taikai_availability_overrides()
+            {
+                assert_eq!(
+                    policy.retention_for(BlobClass::TaikaiSegment, Some(availability)),
+                    prescribed.retention_for(BlobClass::TaikaiSegment, Some(availability))
+                );
+            }
+        }
+
+        #[test]
+        fn config_reader_rejects_duplicate_or_invalid_explicit_replication_entries() {
+            let class = format!(r#"{{ class = "nexus_lane_sidecar", retention = {RETENTION} }}"#);
+            let availability =
+                format!(r#"{{ availability_class = "hot", retention = {RETENTION} }}"#);
+            for (input, diagnostic) in [
+                (format!("overrides = [{class}, {class}]"), "duplicate class"),
+                (
+                    format!("taikai_availability = [{availability}, {availability}]"),
+                    "duplicate availability_class",
+                ),
+                (
+                    format!(
+                        "overrides = [{}]",
+                        class.replace("nexus_lane_sidecar", "custom:042")
+                    ),
+                    "non-canonical custom blob class",
+                ),
+                (
+                    format!(
+                        "taikai_availability = [{}]",
+                        availability.replace("\"hot\"", "\"HOT\"")
+                    ),
+                    "unsupported value",
+                ),
+                (
+                    format!(
+                        "overrides = [{}]",
+                        class.replace("required_replicas = 4", "required_replicas = 0")
+                    ),
+                    "required_replicas",
+                ),
+                (
+                    format!(
+                        "overrides = [{}]",
+                        class.replace("required_replicas = 4, ", "")
+                    ),
+                    "required_replicas",
+                ),
+                (
+                    format!(
+                        "default_retention = {}",
+                        RETENTION.replace("governance_tag =", "unknown_key = 1, governance_tag =")
+                    ),
+                    "unknown_key",
+                ),
+                (
+                    "overrides = [{class = 'nexus_lane_sidecar'}]".to_owned(),
+                    "retention",
+                ),
+            ] {
+                let error =
+                    read_policy(&input).expect_err("invalid explicit DA replication policy");
+                assert!(
+                    error.contains(diagnostic),
+                    "expected {diagnostic:?} in {error}"
+                );
+            }
+        }
+    }
     fn four_validator_roster_table() -> Table {
         let mut table = base_table();
         let base_public_key = table
@@ -1562,7 +1725,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect_err("V1 configuration must reject KZG");
         let report = format!("{error:?}");
         assert!(
-            report.contains("V1 supports only `merkle_sha256`")
+            report.contains("V1 supports only `sorafs_por_blake3`")
                 && report.contains("separately reviewed future protocol version"),
             "{report}"
         );

@@ -73,9 +73,11 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
+Each policy section is optional. To change one blob class, supply its complete
+retention template in `overrides`. Unspecified blob classes and Taikai
+availability classes keep their built-in profiles. An empty override list
+leaves those profiles in effect. To change retention for classes without a
+prescribed or configured profile, set `default_retention`.
 
 To adjust specific Taikai availability classes, add entries under
 `torii.da_ingest.replication_policy.taikai_availability`:

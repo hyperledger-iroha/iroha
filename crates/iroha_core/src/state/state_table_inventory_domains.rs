@@ -775,6 +775,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:da:commitment-merkle:commitment:v1\0",
             r"iroha:da:commitment-merkle:internal:v1\0",
             r"iroha:da:commitment-merkle:leaf:v1\0",
+            r"iroha:da:commitment-record:v1\0",
             r"iroha:da:pin-intent-merkle:commitment:v1\0",
             r"iroha:da:pin-intent-merkle:internal:v1\0",
             r"iroha:da:pin-intent-merkle:leaf:v1\0",

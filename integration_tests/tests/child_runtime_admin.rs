@@ -162,7 +162,7 @@ fn builder() -> Result<NetworkBuilder> {
         ("ivm_gas_tech_account_id", norito::json!(owner.to_string())),
         (
             "ivm_gas_accepted_assets",
-            norito::json!([fee_asset.canonical_address()]),
+            norito::json::Value::Array(vec![fee_asset.canonical_address().into()]),
         ),
         (
             "ivm_gas_units_per_gas",

@@ -2387,6 +2387,13 @@ pub mod data_availability {
         .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
         .with_effect(RouteEffect::Mutation)
         .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Stage authenticated parts and complete the signed DA ingest.
+    pub const INGEST_PARTS: RouteDescriptor =
+        public_post("data_availability.ingest.parts", "/v1/da/ingest/parts")
+            .with_feature_gate(FeatureGate::Feature("app_api"))
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Read the manifest addressed by a storage ticket.
     pub const MANIFEST: RouteDescriptor = public_get(
         "data_availability.manifest.read",
@@ -2439,6 +2446,7 @@ pub mod data_availability {
     /// Complete data-availability route family.
     pub const ROUTES: &[RouteDescriptor] = &[
         INGEST,
+        INGEST_PARTS,
         MANIFEST,
         PROOF_POLICIES,
         COMMITMENTS,

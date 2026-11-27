@@ -282,7 +282,7 @@ pub fn assemble_with_merges(
     transactions: &[AcceptedTransaction<'static>],
     merges: &MergeProposal,
 ) -> Result<SignedBlock, PayloadError> {
-    assemble_with_parent_service(state, assembly, transactions, merges, None)
+    assemble_with_parent_service(state, assembly, transactions, merges, None, true)
 }
 
 /// Same assembly kernel borrowing the original worker's already funded native source.
@@ -292,6 +292,7 @@ pub(crate) fn assemble_with_parent_service(
     transactions: &[AcceptedTransaction<'static>],
     merges: &MergeProposal,
     parent_service: Option<&super::certified_chain::ParentServicePreparation>,
+    include_da: bool,
 ) -> Result<SignedBlock, PayloadError> {
     if transactions.is_empty() && merges.merges.is_empty() {
         return Err(PayloadError::EmptyBlock);
@@ -313,7 +314,15 @@ pub(crate) fn assemble_with_parent_service(
         minimum.max(Duration::from_millis(merges.time_floor_ms))
     };
     let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
-        build_at(state, assembly, transactions, merges, time, parent_service)
+        build_at(
+            state,
+            assembly,
+            transactions,
+            merges,
+            time,
+            parent_service,
+            include_da,
+        )
     };
     let first = build(minimum.max(proposed))?;
     let required = ValidBlock::sumeragi_block_time_floor(&first, parent_time, assembly.cadence)
@@ -559,6 +568,7 @@ fn build_at(
     merges: &MergeProposal,
     time: Duration,
     parent_service: Option<&super::certified_chain::ParentServicePreparation>,
+    include_da: bool,
 ) -> Result<SignedBlock, PayloadError> {
     #[cfg(test)]
     work_tests::record_build_at();
@@ -595,6 +605,18 @@ fn build_at(
             ))
         })
         .collect::<Result<Vec<_>, PayloadError>>()?;
+    let da = if include_da {
+        let lanes = contexts
+            .iter()
+            .map(|context| context.lane_id)
+            .chain(merges.merges.iter().map(|merge| merge.lane));
+        crate::da::proposal_queue::select(state, &view, height, lanes).unwrap_or_else(|error| {
+            iroha_logger::warn!(height, %error, "failed to read local DA proposal queue");
+            None
+        })
+    } else {
+        None
+    };
     drop(view);
     let mut execution_context = BlockExecutionContextBundle::new(contexts);
     if !merges.merges.is_empty() {
@@ -604,8 +626,14 @@ fn build_at(
             merged_count: 0,
         });
     }
+    let (da_commitments, da_pins) = match da {
+        Some((records, pins)) => (Some(records), Some(pins)),
+        None => (None, None),
+    };
     let builder = BlockBuilder::new_with_time_source(accepted, time_source)
         .chain(assembly.view, Some(assembly.parent))
+        .with_da_commitments(da_commitments)
+        .with_da_pin_intents(da_pins)
         .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
             &nexus, height,
         )))

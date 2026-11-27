@@ -180,6 +180,13 @@ impl State {
         }
     }
 
+    /// Optional proposal work never drives a history rebuild while its caller retains State.
+    pub(crate) fn da_indexes_ready_for_proposal(&self) -> bool {
+        self.da_indexes_hydrated
+            .try_read()
+            .is_some_and(|ready| matches!(ready.as_ref(), Some(Ok(()))))
+    }
+
     pub(crate) fn ensure_da_indexes_hydrated(&self) -> Result<(), DaIndexHydrationError> {
         self.ensure_da_indexes_hydrated_with_journal_publication(true)
     }

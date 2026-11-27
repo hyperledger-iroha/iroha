@@ -273,6 +273,7 @@ const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 const NETWORK_MESSAGE_SUMERAGI_TAG: u32 = 18;
+const NETWORK_MESSAGE_DA_PROPOSAL_TAG: u32 = 20;
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn inbound_enum_parts(payload: &[u8]) -> Result<(u32, &[u8]), norito::core::Error> {
     let tag: [u8; core::mem::size_of::<u32>()] = payload
@@ -391,6 +392,9 @@ pub enum NetworkMessage {
     /// instance id. Only the consensus driver decodes it (`sumeragi::net`).
     #[codec(index = 18)]
     Sumeragi(Arc<sumeragi::net::SumeragiFrame>),
+    /// Canonical frame of one producer-authorized DA candidate, relayed only to route validators.
+    #[codec(index = 20)]
+    DaProposal(Arc<Vec<u8>>),
 }
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl NetworkMessage {
@@ -419,6 +423,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 gossiper::GossipPlane::Public => T::TxGossip,
                 gossiper::GossipPlane::Restricted => T::TxGossipRestricted,
             },
+            NetworkMessage::DaProposal(_) => T::TxGossipRestricted,
             NetworkMessage::PeersGossiper(_) => T::PeerGossip,
             NetworkMessage::PeerTrustGossip(_) => T::TrustGossip,
             NetworkMessage::Health | NetworkMessage::TimePing(_) | NetworkMessage::TimePong(_) => {
@@ -451,7 +456,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     ) -> Result<Option<iroha_p2p::network::message::Topic>, norito::core::Error> {
         use iroha_p2p::network::message::Topic;
         let (tag, remaining) = inbound_enum_parts(payload)?;
-        if !matches!(tag, 6..=15 | NETWORK_MESSAGE_SUMERAGI_TAG) {
+        if !matches!(
+            tag,
+            6..=15 | NETWORK_MESSAGE_SUMERAGI_TAG | NETWORK_MESSAGE_DA_PROPOSAL_TAG
+        ) {
             return Err(norito::core::Error::Message(
                 "unknown core network-message discriminant".to_owned(),
             ));
@@ -462,13 +470,17 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             }
             return Ok(Some(Topic::Health));
         }
-        let field = if matches!(tag, 6 | NETWORK_MESSAGE_SUMERAGI_TAG) {
+        let field = if matches!(
+            tag,
+            6 | NETWORK_MESSAGE_SUMERAGI_TAG | NETWORK_MESSAGE_DA_PROPOSAL_TAG
+        ) {
             inbound_owned_enum_field(remaining, flags)?
         } else {
             inbound_enum_field(remaining, flags)?
         };
         let topic = match tag {
             6 => inbound_transaction_gossip_topic(field, flags)?,
+            NETWORK_MESSAGE_DA_PROPOSAL_TAG => Topic::TxGossipRestricted,
             7 => Topic::PeerGossip,
             8 => Topic::TrustGossip,
             10..=11 => Topic::Health,
@@ -497,6 +509,22 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             0..=5 | 16..=17 => Err(norito::core::Error::Message(
                 "unknown core network-message discriminant".to_owned(),
             )),
+            NETWORK_MESSAGE_DA_PROPOSAL_TAG => {
+                let limit = da::proposal_queue::MAX_RELAY_FRAME;
+                if framed_len > limit {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: limit as u64,
+                    });
+                }
+                Ok(Some(norito::DecodeLimits::new(
+                    limit,
+                    limit,
+                    limit,
+                    2 * limit,
+                    8,
+                )))
+            }
             NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG => {
                 use torii_proxy::{
                     TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
@@ -552,6 +580,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         match self {
             // Never send a frame the receivers could not classify.
             Self::Sumeragi(frame) => frame.class().is_some(),
+            Self::DaProposal(bytes) => {
+                !bytes.is_empty() && bytes.len() <= da::proposal_queue::MAX_RELAY_BYTES
+            }
             _ => true,
         }
     }
@@ -922,6 +953,12 @@ mod tests {
                 12,
                 NetworkTopic::Connect,
                 SubscriberRoute::Connect,
+            ),
+            (
+                NetworkMessage::DaProposal(Arc::new(vec![1, 2, 3])),
+                NETWORK_MESSAGE_DA_PROPOSAL_TAG,
+                NetworkTopic::TxGossipRestricted,
+                SubscriberRoute::General,
             ),
             (
                 NetworkMessage::StreamingControl(Box::new(norito::streaming::ControlFrame::Error(

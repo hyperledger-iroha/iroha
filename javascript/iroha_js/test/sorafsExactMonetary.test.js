@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ToriiClient } from "../src/toriiClient.js";
+import { computeDaIngestSigningDigest } from "../src/dataAvailability.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
+import { publicKeyFromPrivate } from "../src/crypto.js";
 import { AccountAddress } from "../src/address.js";
 import { NetworkId } from "../src/networkId.js";
 import {
@@ -13,11 +15,7 @@ import { makeNativeTest } from "./helpers/native.js";
 const BASE_URL = "https://localhost:8080";
 const PRIVATE_KEY = Buffer.alloc(32, 0xb7);
 const DA_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-const DA_SIGNER =
-  "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-const DA_OWNER = AccountAddress.fromAccount({
-  publicKey: Buffer.from(DA_SIGNER.slice(6), "hex"),
-}).toI105();
+const DA_OWNER = AccountAddress.fromAccount({ publicKey: publicKeyFromPrivate(PRIVATE_KEY) }).toI105(753);
 const OWNER_ACCOUNT = Buffer.from("merchant@paynet", "utf8");
 const SIGNED_512_MAX = (1n << 511n) - 1n;
 const SIGNED_512_OVERFLOW = (1n << 511n).toString();
@@ -61,23 +59,36 @@ function daReceiptFixture(rentQuote) {
       shards_per_stripe: 14,
       row_parity_stripes: 0,
     },
+    retention_policy: {
+      hot_retention_secs: 3600,
+      cold_retention_secs: 172800,
+      required_replicas: 3,
+      storage_class: { type: "Hot", value: null },
+      governance_tag: ["da.sidecar"],
+    },
     queued_at_unix: 1234,
-    operator_signature: "aa".repeat(64),
+    operator_signature: "AA".repeat(64),
     rent_quote: rentQuote,
   };
 }
 
 async function submitDaFixture(rentQuote) {
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      jsonResponse(
-        {
-          status: "accepted",
-          duplicate: false,
-          receipt: daReceiptFixture(rentQuote),
-        },
-        202,
-      ),
+    localSigningContext: new LocalSigningContext(DA_NETWORK_ID, 753),
+    canonicalRequestAuth: { accountId: DA_OWNER, privateKey: PRIVATE_KEY },
+    fetchImpl: async (_url, init) => {
+      const signed = JSON.parse(init.body);
+      const receipt = {
+        ...daReceiptFixture(rentQuote), client_blob_id: signed.client_blob_id,
+        blob_hash: signed.payload_hash, lane_id: signed.lane_id, epoch: signed.epoch,
+      };
+      const pin_scope = {
+        network_id: signed.network_id, owner: signed.owner, lane_id: signed.lane_id, epoch: signed.epoch, sequence: signed.sequence,
+        request_authorization_digest: [Array.from(computeDaIngestSigningDigest(signed))], storage_ticket: receipt.storage_ticket,
+        manifest_hash: receipt.manifest_hash, commitment_digest: [Array(32).fill(77)], alias: null,
+      };
+      return jsonResponse({ status: "pending_pin_authorization", duplicate: false, receipt, pin_scope }, 202);
+    },
   });
   return client.submitDaBlob({
     networkId: DA_NETWORK_ID,
@@ -87,8 +98,7 @@ async function submitDaFixture(rentQuote) {
     laneId: 11,
     epoch: 22,
     sequence: 33,
-    signerPublicKey: DA_SIGNER,
-    signatureHex: "aa".repeat(64),
+    privateKey: PRIVATE_KEY,
     clientBlobId: Buffer.alloc(32, 0x11),
   });
 }

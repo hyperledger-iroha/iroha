@@ -4338,6 +4338,10 @@
      "class": "label-only",
      "note": "A comment on the candidate ordering score."
     },
+    "blake3": {
+     "class": "evidence-metadata",
+     "note": "DA proof scheme tags identify the SoraFS BLAKE3 proof-of-retrievability root carried by a commitment."
+    },
     "digest384": {
      "class": "test-or-tooling",
      "note": "Only a frame-identity test names the six-lane digest type."
@@ -4361,7 +4365,7 @@
     },
     "sha2-256": {
      "class": "evidence-metadata",
-     "note": "Data-availability proof scheme names and fixture digests in tests."
+     "note": "SHA-256 fixture digests in tests."
     }
    }
   },
@@ -4957,8 +4961,8 @@
    "crates/iroha_core/src/bin/privacy_exact12_action_driver.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core/src/block/axt_anchored_spend_admission_tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/block/soracloud_validation_tests.rs": ["iroha-hash"],
-   "crates/iroha_core/src/da/confidential.rs": ["iroha-hash", "sha2-256"],
-   "crates/iroha_core/src/da/confidential_store.rs": ["iroha-hash", "sha2-256"],
+   "crates/iroha_core/src/da/confidential.rs": ["blake3"],
+   "crates/iroha_core/src/da/confidential_store.rs": ["blake3"],
    "crates/iroha_core/src/exec_witness.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core/src/exec_witness/checked_tests.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core/src/exec_witness/generation_tests.rs": ["iroha-hash", "poseidon"],
@@ -5149,9 +5153,9 @@
    "crates/iroha_core/src/state/privacy_transaction_intent.rs": ["iroha-hash"],
    "crates/iroha_core/src/state/state_table_inventory_domains.rs": ["blake3", "hkdf", "lthash", "pedersen", "poseidon", "sha2-256", "sha3"],
    "crates/iroha_core/src/state/state_table_inventory_tests.rs": ["blake2b", "blake3", "digest384", "iroha-hash", "lthash", "pedersen", "poseidon", "sha2-256"],
-   "crates/iroha_core/src/state/tests.rs": ["hkdf", "iroha-hash", "pedersen", "poseidon", "sha2-256", "sha3"],
+   "crates/iroha_core/src/state/tests.rs": ["blake3", "hkdf", "iroha-hash", "pedersen", "poseidon", "sha2-256", "sha3"],
    "crates/iroha_core/src/state/tiered.rs": ["blake3", "iroha-hash", "lthash", "pedersen", "poseidon", "sha2-256"],
-   "crates/iroha_core/src/state/transfer_transcript_tests.rs": ["iroha-hash", "poseidon", "sha2-256"],
+   "crates/iroha_core/src/state/transfer_transcript_tests.rs": ["blake3", "iroha-hash", "poseidon"],
    "crates/iroha_core/src/state/zk_asset_state_tests.rs": ["poseidon"],
    "crates/iroha_core/src/sumeragi/block_store/replay_output_tests.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core/src/zk_validity_policy.rs": ["pedersen", "poseidon"],
@@ -5708,7 +5712,7 @@
    "crates/iroha_data_model/src/block/header.rs": ["iroha-hash", "pedersen", "poseidon"],
    "crates/iroha_data_model/src/block/header/inline_child.rs": ["pedersen", "poseidon"],
    "crates/iroha_data_model/src/block/header/inline_child/tests.rs": ["iroha-hash", "pedersen", "poseidon"],
-   "crates/iroha_data_model/src/block/tests.rs": ["iroha-hash", "pedersen", "poseidon", "sha2-256"],
+   "crates/iroha_data_model/src/block/tests.rs": ["blake3", "iroha-hash", "pedersen", "poseidon"],
    "crates/iroha_data_model/src/concrete_identity_tests.rs": ["iroha-hash", "pedersen", "poseidon", "sha2-256"],
    "crates/iroha_data_model/src/confidential.rs": ["pedersen", "poseidon"],
    "crates/iroha_data_model/src/confidential/spentness.rs": ["digest384", "iroha-hash", "poseidon"],
@@ -6698,7 +6702,7 @@
    "crates/iroha_sumeragi#other": ["sha2-256"],
    "crates/iroha_swarm#other": ["blake3", "iroha-hash"],
    "crates/iroha_telemetry#other": ["blake3"],
-   "crates/iroha_test_network#other": ["iroha-hash", "sha2-256"],
+   "crates/iroha_test_network#other": ["blake3", "iroha-hash", "sha2-256"],
    "crates/iroha_test_samples#other": ["iroha-hash"],
    "crates/iroha_torii#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "lthash", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3", "sm3"],
    "crates/iroha_torii_shared#other": ["argon2", "blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "sha2-256", "sha3"],

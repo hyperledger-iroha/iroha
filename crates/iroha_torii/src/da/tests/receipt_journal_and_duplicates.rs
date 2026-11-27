@@ -19,13 +19,15 @@ pub(super) fn test_receipt(
         manifest_hash: BlobDigest::new([seed.wrapping_add(3); 32]),
         storage_ticket: StorageTicketId::new([seed; 32]),
         pdp_commitment: Some(vec![seed]),
+        retention_policy: Default::default(),
         stripe_layout: DaStripeLayout::default(),
         queued_at_unix: 1234,
         rent_quote: DaRentQuote::default(),
-        operator_signature: persistence::receipt_signature_placeholder(),
+        operator_signature: DaIngestReceipt::signature_placeholder(),
     };
-    let unsigned =
-        persistence::unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
+    let unsigned = receipt
+        .operator_signing_bytes(sequence)
+        .expect("test receipt encodes");
     receipt.operator_signature = checked_signature(signer.private_key(), &unsigned);
     receipt
 }
@@ -350,7 +352,9 @@ fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAF);
     let mut conflicting = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB0);
     conflicting.manifest_hash = receipt.manifest_hash;
-    let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 7).expect("unsigned bytes");
+    let unsigned = conflicting
+        .operator_signing_bytes(7)
+        .expect("unsigned bytes");
     conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
     for receipt in [&receipt, &conflicting] {
         let bytes = encoded_stored_receipt(receipt, 7, StoredDaReceipt::VERSION);
@@ -494,8 +498,9 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     );
     let mut receipt_conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 0xD1);
     receipt_conflict.manifest_hash = receipt.manifest_hash;
-    let unsigned =
-        persistence::unsigned_receipt_bytes(&receipt_conflict, 0).expect("unsigned bytes");
+    let unsigned = receipt_conflict
+        .operator_signing_bytes(0)
+        .expect("unsigned bytes");
     receipt_conflict.operator_signature = checked_signature(signer.private_key(), &unsigned);
     assert!(matches!(
         log.append(lane_epoch, 0, &receipt_conflict, test_fingerprint(0xD1))
@@ -672,9 +677,27 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
     drop(initial_reservation);
     fs::remove_file(&journal_path).expect("remove replacement cursor journal");
     fs::rename(&displaced_journal_path, &journal_path).expect("restore open cursor journal");
+    assert!(
+        log.duplicate_receipt_path(lane_epoch, 0, fingerprint)
+            .unwrap()
+            .is_some()
+    );
+    let (_, inspected) = log
+        .inspect_duplicate_receipt(lane_epoch, 0, fingerprint, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(inspected, receipt);
+    let mut substituted = inspected.clone();
+    substituted.blob_hash = BlobDigest::new([0x5D; 32]);
+    assert!(
+        log.adopt_duplicate_receipt(lane_epoch, 0, fingerprint, Some(&substituted))
+            .is_err()
+    );
+    assert!(log.indexed_sequence_for(lane_epoch).is_none());
+    assert_replay_cursor_sequences(&cursor_store, &[]);
     let (_, recovered) = log
-        .receipt_for_duplicate(lane_epoch, 0, fingerprint)
-        .expect("duplicate handler probe repairs receipt state")
+        .adopt_duplicate_receipt(lane_epoch, 0, fingerprint, Some(&inspected))
+        .expect("serialized verified duplicate adoption repairs receipt state")
         .expect("durable receipt remains present");
     assert_eq!(recovered, receipt);
     assert_eq!(
@@ -888,6 +911,20 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         retry_manifest.manifest_hash, manifest.manifest_hash,
         "retry timestamp should change the timestamped manifest hash"
     );
+    crate::da::source::retain(
+        spool_dir,
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &manifest.manifest,
+        manifest.manifest_hash.as_bytes(),
+        (
+            1_701_000_999,
+            0,
+            iroha_config::parameters::defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES.get(),
+        ),
+    )
+    .expect("retain duplicate fixture source");
     persistence::persist_manifest_for_sorafs(
         spool_dir,
         &manifest.encoded,
@@ -899,37 +936,10 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     )
     .expect("persist manifest")
     .expect("manifest path");
-    let durable_scope =
-        build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
-            .expect("build durable pin scope");
-    persistence::persist_da_pin_scope(
-        spool_dir,
-        &durable_scope,
-        request.lane_id,
-        request.epoch,
-        request.sequence,
-        &manifest.storage_ticket,
-        &manifest.fingerprint,
-    )
-    .expect("persist pin scope")
-    .expect("pin-scope path");
-    let durable_pin_intent = signed_pin_intent_for_manifest(&request, &manifest);
-    persistence::persist_da_pin_intent(
-        spool_dir,
-        &durable_pin_intent,
-        request.lane_id,
-        request.epoch,
-        request.sequence,
-        &manifest.storage_ticket,
-        &manifest.fingerprint,
-    )
-    .expect("persist pin intent")
-    .expect("pin intent path");
     let pdp_commitment = compute_pdp_commitment(
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
-        canonical.as_slice(),
         1_701_000_999,
     )
     .expect("PDP commitment");
@@ -958,8 +968,48 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         pdp_bytes.clone(),
         manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
+    let durable_scope = build_da_pin_scope(
+        &request,
+        manifest.storage_ticket,
+        manifest.manifest_hash,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    )
+    .expect("build durable pin scope");
+    persistence::persist_da_pin_scope(
+        spool_dir,
+        &durable_scope,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist pin scope")
+    .expect("pin-scope path");
+    let durable_pin_intent = signed_pin_intent_for_manifest(
+        &request,
+        &manifest,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    );
+    persistence::persist_da_pin_intent(
+        spool_dir,
+        &durable_pin_intent,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist pin intent")
+    .expect("pin intent path");
+
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let log = open_receipt_log(spool_dir, &cursor_store, &signer).expect("open receipt log");
     assert!(matches!(
@@ -967,6 +1017,34 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
             .expect("append receipt"),
         ReceiptInsertOutcome::Stored { .. }
     ));
+    // A valid durable operator receipt, signed scope, and completion marker cannot authorize
+    // publication when even one parity file has stopped matching the committed inventory.
+    let parity = manifest
+        .manifest
+        .chunks
+        .iter()
+        .find(|chunk| chunk.parity)
+        .unwrap();
+    let path = persistence::ticket_artifact_dir(spool_dir, &manifest.storage_ticket)
+        .join("source")
+        .join(format!("chunk_{:05}.bin", parity.index));
+    let original = fs::read(&path).unwrap();
+    let mut changed = original.clone();
+    changed[0] ^= 1;
+    fs::write(&path, &changed).unwrap();
+    assert!(
+        load_duplicate_da_artifacts(
+            &log,
+            spool_dir,
+            lane_epoch,
+            request.sequence,
+            &retry_manifest.storage_ticket,
+            retry_manifest.fingerprint,
+            &request
+        )
+        .is_err()
+    );
+    fs::write(&path, original).unwrap();
     let duplicate = load_duplicate_da_artifacts(
         &log,
         spool_dir,
@@ -1012,8 +1090,6 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
     let context = zero_sequence_manifest_context_for(BlobClass::TaikaiSegment);
     let mut request = context.request;
     let manifest = context.artifacts;
-    let scope = build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
-        .expect("build exact pin scope");
     let operator = checked_fixture_ed25519_keypair(0x69);
     let receipt = build_receipt(
         &operator,
@@ -1026,8 +1102,19 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
         Vec::new(),
         manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build pending receipt fixture");
+    let scope = build_da_pin_scope(
+        &request,
+        manifest.storage_ticket,
+        manifest.manifest_hash,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    )
+    .expect("build exact pin scope");
+
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     // Readiness requires the envelope to have been staged by the earlier ingest phase.
     taikai_ingest::persist_envelope(
@@ -1041,13 +1128,39 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
     )
     .expect("stage envelope fixture")
     .expect("envelope path");
-    let artifacts = DuplicateDaArtifacts {
+    let canonical = normalize_payload(&request).unwrap();
+    let store = build_chunk_store(&request, canonical.as_slice());
+    crate::da::source::retain(
+        temp_dir.path(),
+        &request,
+        &store,
+        canonical.as_slice(),
+        &manifest.manifest,
+        manifest.manifest_hash.as_bytes(),
+        (
+            receipt.queued_at_unix,
+            0,
+            iroha_config::parameters::defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES.get(),
+        ),
+    )
+    .unwrap();
+    let sequence = request.sequence;
+    let verified_artifacts = || DuplicateDaArtifacts {
+        source: crate::da::source::verify_completion(
+            temp_dir.path(),
+            &manifest.manifest,
+            manifest.manifest_hash.as_bytes(),
+            receipt.queued_at_unix,
+        )
+        .unwrap(),
+        commitment: receipt.commitment_record(sequence, DaProofScheme::SorafsPorBlake3),
         receipt_path: temp_dir.path().join("receipt.norito"),
-        receipt,
+        receipt: receipt.clone(),
         pdp_commitment_bytes: Vec::new(),
         pin_scope: scope.clone(),
         pin_intent: None,
     };
+    let artifacts = verified_artifacts();
 
     let (pending, finalized) = finalize_duplicate_da_pin_intent(
         temp_dir.path(),
@@ -1067,6 +1180,37 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
             &checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519),
         )
         .expect("authorize exact durable pin scope");
+    let directory =
+        persistence::ticket_artifact_dir(temp_dir.path(), &manifest.storage_ticket).join("source");
+    let file = directory.join("chunk_00000.bin");
+    let held = temp_dir.path().join("withheld-source-chunk");
+    fs::rename(&file, &held).unwrap();
+    assert!(
+        finalize_duplicate_da_pin_intent(
+            temp_dir.path(),
+            &request,
+            lane_epoch,
+            manifest.fingerprint,
+            pending
+        )
+        .is_err()
+    );
+    assert!(!taikai_ready_path(temp_dir.path(), &request, &manifest).exists());
+    assert_eq!(
+        persistence::load_da_pin_intent(
+            temp_dir.path(),
+            request.lane_id,
+            request.epoch,
+            sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint
+        )
+        .unwrap_err()
+        .kind(),
+        ErrorKind::NotFound
+    );
+    fs::rename(held, file).unwrap();
+    let pending = verified_artifacts();
     let (finalized_artifacts, finalized) = finalize_duplicate_da_pin_intent(
         temp_dir.path(),
         &request,
@@ -1094,8 +1238,13 @@ fn submitted_pin_scope_witness_cannot_authorize_a_different_durable_scope() {
     let context = zero_sequence_manifest_context_for(BlobClass::NexusLaneSidecar);
     let request = context.request;
     let manifest = context.artifacts;
-    let exact_scope = build_da_pin_scope(&request, manifest.storage_ticket, manifest.manifest_hash)
-        .expect("build exact durable pin scope");
+    let exact_scope = build_da_pin_scope(
+        &request,
+        manifest.storage_ticket,
+        manifest.manifest_hash,
+        BlobDigest::new([0x32; 32]),
+    )
+    .expect("build exact durable pin scope");
     let signer = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
 
     for forged_scope in [
@@ -1129,6 +1278,20 @@ fn persist_completed_duplicate_fixture(
 ) -> DaReceiptLog {
     let canonical = normalize_payload(request).expect("normalize duplicate fixture payload");
     let chunk_store = build_chunk_store(request, canonical.as_slice());
+    crate::da::source::retain(
+        spool_dir,
+        request,
+        &chunk_store,
+        canonical.as_slice(),
+        &manifest.manifest,
+        manifest.manifest_hash.as_bytes(),
+        (
+            manifest.manifest.issued_at_unix.max(1),
+            0,
+            iroha_config::parameters::defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES.get(),
+        ),
+    )
+    .expect("retain duplicate fixture source");
     persistence::persist_manifest_for_sorafs(
         spool_dir,
         &manifest.encoded,
@@ -1140,37 +1303,11 @@ fn persist_completed_duplicate_fixture(
     )
     .expect("persist duplicate fixture manifest")
     .expect("duplicate fixture manifest path");
-    let pin_scope = build_da_pin_scope(request, manifest.storage_ticket, manifest.manifest_hash)
-        .expect("build duplicate fixture pin scope");
-    persistence::persist_da_pin_scope(
-        spool_dir,
-        &pin_scope,
-        request.lane_id,
-        request.epoch,
-        request.sequence,
-        &manifest.storage_ticket,
-        &manifest.fingerprint,
-    )
-    .expect("persist duplicate fixture pin scope")
-    .expect("duplicate fixture pin-scope path");
-    let pin_intent = signed_pin_intent_for_manifest(request, manifest);
-    persistence::persist_da_pin_intent(
-        spool_dir,
-        &pin_intent,
-        request.lane_id,
-        request.epoch,
-        request.sequence,
-        &manifest.storage_ticket,
-        &manifest.fingerprint,
-    )
-    .expect("persist duplicate fixture pin intent")
-    .expect("duplicate fixture pin-intent path");
     let sealed_at_unix = manifest.manifest.issued_at_unix.max(1);
     let pdp_commitment = compute_pdp_commitment(
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
-        canonical.as_slice(),
         sealed_at_unix,
     )
     .expect("compute duplicate fixture PDP commitment");
@@ -1199,8 +1336,48 @@ fn persist_completed_duplicate_fixture(
         pdp_bytes,
         manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build duplicate fixture receipt");
+    let pin_scope = build_da_pin_scope(
+        request,
+        manifest.storage_ticket,
+        manifest.manifest_hash,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    )
+    .expect("build duplicate fixture pin scope");
+    persistence::persist_da_pin_scope(
+        spool_dir,
+        &pin_scope,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist duplicate fixture pin scope")
+    .expect("duplicate fixture pin-scope path");
+    let pin_intent = signed_pin_intent_for_manifest(
+        request,
+        manifest,
+        receipt
+            .commitment_record(request.sequence, DaProofScheme::SorafsPorBlake3)
+            .pin_scope_digest(),
+    );
+    persistence::persist_da_pin_intent(
+        spool_dir,
+        &pin_intent,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist duplicate fixture pin intent")
+    .expect("duplicate fixture pin-intent path");
+
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let log = open_receipt_log(spool_dir, &cursor_store, &signer)
@@ -1442,7 +1619,6 @@ fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open(
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
-        canonical.as_slice(),
         1_701_000_999,
     )
     .expect("PDP commitment");
@@ -1459,6 +1635,7 @@ fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open(
         pdp_bytes,
         manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
+        manifest.manifest.retention_policy.clone(),
     )
     .expect("build receipt");
     let correct_fingerprint = *manifest.fingerprint.as_bytes();
@@ -1508,7 +1685,7 @@ fn da_receipt_log_rejects_invalid_signature() {
     let signer = checked_random_keypair();
     let log = open_receipt_log(temp_dir.path(), &cursor_store, &signer).expect("open log");
     let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 4);
-    let unsigned = persistence::unsigned_receipt_bytes(&receipt, 1).expect("unsigned bytes");
+    let unsigned = receipt.operator_signing_bytes(1).expect("unsigned bytes");
     let wrong_signer = checked_random_keypair();
     receipt.operator_signature = checked_signature(wrong_signer.private_key(), &unsigned);
     let outcome = log.append(lane_epoch, 1, &receipt, test_fingerprint(4));
@@ -1640,7 +1817,9 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x91);
     let mut conflicting = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x92);
     conflicting.manifest_hash = receipt.manifest_hash;
-    let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 1).expect("unsigned bytes");
+    let unsigned = conflicting
+        .operator_signing_bytes(1)
+        .expect("unsigned bytes");
     conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
     for receipt in [&receipt, &conflicting] {
         let bytes = encoded_stored_receipt(receipt, 1, StoredDaReceipt::VERSION);

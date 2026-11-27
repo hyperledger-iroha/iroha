@@ -21,6 +21,8 @@
 //!         .all(|c| c.length >= ChunkProfile::DEFAULT.min_size)
 //! );
 //! ```
+pub mod por;
+
 use sha3::{Digest, Sha3_256};
 use std::{error::Error, fmt, sync::OnceLock};
 /// Rolling hash mask controlling the probability of a boundary for the default profile.

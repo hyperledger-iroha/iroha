@@ -534,3 +534,12 @@ Shekel asset `DIGITAL_SHEKEL_ASSET_*`, matching Swift and C#.
 This records source retirement. The remaining Java Gradle failures predate it
 and are tracked with their own owners; physical NFC/Nearby qualification is
 separate.
+
+
+### Data availability proofs
+
+Kotlin `core-jvm` owns DA policy, commitment and pin-intent proof operations.
+The Java Android duplicate and its harness entry are retired. The Kotlin
+`DaToriiClientTest` and Java-source `DaToriiClientJavaConsumerTest` exercise the
+shared proof model, cursor and error handling, transport bounds and the signed
+pin-intent fixture.

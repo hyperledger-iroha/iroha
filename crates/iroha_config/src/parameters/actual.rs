@@ -7953,6 +7953,8 @@ pub struct DaIngest {
     pub replay_cache_store_dir: PathBuf,
     /// Directory where canonical DA manifests are queued for `SoraFS` orchestration.
     pub manifest_store_dir: PathBuf,
+    /// Hard per-spool DA source reservation limit, including retained shards and write headroom.
+    pub source_storage_budget_bytes: NonZeroU64,
     /// Maximum number of concurrent CPU-intensive DA ingest jobs.
     pub max_concurrent_compute_jobs: NonZeroUsize,
     /// Maximum number of DA spool batches queued for async disk persistence.
@@ -7988,6 +7990,10 @@ impl fmt::Debug for DaIngest {
             )
             .field("replay_cache_store_dir", &self.replay_cache_store_dir)
             .field("manifest_store_dir", &self.manifest_store_dir)
+            .field(
+                "source_storage_budget_bytes",
+                &self.source_storage_budget_bytes,
+            )
             .field(
                 "max_concurrent_compute_jobs",
                 &self.max_concurrent_compute_jobs,
@@ -8046,6 +8052,7 @@ impl_default!(DaIngest => {
             replay_cache_max_sequence_lag: super::defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: super::defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: super::defaults::torii::da_manifest_store_dir(),
+            source_storage_budget_bytes: super::defaults::torii::DA_SOURCE_STORAGE_BUDGET_BYTES,
             max_concurrent_compute_jobs: super::defaults::torii::DA_MAX_CONCURRENT_COMPUTE_JOBS,
             spool_queue_capacity: super::defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
             spool_batch_max: super::defaults::torii::DA_SPOOL_BATCH_MAX,

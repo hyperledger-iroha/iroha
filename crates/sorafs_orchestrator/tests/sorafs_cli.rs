@@ -171,6 +171,20 @@ fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
 }
+fn absent_then_refused_preparation(server: &MockServer) -> httpmock::Mock<'_> {
+    let first = std::sync::atomic::AtomicBool::new(true);
+    server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.respond_with(move |_: &httpmock::HttpMockRequest| {
+            let absent = first.swap(false, std::sync::atomic::Ordering::SeqCst);
+            httpmock::HttpMockResponse::builder()
+                .status(if absent { 404 } else { 409 })
+                .body("fixture has no finalized publication")
+                .build()
+        });
+    })
+}
+
 fn publication_fee_quote(server: &MockServer) -> httpmock::Mock<'_> {
     server.mock(|when, then| {
         when.method(POST)
@@ -1507,11 +1521,7 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
     let fee_quote = publication_fee_quote(&primary);
-    let preparation = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/publish/prepare");
-        then.status(409)
-            .body("fixture has no finalized publication");
-    });
+    let preparation = absent_then_refused_preparation(&primary);
     let (client_config, private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
     let status = primary.mock(|when, then| {
@@ -1640,7 +1650,7 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .and_then(Value::as_bool),
         Some(true)
     );
-    preparation.assert_calls(1);
+    preparation.assert_calls(2);
     fee_quote.assert_calls(1);
 }
 #[test]
@@ -1651,11 +1661,7 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
     let fee_quote = publication_fee_quote(&primary);
-    let preparation = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/publish/prepare");
-        then.status(409)
-            .body("fixture has no finalized publication");
-    });
+    let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_profile_deploy_client_config(tempdir.path(), &primary.base_url());
     let register = primary.mock(|when, then| {
@@ -1695,7 +1701,7 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
-    preparation.assert_calls(1);
+    preparation.assert_calls(2);
     fee_quote.assert_calls(1);
 }
 #[test]
@@ -1706,11 +1712,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
     let fee_quote = publication_fee_quote(&primary);
-    let preparation = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/publish/prepare");
-        then.status(409)
-            .body("fixture has no finalized publication");
-    });
+    let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
     let status = primary.mock(|when, then| {
@@ -1767,7 +1769,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .is_some()
     );
     // Publication uses the primary Torii after peer discovery refuses.
-    preparation.assert_calls(1);
+    preparation.assert_calls(2);
     fee_quote.assert_calls(1);
 }
 #[test]
@@ -1778,11 +1780,7 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
     let fee_quote = publication_fee_quote(&primary);
-    let preparation = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/publish/prepare");
-        then.status(409)
-            .body("fixture has no finalized publication");
-    });
+    let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
     let register = primary.mock(|when, then| {
@@ -1857,7 +1855,7 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
             .is_some_and(|error| error.contains("generic transaction fallback is not supported"))
     );
     // A refused registration is never followed by a publication attempt.
-    preparation.assert_calls(0);
+    preparation.assert_calls(1);
     fee_quote.assert_calls(1);
 }
 #[test]
@@ -1867,11 +1865,7 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     fs::write(&payload_path, b"abc").expect("write payload");
     let primary = MockServer::start();
     let fee_quote = publication_fee_quote(&primary);
-    let preparation = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/publish/prepare");
-        then.status(409)
-            .body("fixture has no finalized publication");
-    });
+    let preparation = absent_then_refused_preparation(&primary);
     let (client_config, _private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
     primary.mock(|when, then| {
@@ -1919,7 +1913,7 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         .expect("gateway check");
     assert_eq!(check.get("length_ok").and_then(Value::as_bool), Some(true));
     assert_eq!(check.get("hash_ok").and_then(Value::as_bool), Some(false));
-    preparation.assert_calls(1);
+    preparation.assert_calls(2);
     fee_quote.assert_calls(1);
 }
 #[test]

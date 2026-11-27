@@ -6,9 +6,13 @@ mod persistence;
 pub mod pin_intents;
 #[cfg(any(feature = "app_api", test))]
 mod rs16;
+#[cfg(feature = "app_api")]
+mod source;
 mod spool;
 #[cfg(feature = "app_api")]
 mod taikai;
+#[cfg(feature = "app_api")]
+pub use ingest::upload::handler_post_da_parts;
 #[cfg(feature = "app_api")]
 pub use ingest::{handler_get_da_manifest, handler_post_da_ingest};
 use iroha_core::state::{StateReadOnly, WorldReadOnly};

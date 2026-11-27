@@ -78,10 +78,45 @@
         ]
       ],
       "proof_scheme": {
-        "type": "MerkleSha256",
+        "type": "SorafsPorBlake3",
         "value": null
       },
-      "chunk_root": "hash:DBF036B613893DD5B71FBF15C41C5D977A41064E138F4F990F487D02896136FD#5F89",
+      "chunk_root": [
+        [
+          219,
+          240,
+          54,
+          182,
+          19,
+          137,
+          61,
+          213,
+          183,
+          31,
+          191,
+          21,
+          196,
+          28,
+          93,
+          151,
+          122,
+          65,
+          6,
+          78,
+          19,
+          143,
+          79,
+          153,
+          15,
+          72,
+          125,
+          2,
+          137,
+          97,
+          54,
+          253
+        ]
+      ],
       "proof_digest": "hash:7B1E89FBD074CA0676751DE7C03DE05DF6E408DED5907A24A951E24D7957DC89#7535",
       "retention_class": {
         "hot_retention_secs": 604800,

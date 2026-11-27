@@ -17,7 +17,7 @@ an incident.
 ## 1. Metadata
 
 - **Feature / rollout name:** DA-2/DA-7 — Torii `/v1/da/ingest` GA (rent quote +
-  manifest spooler shipping manifests to SoraFS orchestrators).
+  durable manifest and shard spool for native publication).
 - **Owner / DRI:** DA program TL (Storage Team) with Torii duty engineer and
   Release/SRE on-call handling Alertmanager and governance comms.
 - **Change window:** Planned upgrades piggyback on DA deployments announced in
@@ -26,8 +26,8 @@ an incident.
 - **Rollback window:** First 2 hours after a DA configuration or binary change,
   or immediately when governance orders a halt. Any extended pause (>24 h)
   requires approval from Treasury + Governance.
-- **Dependencies:** Torii build with DA handlers enabled, SoraFS manifest workers
-  pointed at `torii.da_ingest.manifest_store_dir`, rent/replication policy files,
+- **Dependencies:** Torii build with DA handlers enabled, access to the
+  retained tickets under `torii.da_ingest.manifest_store_dir`, rent/replication policy files,
   Alertmanager routes for `torii_da_*` metrics, and CLI/SDK helpers:
   `iroha app da submit`, `iroha app da get-blob`, `iroha app da prove-availability`,
   `iroha app da rent-quote`.
@@ -40,9 +40,9 @@ an incident.
 
 | Condition | Detection & Threshold | Escalation |
 |-----------|----------------------|------------|
-| **Manifest spool corruption / enqueue failures** | `torii_da_manifest_enqueue_fail_total` incrementing, or Torii logs showing “failed to enqueue DA manifest for SoraFS orchestration” (`crates/iroha_torii/src/da/ingest.rs:595`). Alert when 3 errors occur within 5 minutes or when the spool directory free space drops below 15%. | Page Storage TL + Release/SRE; open incident if manifests cannot be written in <10 min. |
+| **Manifest spool corruption / write failures** | `torii_da_spool_batches_total{outcome="partial_error"}` increasing or Torii logging “DA spool action failed”. Alert when 3 errors occur within 5 minutes or when the spool directory free space drops below 15%. | Page Storage TL + Release/SRE; open incident if manifests cannot be written in <10 min. |
 | **Rent or incentive mis-pricing** | Sudden deltas between `torii_da_rent_base_micro_total`, `torii_da_protocol_reserve_micro_total`, or `torii_da_pdp_bonus_micro_total` vs `specs/da/rent_policy.md` tables, or `iroha app da rent-quote` disagreeing with receipt-embedded `rent_quote`. | Treasury + Economics WG; halt ingest until rent calculator bug is understood. |
-| **Replay cache divergence / duplicate rejection** | `torii_da_replay_reject_total` spikes or `iroha app da submit` returns `409 Conflict` for unique blobs. Check the replay cache store under `torii.da_ingest.replay_cache_store_dir`. | DA Foundations TL; coordinate with Torii team to reset caches after snapshots are captured. |
+| **Replay cache divergence / duplicate rejection** | `iroha app da submit` returns `409 Conflict` for fresh producer sequences. Check the replay cache store under `torii.da_ingest.replay_cache_store_dir`. | DA Foundations TL; coordinate with Torii team to reset caches after snapshots are captured. |
 | **Taikai anchor/backfill stuck** | `record_taikai_ingest_metrics` panels (Telem board `sorafs_capacity_health`) show ingest latency >5 min, or `scripts/taikai_ingest_smoke.sh` fails on staging fixtures. | Media Platform WG + Storage TL. |
 | **Governance/legal directive** | Governance votes or regulator requests suspend DA ingestion (e.g., contested rent policy or dispute). Detection via `specs/governance_playbook.md` notifications. | Governance contact + Storage TL; rollback immediately. |
 
@@ -52,21 +52,23 @@ Before disabling or reverting the endpoint gather the following artefacts:
 
 1. **Snapshot the manifest spool.**
    ```bash
-   MANIFEST_ROOT=$(yq '.torii.da_ingest.manifest_store_dir' configs/torii.toml)
+   # Set MANIFEST_ROOT and REPLAY_ROOT to the absolute manifest_store_dir and
+   # replay_cache_store_dir from the running node configuration. Set TORII_CONFIG
+   # to the deployed configuration containing the DA policy tables.
+   : "${MANIFEST_ROOT:?}" "${REPLAY_ROOT:?}" "${TORII_CONFIG:?}"
    ts=$(date -u +%Y%m%dT%H%M%SZ)
    mkdir -p artifacts/da_rollback/$ts
-   sudo rsync -a --info=progress2 "$MANIFEST_ROOT/" "artifacts/da_rollback/$ts/manifest_spool/"
+   sudo rsync -a "$MANIFEST_ROOT/" "artifacts/da_rollback/$ts/manifest_spool/"
    ```
    Keep the rsync log; it proves which manifests were pending before rollback.
 
 2. **Capture replay cache + policy snapshot.**
    ```bash
-   yq '.torii.da_ingest.replay_cache_store_dir' configs/torii.toml \
-     | xargs -I{} sudo tar -C "{}" -czf artifacts/da_rollback/$ts/replay_cache.tgz .
-   yq '.torii.da_ingest.replication_policy' configs/torii.toml \
-     > artifacts/da_rollback/$ts/replication_policy.before.yaml
-   yq '.torii.da_ingest.rent_policy' configs/torii.toml \
-     > artifacts/da_rollback/$ts/rent_policy.before.yaml
+   sudo tar -C "$REPLAY_ROOT" -czf "artifacts/da_rollback/$ts/replay_cache.tgz" .
+   yq -p toml '.torii.da_ingest.replication_policy' "$TORII_CONFIG" \
+     > "artifacts/da_rollback/$ts/replication_policy.before.yaml"
+   yq -p toml '.torii.da_ingest.rent_policy' "$TORII_CONFIG" \
+     > "artifacts/da_rollback/$ts/rent_policy.before.yaml"
    ```
 
 3. **Record telemetry baselines.** Export the Grafana panels referenced in
@@ -74,14 +76,22 @@ Before disabling or reverting the endpoint gather the following artefacts:
    depth, PDP/PoTR bonuses) and attach them to the incident log. Include Alertmanager
    silence IDs if any alerts were muted.
 
-4. **Preserve recent receipts.** For the latest storage tickets, run:
+4. **Preserve recent receipts and proof evidence.** Copy each submitter's
+   `da_receipt.norito`, `da_receipt.json` and signed request from its submission directory.
+   For a raw blob served by a configured fetch provider, capture a PoR report with
+   its gateway provider descriptor and the accepted storage ticket:
+
    ```bash
+   evidence_dir="artifacts/da_rollback/$ts/$ticket"
    iroha app da prove-availability \
-     --ticket <storage_ticket> \
-     --artifact-dir artifacts/da_rollback/$ts/prove_availability_<ticket> \
-     --scoreboard-out artifacts/da_rollback/$ts/<ticket>.scoreboard.json
+     --storage-ticket "$ticket" --gateway-provider "$gateway_provider" \
+     --manifest-cache-dir "$evidence_dir/manifest" --artifact-dir "$evidence_dir" \
+     --scoreboard-out "$evidence_dir/scoreboard.json" --json-out "$evidence_dir/proof.json"
    ```
-   Grab the Norito/JSON receipts and scoreboard so auditors can replay the flow later.
+
+   For a ticket published with native `sorafs_cli deploy --da-source`, use
+   `sorafs_cli da-recover` with its publication CID, finalized DA manifest
+   digest and provider gateway URLs as described in `specs/da/ingest_plan.md`.
 
 5. **Rent quote evidence.** Run `iroha app da rent-quote --gib <size> --months <months> \
    --policy-label "rollback-$ts" --quote-out artifacts/da_rollback/$ts/rent_quote.json`
@@ -93,20 +103,20 @@ Before disabling or reverting the endpoint gather the following artefacts:
 |------|------------------|-------|-------|
 | 1 | Announce freeze in `#da-ops` and tag Governance/Treasury. Open incident doc in `specs/ops/archive/<id>/`. | SRE duty | Include reason + ticket ID. |
 | 2 | Block `/v1/da/ingest` at the ingress layer. Example Istio patch: <br>`cat <<'YAML' > artifacts/da_rollback/$ts/da_ingest_block.yaml`<br>`apiVersion: networking.istio.io/v1beta1`<br>`kind: VirtualService`<br>`metadata: { name: torii-da-ingest-block, namespace: torii }`<br>`spec:`<br>`  hosts: ["torii.svc.cluster.local"]`<br>`  http:`<br>`    - match:`<br>`        - uri: { prefix: "/v1/da/ingest" }`<br>`      fault: { abort: { httpStatus: 503, percentage: { value: 100 } } }`<br>`      route:`<br>`        - destination: { host: torii.svc.cluster.local }`<br>`YAML`<br>`kubectl apply -f artifacts/da_rollback/$ts/da_ingest_block.yaml` | Networking TL / Platform Ops | Any traffic receives 503 so clients fall back to offline packaging. Remove the resource once rollback completes. |
-| 3 | Scale DA-specific workers to zero (if deployed separately) or disable the `da_ingest` HTTP handler by redeploying Torii with `DA_INGEST_DISABLED=true` in the Helm values. | Release Engineering | Prevents pods from writing new manifests mid-rollback. |
-| 4 | Drain in-flight submissions by notifying SDK teams to run `iroha app da submit --no-submit` (offline packager) and queue manifests locally until the incident closes. Publish the service notice through the current `iroha-docs` deployment and incident-communications channel. | SDK Program Lead | Ensures no new payloads reach Torii while policies are inconsistent. |
-| 5 | Repoint SoraFS orchestration to the preserved spool (if needed) and verify chunk stores with `sorafs_car da_reconstruct --manifest artifacts/da_rollback/$ts/.../manifest.encoded`. | Storage TL | Guarantees no manifest is lost before resubmission. |
-| 6 | Re-run the DA ingest smoke harness against staging to confirm regressions are understood: `scripts/taikai_ingest_smoke.sh --workspace $WORKSPACE --fixtures fixtures/da/ingest/smoke --out artifacts/da_rollback/$ts/smoke`. | DA Foundations TL | Evidence that the bug is isolated. |
+| 3 | Confirm the ingress block covers both `POST /v1/da/ingest` and `POST /v1/da/ingest/parts`. Let previously accepted spool writes drain. | Release Engineering | Check ingress responses and the Torii spool queue on each ingest node. |
+| 4 | Queue new submissions locally with `iroha app da submit --no-submit --payload "$payload" --lane-id "$lane" --epoch "$epoch" --sequence "$sequence" --artifact-dir "$submission_dir"`. Publish the service notice. | SDK Program Lead | Use a separate directory per request and retain the producer-signed request and its input payload. |
+| 5 | For a preserved ticket, run `da_reconstruct --manifest "$ticket_dir/manifest.norito" --chunks-dir "$ticket_dir/source" --output "$evidence_dir/reconstructed.bin" --json-out "$evidence_dir/reconstruction.json"`. | Storage TL | Set `ticket_dir` to the snapshot's `artifacts/<first-ticket-byte-hex>/<ticket-hex>` directory and create `evidence_dir` outside the snapshot. |
+| 6 | If Taikai input is affected, check offline packaging with `scripts/taikai_ingest_smoke.sh --workspace "$WORKSPACE" --fixtures "$WORKSPACE/fixtures/taikai/segments" --out "artifacts/da_rollback/$ts/smoke"`. | DA Foundations TL | Attach the CAR and metadata evidence. Exercise live ingest separately on staging. |
 | 7 | File governance memo summarising pause reason, rent impact, and ETA; attach to `specs/governance_playbook.md` references and update `status.md`. | Governance contact | Required before resuming service. |
 
 ## 5. Verification Checklist
 
 - `kubectl get virtualservice torii-da-ingest-block -n torii` shows the abort rule,
-  and `/v1/da/ingest` responds with `503 Service Unavailable`.
+  and both ingest POST paths respond with `503 Service Unavailable`.
 - `torii_da_rent_*` counters stop increasing while the endpoint is blocked.
 - `manifest_store_dir` reports no new files after the patch timestamp.
-- At least one `iroha app da prove-availability` run succeeds using the preserved
-  manifest spool, proving data integrity.
+- Reconstruct a retained ticket from the preserved manifest and shards. Compare
+  the recovered payload against the original producer digest.
 - Governance memo includes rent quote JSON, Grafana exports, the ingress patch,
   and replay cache tarball checksums.
 
@@ -124,22 +134,28 @@ Only remove the block once **all** of the following hold and are documented in
 the incident log:
 
 1. Root cause triaged (e.g., spool corruption identified, rent policy patched).
-2. `scripts/taikai_ingest_smoke.sh` green on staging.
-3. `torii_da_manifest_enqueue_fail_total` flat for 30 minutes after test traffic.
+2. A staging producer can submit a fresh canary using its configured lane and trusted
+   operator key. Its signed receipt matches the submitted payload.
+3. `torii_da_spool_batches_total{outcome="partial_error"}` stays flat for 30 minutes after test traffic.
 4. Governance sign-off recorded with link to evidence bundle.
 5. SDK teams confirm they can resume calling `/v1/da/ingest`.
 
-To restore service, delete the VirtualService override and redeploy Torii with
-the corrected configuration:
+Deploy any corrected configuration through the normal release process, then restore
+traffic by removing the incident ingress override:
 
 ```bash
-kubectl delete -f artifacts/da_rollback/$ts/da_ingest_block.yaml
-helm upgrade torii charts/torii --values deploy/env/prod/torii.values.yaml
+kubectl delete -f "artifacts/da_rollback/$ts/da_ingest_block.yaml"
 ```
 
-After redeploying, run `iroha app da submit` against a canary payload, verify the
-receipt and the associated rent counters, and update the incident ticket with
-the new artefacts.
+Submit a fresh canary on the restored endpoint:
+
+```bash
+iroha --config "$client_config" app da submit --payload "$payload" \
+  --lane-id "$lane" --epoch "$epoch" --sequence "$sequence" \
+  --operator-public-key "$operator_key" --artifact-dir "$submission_dir"
+```
+
+Attach the accepted receipt and associated rent counters to the incident ticket.
 
 ## 8. Attachments & Archival
 

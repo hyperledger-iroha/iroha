@@ -9829,12 +9829,16 @@
         "additionalProperties": false,
         "properties": {
           "acknowledgement_sig": {
-            "description": "Canonical uppercase Ed25519 acknowledgement signature.",
-            "pattern": "^[0-9A-F]{128}$",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalSignature"
+              }
+            ],
+            "description": "Torii receipt signature over the complete acknowledgement and sequence.",
+            "maxLength": 8192
           },
           "chunk_root": {
-            "$ref": "#/components/schemas/DaIrohaHash"
+            "$ref": "#/components/schemas/DaDigest32"
           },
           "client_blob_id": {
             "$ref": "#/components/schemas/DaDigest32"
@@ -9943,6 +9947,22 @@
         ],
         "type": "object"
       },
+      "DaControllerWitnessV1": {
+        "additionalProperties": false,
+        "properties": {
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          }
+        },
+        "required": [
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
       "DaDigest32": {
         "description": "Canonical Norito JSON layout for a transparent 32-byte digest wrapper.",
         "items": {
@@ -9967,6 +9987,58 @@
         "maxItems": 1,
         "minItems": 1,
         "type": "array"
+      },
+      "DaIngestAuthorizationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "payload_bytes": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "payload_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "request_content_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "payload_hash",
+          "payload_bytes",
+          "request_content_hash",
+          "signatures"
+        ],
+        "type": "object"
       },
       "DaIrohaHash": {
         "description": "Canonical checksummed Iroha hash literal. Decoders also verify the CRC-16 checksum and marked-hash bit.",
@@ -10030,9 +10102,14 @@
           "alias": {
             "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
             "maxLength": 256,
-            "nullable": true,
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "x-iroha-maxUtf8Bytes": 256
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/DaIngestAuthorizationV1"
           },
           "epoch": {
             "format": "uint64",
@@ -10045,10 +10122,8 @@
           "manifest_hash": {
             "$ref": "#/components/schemas/DaDigest32"
           },
-          "owner": {
-            "description": "Optional canonical I105 universal account identifier.",
-            "nullable": true,
-            "type": "string"
+          "pin_scope_authorization": {
+            "$ref": "#/components/schemas/DaPinScopeAuthorizationV1"
           },
           "sequence": {
             "format": "uint64",
@@ -10065,7 +10140,8 @@
           "storage_ticket",
           "manifest_hash",
           "alias",
-          "owner"
+          "authorization",
+          "pin_scope_authorization"
         ],
         "type": "object"
       },
@@ -10366,6 +10442,83 @@
         ],
         "type": "object"
       },
+      "DaPinScopeAuthorizationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/DaPinScopeV1"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/DaControllerWitnessV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "signatures"
+        ],
+        "type": "object"
+      },
+      "DaPinScopeV1": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Optional pin alias; committed values contain at most 256 UTF-8 bytes.",
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-iroha-maxUtf8Bytes": 256
+          },
+          "commitment_digest": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "type": "integer"
+          },
+          "manifest_hash": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "request_authorization_digest": {
+            "$ref": "#/components/schemas/DaDigest32"
+          },
+          "sequence": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "storage_ticket": {
+            "$ref": "#/components/schemas/DaDigest32"
+          }
+        },
+        "required": [
+          "network_id",
+          "owner",
+          "request_authorization_digest",
+          "lane_id",
+          "epoch",
+          "sequence",
+          "storage_ticket",
+          "manifest_hash",
+          "commitment_digest",
+          "alias"
+        ],
+        "type": "object"
+      },
       "DaProofPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -10450,11 +10603,11 @@
       },
       "DaTaggedProofScheme": {
         "additionalProperties": false,
-        "description": "First-release DA V1 supports MerkleSha256 only; unknown proof-scheme discriminants are rejected.",
+        "description": "The DA V1 chunk root is the raw SoraFS proof-of-retrievability root computed with domain-separated BLAKE3 hashes.",
         "properties": {
           "type": {
             "enum": [
-              "MerkleSha256"
+              "SorafsPorBlake3"
             ],
             "type": "string"
           },
@@ -74757,6 +74910,9 @@
                 }
               }
             }
+          },
+          "507": {
+            "description": "The local retained-source spool cannot reserve capacity for this ticket."
           }
         },
         "security": [
@@ -74779,6 +74935,279 @@
           "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "data_availability.ingest"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/da/ingest/parts": {
+      "post": {
+        "description": "Resume a producer-scoped upload, append an immutable part, release it, or restore its bytes and finalize the original signed ingest request.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Begin"
+                          },
+                          "value": {
+                            "type": "null"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Put"
+                          },
+                          "value": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "bytes_b64": {
+                                "contentEncoding": "base64",
+                                "maxLength": 1398104,
+                                "type": "string"
+                              },
+                              "index": {
+                                "maximum": 63,
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "index",
+                              "bytes_b64"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Finish"
+                          },
+                          "value": {
+                            "description": "Signed DaIngestRequest with an empty payload field.",
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "Release"
+                          },
+                          "value": {
+                            "type": "null"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "value"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "upload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "epoch": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "lane_id": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "network_id": {
+                        "$ref": "#/components/schemas/NetworkId"
+                      },
+                      "wire_bytes": {
+                        "maximum": 67108864,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "wire_hash": {
+                        "description": "BLAKE3 digest of the transmitted bytes, encoded as a Norito BlobDigest.",
+                        "items": {
+                          "items": {
+                            "maximum": 255,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxItems": 32,
+                          "minItems": 32,
+                          "type": "array"
+                        },
+                        "maxItems": 1,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "network_id",
+                      "lane_id",
+                      "epoch",
+                      "wire_bytes",
+                      "wire_hash"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "upload",
+                  "action"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_part": {
+                      "maximum": 64,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "next_part"
+                  ],
+                  "type": "object"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "First missing part index, or zero after release.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Signed ingest result with status pending_pin_authorization or accepted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed upload descriptor, part or final metadata."
+          },
+          "401": {
+            "description": "Canonical account authentication failed."
+          },
+          "403": {
+            "description": "Producer, network, lane or epoch admission failed."
+          },
+          "404": {
+            "description": "The selected upload session is absent or expired."
+          },
+          "409": {
+            "description": "Conflicting upload, out-of-order part or incomplete transfer."
+          },
+          "413": {
+            "description": "The wire payload or request body exceeds its bound."
+          },
+          "415": {
+            "description": "The transfer request requires application/json."
+          },
+          "422": {
+            "description": "The reconstructed wire payload differs from its descriptor digest."
+          },
+          "429": {
+            "description": "The staging session budget is full or the request was rate limited."
+          },
+          "503": {
+            "description": "The upload or ingest worker is busy, or storage is unavailable."
+          },
+          "507": {
+            "description": "The local retained-source spool cannot reserve capacity for this ticket."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Stage or finalize a DA upload.",
+        "tags": [
+          "DataAvailability"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "data_availability.ingest.parts"
         },
         "x-iroha-tool-effect": "write"
       }

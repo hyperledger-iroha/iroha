@@ -1,4 +1,4 @@
-//! Validate DA ingest compute-concurrency configuration.
+//! Validate DA ingestion compute concurrency and retained-source disk limits.
 
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
@@ -50,4 +50,22 @@ max_concurrent_compute_jobs = 0
         error.contains("max_concurrent_compute_jobs"),
         "unexpected zero-limit diagnostic: {error}"
     );
+}
+
+#[test]
+fn da_source_storage_budget_projects_default_and_override_and_refuses_zero() {
+    let default = parse_actual_config("").unwrap();
+    assert_eq!(
+        default.torii.da_ingest.source_storage_budget_bytes.get(),
+        4 << 30
+    );
+    let custom =
+        parse_actual_config("[torii.da_ingest]\nsource_storage_budget_bytes = 123456").unwrap();
+    assert_eq!(
+        custom.torii.da_ingest.source_storage_budget_bytes.get(),
+        123456
+    );
+    let error =
+        parse_actual_config("[torii.da_ingest]\nsource_storage_budget_bytes = 0").unwrap_err();
+    assert!(error.contains("source_storage_budget_bytes"));
 }

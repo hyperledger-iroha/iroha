@@ -393,7 +393,7 @@ class ScannerUnits(unittest.TestCase):
             "lowercase Git SHA-1 object": ["sha1"],
             "shake-256 tape": ["shake"],
             # CamelCase type names.
-            "DaProofScheme::MerkleSha256": ["sha2-256"],
+            "DaProofScheme::SorafsPorBlake3": ["blake3"],
             "PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri": ["sha3"],
             "starkFriSha3_384Goldilocks": ["sha3"],
             "ed25519::Ed25519Sha512::parse": ["sha2-512"],

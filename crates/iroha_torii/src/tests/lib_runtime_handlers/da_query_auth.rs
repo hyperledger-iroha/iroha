@@ -216,8 +216,8 @@ mod da_query_auth {
             1,
             BlobDigest::new([0xB5; 32]),
             ManifestDigest::new([0xB6; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0xB7; 32]),
+            DaProofScheme::SorafsPorBlake3,
+            BlobDigest::new([0xB7; 32]),
             None,
             RetentionPolicy::default(),
             StorageTicketId::new([0xB8; 32]),
@@ -240,7 +240,7 @@ mod da_query_auth {
             sequence: 1,
             payload_hash: BlobDigest::new([0xBA; 32]),
             payload_bytes: 1,
-            request_content_hash: Hash::prehashed([0xBB; 32]),
+            request_content_hash: BlobDigest::new([0xBB; 32]),
             signatures: Vec::new(),
         };
         authorization.signatures.push(DaIngestSignatureV1 {
@@ -252,6 +252,7 @@ mod da_query_auth {
             &authorization,
             StorageTicketId::new([0xBC; 32]),
             ManifestDigest::new([0xBD; 32]),
+            Default::default(),
             None,
         );
         let scope_authorization =

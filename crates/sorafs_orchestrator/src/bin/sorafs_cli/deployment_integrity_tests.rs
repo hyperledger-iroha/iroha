@@ -359,6 +359,7 @@ fn deploy_artifacts_encode_the_checked_default_retention() {
         &root.join("pack.json"),
         &manifest_path,
         &root.join("manifest.json"),
+        None,
     )
     .unwrap();
     let after = SystemTime::now()

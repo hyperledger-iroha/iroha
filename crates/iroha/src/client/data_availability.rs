@@ -24,7 +24,9 @@ use iroha_torii_shared::{
 };
 use norito::json::{JsonDeserialize, JsonSerialize};
 
+mod upload;
 mod validation;
+pub use upload::submit_ingest_phase;
 
 pub(super) const MAX_MANIFEST_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MANIFEST: &str = "data_availability.manifest.read";

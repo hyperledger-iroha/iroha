@@ -11,6 +11,7 @@ use iroha_data_model::da::{
 use iroha_model_base::topology::LaneId;
 #[cfg(test)]
 use norito::decode_from_bytes;
+#[cfg(test)]
 use norito::to_bytes;
 #[cfg(test)]
 use std::path::Path;
@@ -553,9 +554,9 @@ fn sort_pin_intents(intents: &mut [DaPinIntent]) {
             *intent.storage_ticket.as_bytes(),
             *intent.manifest_hash.as_bytes(),
             intent.alias.clone(),
-            to_bytes(&intent.authorization)
+            norito::encode_canonical(&intent.authorization)
                 .expect("DA ingest authorization must have a canonical Norito encoding"),
-            to_bytes(&intent.pin_scope_authorization)
+            norito::encode_canonical(&intent.pin_scope_authorization)
                 .expect("DA pin-scope authorization must have a canonical Norito encoding"),
         )
     });

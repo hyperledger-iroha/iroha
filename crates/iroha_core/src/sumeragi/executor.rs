@@ -3976,6 +3976,7 @@ impl<'s> Worker<'s> {
                 proposed_time
             },
         };
+        let mut include_da = true;
         while !selected.is_empty() || !merges.merges.is_empty() {
             if let Err(error) = payload::recheck_progress_for_proposal(
                 &current_view,
@@ -4016,6 +4017,7 @@ impl<'s> Worker<'s> {
                 self.assembly_parent_service
                     .as_ref()
                     .map(|(_, prepared)| prepared),
+                include_da,
             ) {
                 Ok(block) => block,
                 Err(error) => {
@@ -4046,6 +4048,10 @@ impl<'s> Worker<'s> {
                         proposal_admission: None,
                     });
                     return self.finish_payload_build();
+                }
+                Ok(_) if block.da_commitments().is_some() => {
+                    // Retry the entire ordinary selection before reducing its paid work.
+                    include_da = false;
                 }
                 Ok(_) if !selected.is_empty() => {
                     selected.pop();

@@ -107,7 +107,7 @@ iroha_fs = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_core_privacy = { workspace = true, default-features = false }
 iroha_model_base = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time", "test-util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "rt-multi-thread", "time", "test-util"] }
 eyre = { workspace = true }
 iroha_test_network = { workspace = true }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }

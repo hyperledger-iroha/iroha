@@ -3,8 +3,10 @@
 //! This module exposes deterministic sampling and assignment logic so the
 //! server, CLI, and SDKs can agree on which chunks to probe for DA proofs.
 mod manifest;
+pub mod payload;
 mod queries;
 pub mod sampling;
+pub mod upload;
 pub use manifest::DaManifestResponse;
 pub use queries::{
     DA_QUERY_REQUEST_MAX_BYTES, DEFAULT_DA_QUERY_PAGE_SIZE, DaCommitmentListCursor,

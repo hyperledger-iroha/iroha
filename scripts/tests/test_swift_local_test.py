@@ -43,6 +43,15 @@ def intercept_steps(monkeypatch, *, failure=None, during_swift=None):
     return calls
 
 
+def test_one_job_limits_native_build_swiftpm_and_swift_compiler(monkeypatch, recipe):
+    root, target, config = recipe
+    calls = intercept_steps(monkeypatch)
+    runner.run_suite(root, target, 1, config, {})
+    commands = {name: command for name, command, _ in calls}
+    assert commands["native-build.log"][-2:] == ["--jobs", "1"]
+    assert commands["swift-test.log"][-4:] == ["--jobs", "1", "-Xswiftc", "-j1"]
+
+
 def test_full_suite_uses_only_fresh_admitted_artifact_and_rechecks_same_pin(monkeypatch, recipe):
     root, target, config = recipe
     calls = intercept_steps(monkeypatch)

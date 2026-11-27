@@ -3698,6 +3698,7 @@ impl Iroha {
                 Some(handle)
             }
         };
+        let da_relay_period = config.transaction_gossiper.gossip_period;
         let tx_gossiper = if emergency_fast {
             iroha_logger::warn!(
                 "emergency Fast startup did not launch the transaction-gossip actor"
@@ -3733,6 +3734,9 @@ impl Iroha {
         };
         // Native service commissioning can itself need a transaction committed by the peers.
         let (torii_started, relay_task) = network_relay::NetworkRelay {
+            state: Arc::clone(&state),
+            local_peer: config.common.trusted_peers.value().myself.id().clone(),
+            da_relay_period,
             tx_gossiper,
             peers_gossiper,
             network: network.clone(),

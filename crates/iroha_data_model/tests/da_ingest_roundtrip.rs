@@ -103,6 +103,38 @@ fn sample_ingest_request() -> DaIngestRequest {
 }
 
 #[test]
+fn registry_alias_requires_one_public_plaintext_value() {
+    let metadata = |entries| ExtraMetadata { items: entries };
+    let alias = MetadataEntry::new(
+        "da.registry.alias",
+        b"  public/blob  ".to_vec(),
+        MetadataVisibility::Public,
+    );
+    assert_eq!(ExtraMetadata::default().registry_alias(), Ok(None));
+    assert_eq!(
+        metadata(vec![alias.clone()]).registry_alias(),
+        Ok(Some("public/blob"))
+    );
+    assert!(
+        metadata(vec![alias.clone(), alias.clone()])
+            .registry_alias()
+            .is_err()
+    );
+    let mut invalid = alias.clone();
+    invalid.visibility = MetadataVisibility::GovernanceOnly;
+    assert!(metadata(vec![invalid]).registry_alias().is_err());
+    let mut invalid = alias.clone();
+    invalid.encryption =
+        MetadataEncryption::ChaCha20Poly1305(MetadataCipherEnvelope { key_label: None });
+    assert!(metadata(vec![invalid]).registry_alias().is_err());
+    for value in [vec![0xFF], b"   ".to_vec()] {
+        let mut invalid = alias.clone();
+        invalid.value = value;
+        assert!(metadata(vec![invalid]).registry_alias().is_err());
+    }
+}
+
+#[test]
 fn pin_scope_witnesses_roundtrip_without_changing_primary_digest() {
     let mut request = sample_ingest_request();
     let primary_digest = request.signing_digest();
@@ -110,6 +142,7 @@ fn pin_scope_witnesses_roundtrip_without_changing_primary_digest() {
         &request.authorization(),
         sample_ticket(0x41),
         ManifestDigest::new(*sample_digest(0x42).as_bytes()),
+        Default::default(),
         Some("roundtrip.example".to_owned()),
     );
     let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
@@ -139,6 +172,7 @@ fn sample_ingest_receipt() -> DaIngestReceipt {
         manifest_hash: sample_digest(0x54),
         storage_ticket: sample_ticket(0x55),
         pdp_commitment: Some(sample_pdp_commitment_bytes()),
+        retention_policy: Default::default(),
         stripe_layout: DaStripeLayout {
             total_stripes: 4,
             shards_per_stripe: 12,
@@ -229,12 +263,51 @@ fn da_ingest_signature_binds_complete_request_intent() {
             )],
         },
     };
+    #[derive(norito::json::JsonDeserialize)]
+    struct SigningVector {
+        compression: String,
+        wire_base64: String,
+        content_digest_hex: String,
+        authorization_digest_hex: String,
+        signature_hex: String,
+        signer: String,
+    }
+    let vectors: Vec<SigningVector> = norito::json::from_str(include_str!(
+        "../../../fixtures/da/ingest/request_signing_v1.json"
+    ))
+    .expect("shared DA signing fixtures");
+    let mut seen_content_bits = [false; 2];
+    for vector in vectors {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let mut variant = intent.clone();
+        variant.compression = match vector.compression.as_str() {
+            "Identity" => Compression::Identity,
+            "Deflate" => Compression::Deflate,
+            other => panic!("unexpected fixture compression {other}"),
+        };
+        variant.payload = STANDARD.decode(vector.wire_base64).unwrap();
+        let request = variant.try_sign(&key_pair).unwrap();
+        assert_eq!(request.signatures[0].signer.to_string(), vector.signer);
+        let content = request.authorization().request_content_hash;
+        seen_content_bits[usize::from(content.as_bytes()[31] & 1)] = true;
+        assert_eq!(
+            hex::encode_upper(content.as_bytes()),
+            vector.content_digest_hex
+        );
+        assert_eq!(
+            hex::encode_upper(request.signing_digest()),
+            vector.authorization_digest_hex
+        );
+        assert_eq!(
+            hex::encode_upper(request.signatures[0].signature.payload()),
+            vector.signature_hex
+        );
+        request
+            .verify_signatures()
+            .expect("shared SDK producer witness");
+    }
+    assert_eq!(seen_content_bits, [true, true]);
     let expected_digest = intent.signing_digest();
-    assert_eq!(
-        hex::encode_upper(expected_digest),
-        "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA",
-        "DA intent digest is a cross-SDK protocol vector"
-    );
     let request = intent
         .try_sign(&key_pair)
         .expect("sign complete DA request intent");
@@ -355,6 +428,15 @@ fn sample_manifest() -> DaManifestV1 {
 fn da_manifest_roundtrip() {
     let manifest = sample_manifest();
     let buf = norito::to_bytes(&manifest).expect("serialize manifest");
+    assert_eq!(DaManifestV1::decode_canonical(&buf).unwrap(), manifest);
+    let oversized = vec![0; DaManifestV1::MAX_ENCODED_BYTES + 1];
+    assert!(matches!(
+        DaManifestV1::decode_canonical(&oversized),
+        Err(norito::Error::ArchiveLengthExceeded { .. })
+    ));
+    let mut trailing = buf.clone();
+    trailing.push(0);
+    assert!(DaManifestV1::decode_canonical(&trailing).is_err());
     let archived = from_bytes::<DaManifestV1>(&buf).expect("decode manifest");
     let decoded = archived.deserialize();
     assert_eq!(decoded, manifest);
@@ -671,6 +753,50 @@ fn da_ingest_receipt_roundtrip() {
 }
 
 #[test]
+fn receipt_operator_transcript_authenticates_the_declared_frame_sequence_and_entire_receipt() {
+    #[derive(norito::codec::Decode, norito::codec::Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_torii::da::persistence::DaReceiptSigningPayload")]
+    struct ExpectedReceiptFrame {
+        version: u16,
+        sequence: u64,
+        receipt: DaIngestReceipt,
+    }
+
+    let sequence = 37;
+    let mut receipt = sample_ingest_receipt();
+    let bytes = receipt.operator_signing_bytes(sequence).unwrap();
+    let frame: ExpectedReceiptFrame = norito::decode_canonical(&bytes).unwrap();
+    assert_eq!((frame.version, frame.sequence), (1, sequence));
+    let mut unsigned = receipt.clone();
+    unsigned.operator_signature = DaIngestReceipt::signature_placeholder();
+    assert_eq!(frame.receipt, unsigned);
+    assert_eq!(frame.receipt.operator_signature.payload(), &[0xA5; 64]);
+
+    let key = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519).unwrap();
+    receipt.operator_signature = Signature::try_new(key.private_key(), &bytes).unwrap();
+    assert_eq!(receipt.operator_signing_bytes(sequence).unwrap(), bytes);
+    receipt
+        .verify_operator_signature(sequence, key.public_key())
+        .unwrap();
+    assert!(
+        receipt
+            .verify_operator_signature(sequence + 1, key.public_key())
+            .is_err()
+    );
+    assert!(
+        receipt
+            .verify_operator_signature(sequence, &sample_public_key())
+            .is_err()
+    );
+    receipt.retention_policy.required_replicas += 1;
+    assert!(
+        receipt
+            .verify_operator_signature(sequence, key.public_key())
+            .is_err()
+    );
+}
+
+#[test]
 fn da_ingest_binary_rejects_pre_release_omission_layouts() {
     #[derive(norito::codec::Encode)]
     struct PreReleaseStripeLayout {
@@ -769,6 +895,59 @@ fn da_ingest_binary_rejects_pre_release_omission_layouts() {
 }
 
 #[test]
+fn da_ingest_binary_requires_explicit_pin_scope_witnesses() {
+    #[derive(norito::codec::Encode)]
+    struct PrepareWithoutPinWitnesses {
+        network_id: NetworkId,
+        owner: AccountId,
+        client_blob_id: BlobDigest,
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+        blob_class: BlobClass,
+        codec: BlobCodec,
+        erasure_profile: ErasureProfile,
+        retention_policy: RetentionPolicy,
+        chunk_size: u32,
+        total_size: u64,
+        payload_hash: BlobDigest,
+        compression: Compression,
+        norito_manifest: Option<Vec<u8>>,
+        payload: Vec<u8>,
+        metadata: ExtraMetadata,
+        signatures: Vec<DaIngestSignatureV1>,
+    }
+
+    let request = sample_ingest_request();
+    let missing_witnesses = PrepareWithoutPinWitnesses {
+        network_id: request.network_id,
+        owner: request.owner,
+        client_blob_id: request.client_blob_id,
+        lane_id: request.lane_id,
+        epoch: request.epoch,
+        sequence: request.sequence,
+        blob_class: request.blob_class,
+        codec: request.codec,
+        erasure_profile: request.erasure_profile,
+        retention_policy: request.retention_policy,
+        chunk_size: request.chunk_size,
+        total_size: request.total_size,
+        payload_hash: request.payload_hash,
+        compression: request.compression,
+        norito_manifest: request.norito_manifest,
+        payload: request.payload,
+        metadata: request.metadata,
+        signatures: request.signatures,
+    };
+    let bytes = missing_witnesses.encode();
+    let mut cursor = bytes.as_slice();
+    assert!(
+        DaIngestRequest::decode_all(&mut cursor).is_err(),
+        "a prepare request must encode the explicit empty pin-scope witness vector"
+    );
+}
+
+#[test]
 fn da_ingest_json_requires_current_fields_and_rejects_unknown_fields() {
     let request = sample_ingest_request();
     let mut nullable_request = request.clone();
@@ -782,10 +961,18 @@ fn da_ingest_json_requires_current_fields_and_rejects_unknown_fields() {
         "V1 must serialize the absent manifest as an explicit null slot"
     );
     assert_eq!(
+        value
+            .get("pin_scope_signatures")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "prepare requests must encode an explicit empty pin witness list"
+    );
+    assert_eq!(
         norito::json::from_value::<DaIngestRequest>(value).expect("decode explicit null manifest"),
         nullable_request
     );
-    for field in ["compression", "norito_manifest"] {
+    for field in ["compression", "norito_manifest", "pin_scope_signatures"] {
         let mut value = norito::json::to_value(&request).expect("serialize ingest request");
         assert!(
             value
@@ -871,5 +1058,35 @@ fn da_ingest_json_requires_current_fields_and_rejects_unknown_fields() {
     assert!(
         norito::json::from_value::<DaIngestReceipt>(value).is_err(),
         "V1 must reject unknown ingest receipt fields"
+    );
+}
+
+#[test]
+fn signed_pin_intent_fixture_authenticates_both_domains_and_round_trips() {
+    let source = include_str!("../../../fixtures/da/ingest/pin_intent_v1.json");
+    let intent: DaPinIntent = norito::json::from_str(source).unwrap();
+    assert!(intent.authorization.has_valid_canonical_signatures());
+    assert!(
+        intent
+            .pin_scope_authorization
+            .has_valid_canonical_signatures()
+    );
+    assert!(
+        intent
+            .pin_scope_authorization
+            .scope
+            .matches_authorization(&intent.authorization)
+    );
+    assert_eq!(
+        intent,
+        DaPinIntent::new(
+            intent.authorization.clone(),
+            intent.pin_scope_authorization.clone()
+        )
+    );
+    let json = norito::json::to_value(&intent).unwrap();
+    assert_eq!(
+        json,
+        norito::json::from_str::<norito::json::Value>(source).unwrap()
     );
 }
