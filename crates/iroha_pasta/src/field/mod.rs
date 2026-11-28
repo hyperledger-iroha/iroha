@@ -288,9 +288,9 @@ pub(crate) fn pow_public_exponent<F: ff::Field>(base: &F, exp: &[u64; 4]) -> F {
 /// Implements the shared arithmetic and trait surface of a Pasta field.
 ///
 /// The invoking module must define `MODULUS: cios::Modulus`, `MOD_INFO`,
-/// `MODULUS_STR`, `INV_EXP` (`m - 2`), `T_MINUS1_OVER2`, the canonical
+/// `MODULUS_STR`, `INV_EXP` (`m - 2`), the canonical
 /// constants `TWO_INV_RAW`, `ROOT_OF_UNITY_RAW`, `ROOT_OF_UNITY_INV_RAW`,
-/// `DELTA_RAW`, `ZETA_RAW`, and `SQRT_HASH` (perfect-hash parameters).
+/// `DELTA_RAW` and `ZETA_RAW`, plus `sqrt_power` and `SQRT_HASH_MULTIPLIER`.
 macro_rules! impl_pasta_field {
     ($name:ident) => {
         use core::fmt;
@@ -393,7 +393,7 @@ macro_rules! impl_pasta_field {
 
             fn tables() -> &'static SqrtTables<$name> {
                 static TABLES: std::sync::OnceLock<SqrtTables<$name>> = std::sync::OnceLock::new();
-                TABLES.get_or_init(|| SqrtTables::new(SQRT_HASH.0, SQRT_HASH.1))
+                TABLES.get_or_init(SqrtTables::new)
             }
         }
 
@@ -638,12 +638,15 @@ macro_rules! impl_pasta_field {
         }
 
         impl SqrtField for $name {
+            const HASH_MULTIPLIER: u32 = SQRT_HASH_MULTIPLIER;
+
             fn pow_by_t_minus1_over2(&self) -> Self {
-                crate::field::pow_public_exponent(self, &T_MINUS1_OVER2)
+                sqrt_power(self)
             }
 
-            fn get_lower_32(&self) -> u32 {
-                u32::try_from(self.to_canonical()[0] & u64::from(u32::MAX)).unwrap_or(0)
+            #[allow(clippy::cast_possible_truncation)] // The hash uses exactly the low 32 bits.
+            fn montgomery_low_word(&self) -> u32 {
+                self.0[0] as u32
             }
         }
 

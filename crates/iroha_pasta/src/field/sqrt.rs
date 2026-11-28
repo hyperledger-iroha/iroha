@@ -10,22 +10,39 @@
 //! input, as in `pasta_curves`. Use it on public data (point decompression,
 //! hash-to-curve); it is not hardened against cache-timing observers.
 
-use ff::PrimeField;
+use ff::{Field, PrimeField};
 use subtle::Choice;
 
 /// Field operations the square-root tables need.
 pub trait SqrtField: PrimeField {
+    /// Multiplier for the order-256 subgroup's perfect hash.
+    const HASH_MULTIPLIER: u32;
+
     /// Raises `self` to `(t - 1) / 2`, where `m - 1 = t * 2^S` with `t` odd.
     fn pow_by_t_minus1_over2(&self) -> Self;
-    /// The low 32 bits of the canonical integer value.
-    fn get_lower_32(&self) -> u32;
+    /// The low 32 bits of the fully reduced Montgomery representation.
+    fn montgomery_low_word(&self) -> u32;
+}
+
+/// Square a field element a fixed number of times.
+#[inline]
+pub(super) fn square_n<F: Field>(mut value: F, count: u32) -> F {
+    for _ in 0..count {
+        value = value.square();
+    }
+    value
+}
+
+const HASH_BITS: u32 = 10;
+
+/// Discrete-log table index for an element of the order-256 subgroup.
+fn subgroup_index<F: SqrtField>(x: &F) -> usize {
+    (x.montgomery_low_word().wrapping_mul(F::HASH_MULTIPLIER) >> (32 - HASH_BITS)) as usize
 }
 
 /// Precomputed tables of powers of the 2^32-th root of unity.
 #[derive(Debug)]
 pub struct SqrtTables<F: SqrtField> {
-    hash_xor: u32,
-    hash_mod: usize,
     inv: Vec<u8>,
     g0: Vec<F>,
     g1: Vec<F>,
@@ -34,8 +51,8 @@ pub struct SqrtTables<F: SqrtField> {
 }
 
 impl<F: SqrtField> SqrtTables<F> {
-    /// Builds the tables for the perfect-hash parameters `(hash_xor, hash_mod)`.
-    pub fn new(hash_xor: u32, hash_mod: usize) -> Self {
+    /// Builds the tables for the given field.
+    pub fn new() -> Self {
         let mut levels = Vec::with_capacity(4);
         let mut gi = F::ROOT_OF_UNITY;
         for _ in 0..4 {
@@ -55,30 +72,23 @@ impl<F: SqrtField> SqrtTables<F> {
         let g0 = levels.pop().unwrap_or_default();
 
         let mut tables = Self {
-            hash_xor,
-            hash_mod,
-            inv: vec![1u8; hash_mod],
+            inv: vec![1u8; 1 << HASH_BITS],
             g0,
             g1,
             g2,
             g3: Vec::new(),
         };
         for (j, g3_j) in g3.iter().enumerate() {
-            let hash = tables.hash(g3_j);
+            let hash = subgroup_index(g3_j);
             // Slot values are (256 - j) mod 256: 0 for j = 0 and 255..2 for
             // j = 1..254. The initial value 1 is assigned only at the last
             // index (j = 255), so a slot still holding 1 has not been used.
-            debug_assert_eq!(tables.inv[hash], 1, "perfect hash collision");
+            assert_eq!(tables.inv[hash], 1, "perfect hash collision");
             tables.inv[hash] = u8::try_from((256 - j) & 0xFF).unwrap_or(0);
         }
         g3.truncate(129);
         tables.g3 = g3;
         tables
-    }
-
-    fn hash(&self, x: &F) -> usize {
-        // Widening u32 -> usize; usize is at least 32 bits on supported targets.
-        ((x.get_lower_32() ^ self.hash_xor) as usize) % self.hash_mod
     }
 
     /// Returns `(is_square, root)` where `root` is a square root of `num / div`
@@ -87,9 +97,8 @@ impl<F: SqrtField> SqrtTables<F> {
     /// Returns `(true, 0)` when `num = 0`, and `(false, 0)` when `num != 0` and
     /// `div = 0`.
     pub fn sqrt_ratio(&self, num: &F, div: &F) -> (Choice, F) {
-        let sqr = |x: F, i: u32| (0..i).fold(x, |x, _| x.square());
         // s = div^(2^S - 1)
-        let s = (0..5).fold(*div, |d: F, i| sqr(d, 1 << i) * d);
+        let s = (0..5).fold(*div, |d: F, i| square_n(d, 1 << i) * d);
         // t = div^(2^(S+1) - 1)
         let t = s.square() * div;
         // w = (num * t)^((T-1)/2) * s
@@ -119,15 +128,14 @@ impl<F: SqrtField> SqrtTables<F> {
     }
 
     fn sqrt_common(&self, uv: &F, v: &F) -> F {
-        let sqr = |x: F, i: u32| (0..i).fold(x, |x, _| x.square());
         // The discrete-log accumulator `t` reaches 0xFFFF_FFFF, so it is kept
         // in u64: `t + 1` below must not overflow on 32-bit targets.
-        let inv = |x: F| u64::from(self.inv[self.hash(&x)]);
+        let inv = |x: F| u64::from(self.inv[subgroup_index(&x)]);
 
         let x3 = *uv * v;
-        let x2 = sqr(x3, 8);
-        let x1 = sqr(x2, 8);
-        let x0 = sqr(x1, 8);
+        let x2 = square_n(x3, 8);
+        let x1 = square_n(x2, 8);
+        let x0 = square_n(x1, 8);
 
         let mut t = inv(x0);
         debug_assert!(t < 0x100);
@@ -171,15 +179,81 @@ mod tests {
     use ff::Field;
 
     #[test]
-    fn tables_cover_all_levels() {
-        let t = super::SqrtTables::<Fp>::new(0x11BE, 1098);
-        assert_eq!(t.g0.len(), 256);
-        assert_eq!(t.g1.len(), 256);
-        assert_eq!(t.g2.len(), 256);
-        assert_eq!(t.g3.len(), 129);
-        assert_eq!(t.g0[1], <Fp as ff::PrimeField>::ROOT_OF_UNITY);
-        let tq = super::SqrtTables::<Fq>::new(0x0011_6A9E, 1206);
-        assert_eq!(tq.inv.len(), 1206);
+    fn every_subgroup_element_has_a_distinct_inverse_log_slot() {
+        fn check<F: super::SqrtField>() {
+            let tables = super::SqrtTables::<F>::new();
+            assert_eq!(
+                [
+                    tables.g0.len(),
+                    tables.g1.len(),
+                    tables.g2.len(),
+                    tables.g3.len()
+                ],
+                [256, 256, 256, 129]
+            );
+            assert_eq!(tables.g0[1], F::ROOT_OF_UNITY);
+            let generator = F::ROOT_OF_UNITY.pow_vartime([1u64 << 24]);
+            let mut registered = [false; 1 << super::HASH_BITS];
+            let mut x = F::ONE;
+            for j in 0..=u8::MAX {
+                let slot = super::subgroup_index(&x);
+                // j=255 registers the value 1, which also fills unused slots.
+                assert!(!registered[slot]);
+                registered[slot] = true;
+                assert_eq!(tables.inv[slot], j.wrapping_neg());
+                x *= generator;
+            }
+            assert_eq!(x, F::ONE);
+            assert_eq!(registered.iter().filter(|&&occupied| occupied).count(), 256);
+            for (occupied, value) in registered.iter().zip(&tables.inv) {
+                if !occupied {
+                    assert_eq!(*value, 1);
+                }
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn fixed_exponents_and_signed_roots_match_the_oracle() {
+        use ff::PrimeField;
+        use num_bigint::BigUint;
+
+        fn check<F, Oracle>()
+        where
+            F: super::SqrtField + PrimeField<Repr = [u8; 32]>,
+            Oracle: PrimeField<Repr = [u8; 32]>,
+        {
+            // In canonical integer form, -1 is exactly the modulus minus one.
+            let exponent =
+                (BigUint::from_bytes_le(&(-F::ONE).to_repr()) >> (F::S + 1)).to_u64_digits();
+            let inputs = [
+                F::ZERO,
+                F::ONE,
+                -F::ONE,
+                F::MULTIPLICATIVE_GENERATOR,
+                F::ROOT_OF_UNITY,
+                F::from(37),
+            ];
+            for x in inputs {
+                assert_eq!(x.pow_by_t_minus1_over2(), x.pow_vartime(&exponent));
+                let ox = Oracle::from_repr(x.to_repr()).unwrap();
+                let (square, root) = x.sqrt_alt();
+                let (expected_square, expected_root) = ox.sqrt_alt();
+                assert_eq!(bool::from(square), bool::from(expected_square));
+                assert_eq!(root.to_repr(), expected_root.to_repr());
+                for y in inputs {
+                    let oy = Oracle::from_repr(y.to_repr()).unwrap();
+                    let (square, root) = F::sqrt_ratio(&x, &y);
+                    let (expected_square, expected_root) = Oracle::sqrt_ratio(&ox, &oy);
+                    assert_eq!(bool::from(square), bool::from(expected_square));
+                    assert_eq!(root.to_repr(), expected_root.to_repr());
+                }
+            }
+        }
+        check::<Fp, pasta_curves::Fp>();
+        check::<Fq, pasta_curves::Fq>();
     }
 
     #[test]
@@ -205,7 +279,7 @@ mod tests {
     #[test]
     fn non_square_roots_match_the_definition() {
         // Non-squares take the odd-accumulator path of the halving step.
-        let t = super::SqrtTables::<Fq>::new(0x0011_6A9E, 1206);
+        let t = super::SqrtTables::<Fq>::new();
         let root_of_unity = <Fq as ff::PrimeField>::ROOT_OF_UNITY;
         let mut non_squares = 0;
         for v in 2..200u64 {
@@ -223,7 +297,7 @@ mod tests {
 
     #[test]
     fn sqrt_ratio_cases() {
-        let t = super::SqrtTables::<Fp>::new(0x11BE, 1098);
+        let t = super::SqrtTables::<Fp>::new();
         let num = Fp::from(9u64);
         let div = Fp::from(4u64);
         let (sq, r) = t.sqrt_ratio(&num, &div);

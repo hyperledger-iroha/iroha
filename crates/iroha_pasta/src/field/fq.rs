@@ -60,14 +60,6 @@ const INV_EXP: [u64; 4] = [
     0x4000000000000000,
 ];
 
-/// `(t - 1) / 2` where `q - 1 = t * 2^32`.
-const T_MINUS1_OVER2: [u64; 4] = [
-    0x04ca546ec6237590,
-    0x0000000011234c7e,
-    0,
-    0x0000000020000000,
-];
-
 /// `(q + 1) / 2`.
 const TWO_INV_RAW: [u64; 4] = [
     0xc623759080000001,
@@ -108,8 +100,42 @@ const ZETA_RAW: [u64; 4] = [
     0x06819a58283e528e,
 ];
 
-/// Perfect-hash parameters `(xor, modulus)` of the square-root tables.
-const SQRT_HASH: (u32, usize) = (0x116A9E, 1206);
+/// Multiplier mapping the 256 subgroup residues to distinct ten-bit indices.
+const SQRT_HASH_MULTIPLIER: u32 = 0x4b7f_dd31;
+
+/// Addition chain for `(t - 1) / 2`, where the modulus minus one is `t * 2^32`.
+/// Squaring `n` times and multiplying by `p_k` extends the exponent by `e * 2^n + k`.
+fn sqrt_power(x: &Fq) -> Fq {
+    use super::sqrt::square_n;
+
+    let p1 = *x;
+    let p2 = p1.square();
+    let p3 = p2 * p1;
+    let p7 = p3.square() * p1;
+    let p9 = p7 * p2;
+    let p11 = p9 * p2;
+    let p13 = p11 * p2;
+    let a = square_n(p1, 129) * p1;
+    let a = square_n(a, 7) * p9;
+    let a = square_n(a, 7) * p13;
+    let a = square_n(a, 4) * p3;
+    let a = square_n(a, 6) * p7;
+    let a = square_n(a, 3) * p7;
+    let a = square_n(a, 10) * p9;
+    let a = square_n(a, 4) * p9;
+    let a = square_n(a, 5) * p9;
+    let a = square_n(a, 5) * p9;
+    let a = square_n(a, 3) * p9;
+    let a = square_n(a, 4) * p11;
+    let a = square_n(a, 4) * p11;
+    let a = square_n(a, 5) * p3;
+    let a = square_n(a, 4) * p1;
+    let a = square_n(a, 5) * p3;
+    let a = square_n(a, 4) * p7;
+    let a = square_n(a, 5) * p11;
+    let a = square_n(a, 3) * p1;
+    square_n(a, 4)
+}
 
 super::impl_pasta_field!(Fq);
 

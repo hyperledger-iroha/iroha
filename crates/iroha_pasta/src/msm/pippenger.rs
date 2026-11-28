@@ -6,10 +6,10 @@
 //! `[-2^(c-1), 2^(c-1)]`, so each window needs only `2^(c-1)` buckets and a
 //! negative digit adds the negated base. Buckets are affine; a point is added
 //! to its bucket through a queue that is flushed in batches of up to 1024
-//! additions sharing one field inversion. A bucket already queued in the
-//! current batch receives further points in a projective overflow
-//! accumulator, so adversarial inputs (every scalar equal, repeated bases)
-//! never serialise the batch. Equal-point and opposite-point additions inside
+//! additions sharing one field inversion. Larger queues can park one collision
+//! per bucket for the next batch. Additional collisions accumulate in a
+//! projective overflow point, so adversarial inputs (every scalar equal,
+//! repeated bases) never serialise the batch. Equal-point and opposite-point additions inside
 //! a batch are detected and handled as doublings and cancellations.
 //!
 //! Each window's buckets are reduced by summation by parts, and the windows are
@@ -52,6 +52,10 @@ use zeroize::Zeroizing;
 mod reduction_tests;
 
 #[cfg(test)]
+#[path = "parked_tests.rs"]
+mod parked_tests;
+
+#[cfg(test)]
 #[path = "gap_tests.rs"]
 mod gap_tests;
 
@@ -89,12 +93,30 @@ pub(crate) const BUCKET_BYTES: usize = 64 + 96 + 1 + 1 + 4;
 /// Largest number of additions sharing one inversion.
 const MAX_BATCH: usize = 1024;
 
+/// The top bit records the second queued addition in a bucket's current epoch.
+const PARKED_MARK: u32 = 1 << 31;
+const EPOCH_MASK: u32 = PARKED_MARK - 1;
+/// Active queue indices, sign, addition kind, denominator, and inversion prefix.
+const ENTRY_BYTES: usize = 2 * size_of::<u32>() + size_of::<bool>() + size_of::<Kind>() + 2 * 32;
+/// Reserve up to one parked collision per two active additions. The combined
+/// storage fits the original affine queue; small queues keep their original
+/// capacity since collisions already spill cheaply at those sizes.
+fn queue_capacities(count: usize, original: usize) -> (usize, usize) {
+    if count < 64 {
+        return (original, 0);
+    }
+    let active = original * ENTRY_BYTES / (ENTRY_BYTES + size_of::<[u32; 3]>() / 2);
+    (active, active / 2)
+}
+
 /// Heap storage of a bucket set, including the bounded addition queue and
 /// batch-inversion buffers. Pasta projective points occupy 96 bytes.
 pub(crate) fn bucket_bytes(count: usize) -> Option<usize> {
     let cap = (count / 4).clamp(16, MAX_BATCH);
-    let queued =
-        cap.checked_mul(2 * size_of::<u32>() + size_of::<bool>() + size_of::<Kind>() + 2 * 32)?;
+    let (active, parked) = queue_capacities(count, cap);
+    let queued = active
+        .checked_mul(ENTRY_BYTES)?
+        .checked_add(parked.checked_mul(size_of::<[u32; 3]>())?)?;
     count.checked_mul(BUCKET_BYTES)?.checked_add(queued)
 }
 
@@ -270,6 +292,9 @@ pub(crate) struct Buckets<'a, C: PastaCurve, const SECRET: bool> {
     overflow: Vec<C>,
     overflow_used: Vec<bool>,
     cap: usize,
+    // Only the first collision in a bucket can park in a given epoch.
+    park_limit: usize,
+    parked: Vec<[u32; 3]>,
     queue_bucket: Vec<u32>,
     queue_point: Vec<u32>,
     queue_neg: Vec<bool>,
@@ -286,6 +311,7 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         // conservative reservation. Release libraries have no override or knob.
         #[cfg(test)]
         let cap = batch_cap_experiment::cap(count, cap);
+        let (cap, park_limit) = queue_capacities(count, cap);
         Self {
             bases,
             x: vec![C::Base::ZERO; count],
@@ -296,6 +322,8 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
             overflow: vec![C::identity(); count],
             overflow_used: vec![false; count],
             cap,
+            park_limit,
+            parked: Vec::with_capacity(park_limit),
             queue_bucket: Vec::with_capacity(cap),
             queue_point: Vec::with_capacity(cap),
             queue_neg: Vec::with_capacity(cap),
@@ -316,8 +344,13 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
             self.has[b] = true;
             return;
         }
-        if self.mark[b] == self.epoch {
-            // Already queued in this batch: accumulate projectively.
+        if self.mark[b] & EPOCH_MASK == self.epoch {
+            if self.mark[b] == self.epoch && self.parked.len() < self.park_limit {
+                self.mark[b] |= PARKED_MARK;
+                self.parked.push([b as u32, p as u32, u32::from(neg)]);
+                return;
+            }
+            // A further collision or full parked list accumulates projectively.
             let signed = if neg { -*base } else { *base };
             // A newly used overflow is the identity. Construct its first point
             // directly; subsequent complete additions keep the same group sum.
@@ -335,12 +368,21 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         self.queue_point.push(p as u32);
         self.queue_neg.push(neg);
         if self.queue_bucket.len() == self.cap {
-            self.flush();
+            self.flush_batch();
         }
     }
 
     /// Applies every queued addition with one shared inversion.
     pub(crate) fn flush(&mut self) {
+        self.flush_batch();
+        if !self.queue_bucket.is_empty() {
+            self.flush_batch();
+        }
+    }
+
+    /// Apply one addition per queued bucket, then begin the next epoch with
+    /// the colliding additions that were parked during this one.
+    fn flush_batch(&mut self) {
         let m = self.queue_bucket.len();
         if m == 0 {
             return;
@@ -401,11 +443,16 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         self.queue_bucket.clear();
         self.queue_point.clear();
         self.queue_neg.clear();
-        if self.epoch == u32::MAX {
+        if self.epoch == EPOCH_MASK {
             self.mark.iter_mut().for_each(|m| *m = 0);
             self.epoch = 1;
         } else {
             self.epoch += 1;
+        }
+        // All parked bucket IDs are distinct. Fewer than cap roll into this
+        // empty epoch, so reinsertion cannot flush or park recursively.
+        while let Some([b, p, negative]) = self.parked.pop() {
+            self.insert(b as usize, p as usize, negative != 0);
         }
     }
 
@@ -472,6 +519,7 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
             self.overflow_used.iter_mut().zeroize();
             // The queues are empty after a flush; `Vec::zeroize` also clears
             // entries left by an unwind and zeroes the spare capacity.
+            self.parked.zeroize();
             self.queue_bucket.zeroize();
             self.queue_point.zeroize();
             self.queue_neg.zeroize();
@@ -1004,6 +1052,7 @@ mod tests {
                 + bytes(&buckets.mark)
                 + bytes(&buckets.overflow)
                 + bytes(&buckets.overflow_used)
+                + bytes(&buckets.parked)
                 + bytes(&buckets.queue_bucket)
                 + bytes(&buckets.queue_point)
                 + bytes(&buckets.queue_neg)

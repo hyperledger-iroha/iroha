@@ -27,7 +27,19 @@ fn bound_edges<F: PastaField>() {
             assert_eq!(recovered, power - F::ONE, "bits={bits}, window={width}");
         }
     }
-    assert!(BoundedSecretScalars::new(&[-F::ONE], 255, None).is_ok());
+    let mut full = vec![F::ZERO; 2051];
+    full[2050] = -F::ONE;
+    assert!(BoundedSecretScalars::new(&full, 255, None).is_ok());
+    assert!(matches!(
+        BoundedSecretScalars::new(&full, 254, None),
+        Err(MsmError::ScalarBound)
+    ));
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        BoundedSecretScalars::new(&full, 255, Some(&cancelled)),
+        Err(MsmError::Cancelled)
+    ));
     assert!(matches!(
         BoundedSecretScalars::<F>::new(&[], 256, None),
         Err(MsmError::ScalarBound)

@@ -67,14 +67,18 @@ fn bucket_parity<C: PastaCurve, const SECRET: bool>() {
         buckets.insert(103, 0, false);
         let mut expected = C::ScalarExt::ZERO;
         for position in positions {
-            for (base, negative) in [(0, false), (2, false), (1, false)] {
+            // The parked -2G cancels the doubled affine point; the fourth
+            // addition still puts 2G in the projective overflow.
+            for (base, negative) in [(0, false), (0, false), (3, false), (1, false)] {
                 buckets.insert(position + 7, base, negative);
                 expected += scalars[base] * C::ScalarExt::from(position as u64 + 1);
             }
             buckets.flush();
             assert!(!buckets.has[position + 7]);
             assert!(buckets.overflow_used[position + 7]);
-            for (base, negative) in [(1, true), (4, false), (3, false), (0, false)] {
+            // Cancel the active affine pair, insert the parked G, and send
+            // -2G then G to the overflow so it passes through the identity.
+            for (base, negative) in [(1, true), (1, false), (0, false), (3, false), (0, false)] {
                 buckets.insert(position + 7, base, negative);
                 let value = if negative {
                     -scalars[base]

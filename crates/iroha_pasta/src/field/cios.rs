@@ -7,6 +7,8 @@
 //! - the multiplication is the "no-carry" variant of coarsely integrated
 //!   operand scanning (CIOS). It is valid because the top modulus limb `2^62` is
 //!   below `(2^64 - 1) / 2 - 1`;
+//! - squaring integrates each diagonal and doubled upper-triangular row into the
+//!   same four Montgomery rounds, using ten word products for the square;
 //! - the reduction skips the zero limb and replaces the product with the top
 //!   limb by a shift.
 //!
@@ -181,6 +183,27 @@ pub const fn neg(a: &[u64; 4], p: &Modulus) -> [u64; 4] {
     [d0 & mask, d1 & mask, d2 & mask, d3 & mask]
 }
 
+/// One CIOS round in radix W = 2^64. It adds one scaled row to t, then
+/// eliminates its low limb by adding a multiple of the modulus. Callers
+/// bound the resulting quotient by 2^256 so the high carry fits one word.
+#[inline(always)]
+const fn cios_round(t: [u64; 4], a: &[u64; 4], word: u64, p: &Modulus) -> [u64; 4] {
+    // Limb 0: t0 + a0 * word, then choose k so the low word cancels.
+    let (t0, ca) = mac(t[0], a[0], word, 0);
+    let k = t0.wrapping_mul(p.inv);
+    let (_, cc) = mac(t0, k, p.m[0], 0);
+    // Limb 1.
+    let (x, ca) = mac(t[1], a[1], word, ca);
+    let (y, cc) = mac(x, k, p.m[1], cc);
+    // Limb 2: the modulus limb is zero.
+    let (x, ca) = mac(t[2], a[2], word, ca);
+    let (z, cc) = adc(x, cc, 0);
+    // Limb 3: the modulus limb is 2^62, so k * m3 = k << 62.
+    let (x, ca) = mac(t[3], a[3], word, ca);
+    let r = (x as u128) + ((k as u128) << 62) + (cc as u128);
+    [y, z, r as u64, ((r >> 64) as u64).wrapping_add(ca)]
+}
+
 /// Montgomery multiplication `a * b * 2^-256 mod m` of canonical operands.
 ///
 /// No-carry CIOS for moduli `[m0, m1, 0, 2^62]`: per outer round one limb of
@@ -195,25 +218,7 @@ pub const fn mont_mul(a: &[u64; 4], b: &[u64; 4], p: &Modulus) -> [u64; 4] {
     let mut t = [0u64; 4];
     let mut i = 0;
     while i < 4 {
-        let bi = b[i];
-        // Limb 0: t0 + a0 * bi, then choose k so the low word cancels.
-        let (t0, ca) = mac(t[0], a[0], bi, 0);
-        let k = t0.wrapping_mul(p.inv);
-        let (_, cc) = mac(t0, k, p.m[0], 0);
-        // Limb 1.
-        let (x, ca) = mac(t[1], a[1], bi, ca);
-        let (y, cc) = mac(x, k, p.m[1], cc);
-        // Limb 2: the modulus limb is zero.
-        let (x, ca) = mac(t[2], a[2], bi, ca);
-        let (z, cc) = adc(x, cc, 0);
-        // Limb 3: the modulus limb is 2^62, so k * m3 = k << 62.
-        let (x, ca) = mac(t[3], a[3], bi, ca);
-        let r = (x as u128) + ((k as u128) << 62) + (cc as u128);
-        t[0] = y;
-        t[1] = z;
-        t[2] = r as u64;
-        // No-carry condition: this sum fits one word.
-        t[3] = ((r >> 64) as u64).wrapping_add(ca);
+        t = cios_round(t, a, b[i], p);
         i += 1;
     }
     reduce_once(t, p)
@@ -259,8 +264,7 @@ pub const fn mont_reduce(r: [u64; 8], p: &Modulus) -> [u64; 4] {
 
 /// Full 512-bit square of a 256-bit value (10 word products instead of 16).
 ///
-/// Test-only reference: squaring through this and [`mont_reduce`] measured
-/// slower than [`mont_mul`], so [`mont_square`] does not use it.
+/// Independent wide-product reference for testing the integrated square.
 #[cfg(test)]
 #[inline(always)]
 pub const fn square_wide(a: &[u64; 4]) -> [u64; 8] {
@@ -319,16 +323,23 @@ pub const fn mul_wide(a: &[u64; 4], b: &[u64; 4]) -> [u64; 8] {
     [r0, r1, r2, r3, r4, r5, r6, r7]
 }
 
-/// Montgomery squaring `a^2 * 2^-256 mod m` of a canonical operand.
+/// Montgomery squaring of a canonical field element.
 ///
-/// Uses the no-carry CIOS multiplication: on the M1 Ultra it measured faster
-/// (about 21 ns latency) than a 10-product wide square followed by a separate
-/// reduction (about 22.8 ns), because the merged reduction avoids the long
-/// carry chain.
+/// For row i, the coefficient of a[i] contains its diagonal limb and twice
+/// the limbs above it. This counts each cross product once and uses ten
+/// word products for the square. Each row is at most 2a. In radix W = 2^64
+/// each quotient stays below 3p since t + row·a[i] + k·p < W·3p and 3p < R.
+/// The final quotient is (a² + m·p)/R with m < R, so one subtraction suffices.
 #[inline(always)]
 pub const fn mont_square(a: &[u64; 4], p: &Modulus) -> [u64; 4] {
     debug_assert!(lt_modulus(a, p), "mont_square operand must be canonical");
-    mont_mul(a, a, p)
+    let [a0, a1, a2, a3] = *a;
+    let top = (a3 << 1) | (a2 >> 63);
+    let t = cios_round([0; 4], &[a0, a1 << 1, (a2 << 1) | (a1 >> 63), top], a0, p);
+    let t = cios_round(t, &[0, a1, a2 << 1, top], a1, p);
+    let t = cios_round(t, &[0, 0, a2, a3 << 1], a2, p);
+    let t = cios_round(t, &[0, 0, 0, a3], a3, p);
+    reduce_once(t, p)
 }
 
 /// Converts a canonical integer into Montgomery form.
@@ -498,6 +509,28 @@ mod tests {
                     let b = to_mont(&[word, 0, 0, 0], &p);
                     assert_eq!(mul_u64(&a, word, &p), mont_mul(&a, &b, &p));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn symmetric_square_matches_wide_reduction_across_limb_carries() {
+        let one = [1, 0, 0, 0];
+        for p in [P, Q] {
+            let last = sub_raw(&p.m, &one);
+            let check = |a: [u64; 4]| {
+                let result = mont_square(&a, &p);
+                assert!(lt_modulus(&result, &p));
+                assert_eq!(result, mont_reduce(square_wide(&a), &p));
+                assert_eq!(result, mont_mul(&a, &a, &p));
+            };
+            check(last);
+            for bit in 0..=254 {
+                let mut power = [0; 4];
+                power[bit / 64] = 1 << (bit % 64);
+                check(power);
+                check(sub_raw(&power, &one));
+                check(sub_raw(&last, &power));
             }
         }
     }

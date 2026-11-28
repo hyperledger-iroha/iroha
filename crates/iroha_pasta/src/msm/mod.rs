@@ -10,8 +10,8 @@
 //!   the shared bucket inversion is constant time, and digit and bucket
 //!   buffers are zeroised. See [`pippenger`] for the remaining timing posture.
 //! - [`msm_secret_bounded_cancellable`]: the same secret kernel with a bound
-//!   chosen from public protocol data and checked against every scalar before
-//!   planning. It does not choose a width from witness values.
+//!   chosen from public protocol data. Bounds narrower than the field are
+//!   checked against every scalar before planning.
 //! - [`msm_secret_columns_cancellable`]: one secret MSM per column over shared
 //!   bases, run as one admitted batch of window-range claims across all
 //!   workers; [`msm_secret_bounded_columns_cancellable`] does the same with
@@ -528,9 +528,10 @@ fn run_batch<C: PastaCurve>(
 
 /// Borrowed secret scalars checked against one independently chosen public bit bound.
 ///
-/// Construction checks every scalar before any small-input, zero-width or scratch
-/// fallback can run. It never chooses a width from the values or exposes a private
-/// maximum. Callers must derive `bits` from public protocol data, not a witness.
+/// Construction checks every narrower bound before any small-input, zero-width
+/// or scratch fallback can run. The sealed Pasta field type guarantees its
+/// full-width bound. Callers must derive `bits` from public protocol data.
+/// A witness never chooses its own width.
 /// This type proves only the numerical bound; it authenticates no protocol data.
 /// The borrow prevents mutation of the checked scalars while the proof is held.
 pub struct BoundedSecretScalars<'a, F: PastaField> {
@@ -540,6 +541,7 @@ pub struct BoundedSecretScalars<'a, F: PastaField> {
 
 impl<'a, F: PastaField> BoundedSecretScalars<'a, F> {
     /// Check all canonical integers are below `2^bits`, with no allocation.
+    /// At the field width the canonical representatives already satisfy the bound.
     /// Zero bits admit only zero. No scalar-dependent early exit or bit-length
     /// scan is used; stack limbs and the accumulated overflow mask are cleared.
     ///
@@ -554,6 +556,9 @@ impl<'a, F: PastaField> BoundedSecretScalars<'a, F> {
         CancellationToken::checkpoint(cancellation)?;
         if bits > 255 {
             return Err(MsmError::ScalarBound);
+        }
+        if bits >= F::NUM_BITS as usize {
+            return Ok(Self { scalars, bits });
         }
         let masks: [u64; 4] = core::array::from_fn(|index| {
             let kept = bits.saturating_sub(index * 64).min(64);

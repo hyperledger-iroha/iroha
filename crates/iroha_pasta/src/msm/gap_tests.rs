@@ -70,9 +70,11 @@ fn density_boundary<C: PastaCurve, const SECRET: bool>() {
     for start in [0, 7] {
         let mut buckets = Buckets::<C, SECRET>::new(&bases, start + 97);
         buckets.insert(start + 96, 0, false);
-        // The top bucket has no affine value, but its overflow is 2G.
+        // The two active Gs double, their parked -2G cancels them, and
+        // the fourth insertion leaves exactly 2G in projective overflow.
         buckets.insert(start + 95, 0, false);
-        buckets.insert(start + 95, 1, false);
+        buckets.insert(start + 95, 0, false);
+        buckets.insert(start + 95, 2, true);
         buckets.insert(start + 95, 2, false);
         // This completely cancelled bucket is not occupied.
         buckets.insert(start + 63, 0, false);
