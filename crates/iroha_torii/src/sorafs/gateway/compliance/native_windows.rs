@@ -4,6 +4,14 @@ use super::*;
 
 impl GatewayComplianceStore for FileGatewayComplianceStore {
     fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
+        Ok(Box::new(self.acquire_file_lease()?))
+    }
+}
+
+impl FileGatewayComplianceStore {
+    fn acquire_file_lease(
+        &self,
+    ) -> Result<FileGatewayComplianceStoreLease, GatewayComplianceError> {
         self.directory
             .revalidate()
             .map_err(|error| persistence_io("revalidate checkpoint directory", &error))?;
@@ -34,7 +42,7 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
             test_hook: Arc::clone(&self.test_hook),
         };
         lease.validate_custody()?;
-        Ok(Box::new(lease))
+        Ok(lease)
     }
 }
 
@@ -254,6 +262,31 @@ mod tests {
     }
 
     #[test]
+    fn native_checkpoint_refuses_aliased_lock_before_reading_absent_checkpoint() {
+        let (_temporary, path) = fixture();
+        let store = FileGatewayComplianceStore::new(path.clone()).unwrap();
+        let lease = store.acquire_file_lease().unwrap();
+        lease.validate_custody().unwrap();
+        assert_eq!(
+            lease.read_current().unwrap().generation,
+            GatewayComplianceStoreGeneration::Absent
+        );
+
+        let alias = path.with_file_name("second-lock-name");
+        fs::hard_link(checkpoint_lock_path(&path).unwrap(), &alias).unwrap();
+        assert!(matches!(
+            lease.validate_custody(),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
+        assert!(matches!(
+            lease.read_current(),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
+        assert!(!path.exists());
+        fs::remove_file(alias).unwrap();
+    }
+
+    #[test]
     fn native_checkpoint_rejects_lock_acl_and_new_hardlinks() {
         let (_temporary, path) = fixture();
         let store = FileGatewayComplianceStore::new(path.clone()).unwrap();
@@ -299,7 +332,14 @@ mod tests {
             Err(GatewayComplianceError::Persistence(_))
         ));
         change_everyone_access(&path, None);
-        change_everyone_access(path.parent().unwrap(), Some("W"));
+        let parent = path.parent().unwrap();
+        validate_checkpoint_parent(parent).unwrap();
+        change_everyone_access(parent, Some("W"));
+        assert!(matches!(
+            validate_checkpoint_parent(parent),
+            Err(GatewayComplianceError::Persistence(message))
+                if message.starts_with("validate checkpoint directory custody:")
+        ));
         assert!(matches!(
             lease.load(),
             Err(GatewayComplianceError::Persistence(_))
