@@ -982,6 +982,35 @@ Witness cells, constraints and results matched the reference for both curves. Ch
 signed tapes took 171.8 → 37.0 ms median CPU per installation.
 The candidate passed 382 active wallet tests and all four signed-original checks. The full-wallet measurements use software fixture signing.
 
+**Primary opening generator folds.** The public fold now evaluates a double and its first signed addition
+together. For an accumulator P and addend Q, it computes the x coordinate of T = P + Q, then adds P using
+the first slope and the x coordinates of P and T. The cached first fold also represents the two GLV components
+jointly using signed rotations of P and P − φ(P), with φ the Pasta endomorphism. Both paths use the existing
+complete group formulas for exceptional inputs. The retained first-fold table has the same size.
+
+Four pairs per cohort compared signed revisions `e8091736b6` and `422ae8f2b5` on the M4 Max with the
+signed unmasked 968f bundle and fresh proof entropy. Each process performed two independent installations,
+two Bootstraps, one Load and the two transfers, including both recipients’ verification of unseen 10,231-byte
+Payments and final balances. The host also served other workloads. Baseline ran or launched first in pairs
+1 and 4. The table shows arithmetic means over all four pairs.
+
+| Full wallet | Elapsed seconds, baseline → candidate | Elapsed saved | Process CPU seconds, baseline → candidate | CPU saved | Faster elapsed pairs |
+|---|---:|---:|---:|---:|---:|
+| Sequential, six workers | 214.1042 → 226.7875 | -5.92% | 267.328 → 269.700 | -0.89% | 3/4 |
+| Simultaneous, three workers per version | 460.8165 → 454.6622 | 1.34% | 274.923 → 270.345 | 1.67% | 4/4 |
+
+| By pair, seconds (baseline / candidate) | Pair 1 | Pair 2 | Pair 3 | Pair 4 |
+|---|---:|---:|---:|---:|
+| Sequential elapsed | 168.432 / 167.121 | 237.976 / 316.301 | 217.373 / 198.428 | 232.636 / 225.300 |
+| Sequential CPU | 252.730 / 266.028 | 267.077 / 265.265 | 273.792 / 273.993 | 275.712 / 273.512 |
+| Simultaneous elapsed | 278.501 / 276.783 | 245.141 / 235.304 | 264.498 / 263.740 | 1055.126 / 1042.822 |
+| Simultaneous CPU | 261.286 / 258.133 | 263.222 / 256.691 | 278.142 / 274.179 | 297.042 / 292.376 |
+
+In the sequential comparison, the candidate used 2.372 more CPU-seconds on average. Pair 2 added
+78.325 s of elapsed time while using 1.811 fewer CPU-seconds. In the simultaneous comparison,
+the candidate was faster in all four pairs and saved 4.578 CPU-seconds on average. The slowest
+simultaneous pair took over 1,000 s for both versions. All pairs are included.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
