@@ -534,3 +534,27 @@ jobs:
           path: target/platform-consumers
           if-no-files-found: error
           retention-days: 14
+
+  # Windows CI test branch only: patch 03 also changes the packed archive's Unix code.
+  unix-packed-archive:
+    name: Unix packed archive tests (test branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.99.1
+          rustflags: ""
+      - name: Exercise packed archive publication and retained readers on Linux
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_core --lib query::native_context_archive::packed::tests:: -- --nocapture

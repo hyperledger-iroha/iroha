@@ -600,6 +600,7 @@ fn execute(
 
 #[test]
 #[ignore = "owns four actual validators through fresh dedicated fee target, genuine Send97/fee3 and same-store restart; explicit controller and full admitted catalog required"]
+#[cfg(unix)]
 fn execute_four_validator_fee_continuation() -> Result<()> {
     init_instruction_registry();
     let root = PathBuf::from(
