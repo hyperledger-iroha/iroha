@@ -863,6 +863,24 @@ table preparation for both wallets. Both recipients independently verified their
 | Complete primary IPA | 12.935 → 12.397 s | +4.16% |
 | Complete secondary IPA | 5.977 → 5.611 s | +6.13% |
 
+**Sequential slowdown and arithmetic follow-up.** In the four sequential pairs above, time outside the two-transfer
+exchange rose from 23.036 to 26.869 s. The two installations accounted for 1.028 s of that increase. Bootstrap finalizations accounted
+for another 1.257 s and Load finalization for 1.254 s. From the first Send through final Receive, elapsed time
+fell from 50.678 to 48.173 s. Host load varied across the pairs.
+
+Each new wallet still derives and authenticates its own Pallas and Vesta generators. For groups of 32 public
+indices, Montgomery's trick inverts the 64 simplified SWU denominators together. The map then takes square
+roots in affine coordinates and applies the prescribed sign rule. The P-256 witness also reuses the tangent
+or chord computed for each point and extracts range-check chunks directly from the integer's limbs.
+For both Pasta primes, canonical field operands satisfy `−p < a − b < p` with `p < 2²⁵⁵`.
+The high bit of the 256-bit difference therefore selects the modular correction after a single carry chain.
+
+A separate six-worker baseline run sampled thread stacks every 10 ms. Of 207,283 samples that ended in
+active work, 33.1% were in multiscalar multiplication, 18.8% in generator folds and 16.8% in matrix work.
+The stack capture and heap profiling were disabled in all timings below. At full wallet dimensions,
+all 393,220 compressed generator encodings and both signed manifest digests matched the scalar implementation.
+Deriving one full generator set used 10.433 CPU-seconds with the scalar map and 9.103 with the batch map.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
