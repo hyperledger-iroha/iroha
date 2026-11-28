@@ -1037,6 +1037,56 @@ all four cases. The wallet suite passed 382 active tests and all four signed-ori
 | Pallas, cold | 3.840 → 2.909 | 3.688 → 3.274 |
 | Pallas, warm | 3.782 → 2.506 | 3.471 → 2.938 |
 
+**Primary opening and wallet follow-up.** Signed revisions `e8091736b6` (baseline) and `406118e61f`
+(candidate) ran the signed unmasked 968f bundle on an Apple M4 Max. Each fresh process installed parameters
+independently for two wallets, bootstrapped both, loaded 100, sent 10 out and back and verified both unseen
+10,231-byte Payments. The fixture checked final balances and credit roots with software signing and fresh
+proof entropy.
+
+The candidate also includes the fused public double-and-add and joint GLV first fold measured above. In
+isolated comparisons, parking the first eligible bucket collision for the next affine batch reduced CPU in
+30/32 matched kernel pairs. Primary Vesta L/R sums used 10.23% less CPU with three workers and 7.64% less with
+six. The triangular four-limb Montgomery square uses ten word products for the square and interleaves
+reduction. Its isolated CPU savings ranged from 11.25% to 31.22% across both fields and one or eight
+independent inputs (32 pairs). Fixed square-root exponents and direct Montgomery-word table keys reduced
+public generator derivation CPU by 6.86% on Pallas and 2.65% on Vesta (eight pairs). The full-width scalar
+bound follows from the field representation, eliminating a scan over each 255-bit row (99.99% less validation
+CPU across eight pairs).
+
+The sequential comparison ran six workers per process. The simultaneous comparison ran both versions together
+with three workers each. Pair order was mirrored in the second sequential block. All 12 predeclared pairs are
+included. Times are baseline / candidate. Savings use arithmetic means and the counts show faster candidate
+pairs.
+
+| Full wallet | Mean elapsed (s) | Elapsed saved (pairs) | Mean process CPU (s) | CPU saved (pairs) |
+|---|---:|---:|---:|---:|
+| Sequential, pairs 1–4 | 104.647 / 107.369 | -2.60% (1/4) | 247.274 / 229.647 | 7.13% (4/4) |
+| Sequential, pairs 5–8 | 111.140 / 109.935 | 1.08% (3/4) | 239.320 / 233.604 | 2.39% (3/4) |
+| Sequential, all eight | 107.893 / 108.652 | -0.70% (4/8) | 243.297 / 231.625 | 4.80% (7/8) |
+| Simultaneous, all four | 141.675 / 139.337 | 1.65% (4/4) | 235.139 / 223.373 | 5.00% (4/4) |
+
+| Pair | Sequential elapsed (s) | Sequential CPU (s) | Simultaneous elapsed (s) | Simultaneous CPU (s) |
+|---:|---:|---:|---:|---:|
+| 1 | 101.323 / 112.657 | 238.470 / 229.405 | 154.370 / 151.600 | 247.002 / 235.106 |
+| 2 | 104.488 / 105.040 | 245.402 / 234.543 | 142.924 / 140.730 | 238.809 / 227.007 |
+| 3 | 109.535 / 111.453 | 264.694 / 241.883 | 134.566 / 134.171 | 226.045 / 214.088 |
+| 4 | 103.240 / 100.326 | 240.529 / 212.756 | 134.839 / 130.848 | 228.700 / 217.292 |
+| 5 | 105.282 / 103.862 | 232.699 / 224.593 | — | — |
+| 6 | 110.660 / 110.326 | 240.574 / 231.939 | — | — |
+| 7 | 114.674 / 115.883 | 240.941 / 242.830 | — | — |
+| 8 | 113.943 / 109.668 | 243.068 / 235.053 | — | — |
+
+Mean one-minute host load during individual sequential runs ranged from 515 to 630 on 16 logical CPUs.
+
+Across the eight sequential pairs, time outside installation, the seven prepare/finalize intervals and both
+recipient verifications averaged 1.004 / 2.223 s. Nearly all of that difference occurred between installation
+and the first Bootstrap. That interval averaged 0.457 / 1.555 s and measured 0.108 / 11.002 s in pair 1. These
+estimates use the operation timestamps and include wallet enrollment setup and any scheduling delay.
+
+The candidate passed 202 Pasta tests, 382 wallet tests and four signed-original checks. The compiler fixture
+passed two JavaScript tests and 16 Rust admission tests. Its encoded contract bytes matched the previous
+fixture.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
