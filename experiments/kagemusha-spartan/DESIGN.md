@@ -864,8 +864,8 @@ table preparation for both wallets. Both recipients independently verified their
 | Complete secondary IPA | 5.977 → 5.611 s | +6.13% |
 
 **Sequential slowdown and arithmetic follow-up.** In the four sequential pairs above, time outside the two-transfer
-exchange rose from 23.036 to 26.869 s. The two installations accounted for 1.028 s of that increase. Bootstrap finalizations accounted
-for another 1.257 s and Load finalization for 1.254 s. From the first Send through final Receive, elapsed time
+exchange rose from 23.036 to 26.869 s. The two installations accounted for 1.028 s of that increase.
+Bootstrap finalizations accounted for another 1.257 s and Load finalization for 1.254 s. From the first Send through final Receive, elapsed time
 fell from 50.678 to 48.173 s. Host load varied across the pairs.
 
 Each new wallet still derives and authenticates its own Pallas and Vesta generators. For groups of 32 public
@@ -877,9 +877,42 @@ The high bit of the 256-bit difference therefore selects the modular correction 
 
 A separate six-worker baseline run sampled thread stacks every 10 ms. Of 207,283 samples that ended in
 active work, 33.1% were in multiscalar multiplication, 18.8% in generator folds and 16.8% in matrix work.
-The stack capture and heap profiling were disabled in all timings below. At full wallet dimensions,
+The paired full-wallet runs use the fixture clocks and operating-system counters. At full wallet dimensions,
 all 393,220 compressed generator encodings and both signed manifest digests matched the scalar implementation.
 Deriving one full generator set used 10.433 CPU-seconds with the scalar map and 9.103 with the batch map.
+
+Four pairs per cohort compared signed commits `dc415ed6bb` and `bc85468523` on the M4 Max using the same
+signed unmasked 968f bundle. The baseline ran or launched first in pairs 1 and 4. Every run started a fresh
+process, installed both wallets and verified both unseen 10,231-byte Payments. Wall time ends at the final Receive.
+
+| Full round trip | Mean elapsed, baseline → candidate | Elapsed saved | Mean process CPU, baseline → candidate | CPU saved | Faster pairs |
+|---|---:|---:|---:|---:|---:|
+| Sequential, six workers | 268.860 → 262.625 s | +2.32% | 356.289 → 324.183 s | +9.01% | 2/4 |
+| Simultaneous, three workers per version | 348.530 → 325.457 s | +6.62% | 356.895 → 326.090 s | +8.63% | 4/4 |
+
+| Measurement in seconds, baseline / candidate | Pair 1 | Pair 2 | Pair 3 | Pair 4 |
+|---|---:|---:|---:|---:|
+| Sequential, six workers, elapsed | 324.033 / 389.170 | 211.278 / 255.571 | 244.053 / 147.338 | 296.074 / 258.420 |
+| Sequential, six workers, CPU | 364.941 / 327.647 | 338.813 / 334.041 | 357.289 / 304.018 | 364.112 / 331.024 |
+| Simultaneous, three workers per version, elapsed | 423.272 / 401.498 | 263.225 / 248.193 | 260.388 / 232.261 | 447.235 / 419.875 |
+| Simultaneous, three workers per version, CPU | 364.638 / 333.521 | 346.929 / 317.093 | 341.414 / 306.461 | 374.598 / 347.286 |
+
+| Unprofiled six-worker stage | Mean elapsed, baseline → candidate |
+|---|---:|
+| Outside the transfer exchange, including installation and funding | 89.776 → 109.042 s |
+| Both installations | 12.189 → 22.837 s |
+| Both Bootstrap finalizations | 30.768 → 35.850 s |
+| Load finalization | 40.137 → 40.428 s |
+| First Send through final Receive | 179.084 → 153.583 s |
+| Both Receive finalizations | 101.252 → 74.410 s |
+
+The exchange saved 25.501 s per round trip. Time outside the exchange rose by 19.266 s.
+The largest installation difference was in the first pair, 11.198 → 53.375 s for the two installations together.
+Host load varied across runs. These are host measurements with software signing.
+
+At the signed dimensions, the four fixed-entropy openings reproduced every proof byte, the subsequent
+transcript challenges and the next blinding scalars. The full-wallet timings use fresh proof entropy each time.
+The candidate passed 378 active wallet tests and all four signed-original checks.
 
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
