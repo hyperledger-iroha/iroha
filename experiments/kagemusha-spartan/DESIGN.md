@@ -910,6 +910,25 @@ The exchange saved 25.501 s per round trip. Time outside the exchange rose by 19
 The largest installation difference was in the first pair, 11.198 → 53.375 s for the two installations together.
 Host load varied across runs. These are host measurements with software signing.
 
+Two additional six-worker profile pairs ran sequentially, reversing the order for the second pair.
+The full profiled runs took 296.409 / 176.759 s and 281.654 / 179.808 s (baseline / candidate).
+Values sum each stage across seven operations and average the two runs per version. The stage CPU estimates
+interpolate operating-system process samples at the recorded stage boundaries.
+
+| Profiled finalization stage | Mean elapsed, baseline → candidate | Mean sampled CPU, baseline → candidate |
+|---|---:|---:|
+| Primary proof | 80.375 → 45.925 s | 120.005 → 104.225 s |
+| Secondary proof | 37.290 → 25.160 s | 59.570 → 52.355 s |
+| Primary witness wiring | 31.625 → 20.435 s | 43.860 → 38.230 s |
+| Generator-claim folds | 16.425 → 10.655 s | 29.465 → 24.915 s |
+
+The opening timers below include both cold table preparations on the corresponding curve.
+
+| Profiled opening | Mean elapsed, baseline → candidate |
+|---|---:|
+| Primary (Vesta) | 38.389 → 18.339 s |
+| Secondary (Pallas) | 17.453 → 11.112 s |
+
 At the signed dimensions, the four fixed-entropy openings reproduced every proof byte, the subsequent
 transcript challenges and the next blinding scalars. The full-wallet timings use fresh proof entropy each time.
 The candidate passed 378 active wallet tests and all four signed-original checks.
