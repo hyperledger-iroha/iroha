@@ -213,6 +213,10 @@ mod written_witness_tests {
 /// `z = (w || io)` padded to `2^sz`.
 pub trait Rel<F: Scalar>: Sync {
     fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>);
+    /// One past the last row that can contain a matrix entry, by public layout.
+    fn constraint_extent(&self, shape: &Shape) -> usize {
+        1 << shape.sx
+    }
     /// The outer rounds are done: what only they read may go.
     fn outer_done(&mut self) {}
     fn m_table(&self, shape: &Shape, ex: &[F], ra: F, rb: F, rc: F) -> Vec<F>;

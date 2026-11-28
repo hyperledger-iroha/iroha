@@ -571,19 +571,19 @@ fn eval_lin<F: Field>(arrays: &[Array<F>], pi: &[usize], a: usize, lin: &Lin<F>,
     let (p, r) = (i >> rho, i & ((1 << rho) - 1));
     lin.iter()
         .map(|t| {
-            let v = match &t.src {
-                Src::One => F::ONE,
-                Src::Own(k) => arrays[a].values[*k][i],
+            let coef = t.coef[r];
+            match &t.src {
+                Src::One => coef,
+                Src::Own(k) => coef * arrays[a].values[*k][i],
                 Src::Link { array, cell, map } => match map[r] {
                     Some(rr) => {
                         let pp = if pi[arrays[*array].family] == 0 { 0 } else { p };
-                        arrays[*array].values[*cell][(pp << arrays[*array].rho) | rr]
+                        coef * arrays[*array].values[*cell][(pp << arrays[*array].rho) | rr]
                     }
                     None => F::ZERO,
                 },
                 Src::All { .. } => panic!("sum terms appear only in the sum row"),
-            };
-            t.coef[r] * v
+            }
         })
         .sum()
 }
@@ -3519,12 +3519,12 @@ impl<F: Scalar> UniformCircuit<F> {
         let plain = |lin: &Lin<F>| -> Vec<(Term<F>, Factor)> {
             lin.iter().map(|t| (t.clone(), Factor::One)).collect()
         };
-        let ones = |n: usize| Term {
-            src: Src::One,
+        let unit = |src, n: usize| Term {
+            src,
             coef: vec![F::ONE; n].into(),
         };
         let tuple_row = |n: usize, tid: u32, tuple: &[Lin<F>]| {
-            let mut b = vec![(ones(n), Factor::AlphaMinus(tid as u64 + 1))];
+            let mut b = vec![(unit(Src::One, n), Factor::AlphaMinus(tid as u64 + 1))];
             for (k, lin) in tuple.iter().enumerate() {
                 b.extend(lin.iter().map(|t| (t.clone(), Factor::NegBeta(k + 1))));
             }
@@ -3554,10 +3554,10 @@ impl<F: Scalar> UniformCircuit<F> {
                         src: Src::One,
                         coef: on.clone().into(),
                     },
-                    (None, None) => ones(n),
+                    (None, None) => unit(Src::One, n),
                 };
                 [
-                    plain(&own(first_cell + lj, n)),
+                    vec![(unit(Src::Own(first_cell + lj), n), Factor::One)],
                     tuple_row(n, *tid, tuple),
                     vec![(rhs, Factor::One)],
                 ]
@@ -3566,7 +3566,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 let (va, tid, wa) = self.tables[index];
                 let n = 1usize << self.arrays[wa].rho;
                 let ident: Vec<Option<usize>> = (0..n).map(Some).collect();
-                let mut b = vec![(ones(n), Factor::AlphaMinus(tid as u64 + 1))];
+                let mut b = vec![(unit(Src::One, n), Factor::AlphaMinus(tid as u64 + 1))];
                 for k in 0..self.arrays[va].cells() {
                     b.push((
                         Term {
@@ -3580,15 +3580,19 @@ impl<F: Scalar> UniformCircuit<F> {
                         Factor::NegBeta(k + 1),
                     ));
                 }
-                [plain(&own(1, n)), b, plain(&own(0, n))]
+                [
+                    vec![(unit(Src::Own(1), n), Factor::One)],
+                    b,
+                    vec![(unit(Src::Own(0), n), Factor::One)],
+                ]
             }
             RowKind::Export(index) => {
                 let (_, wa, tid, tuple) = &self.exports[index];
                 let n = 1usize << self.arrays[*wa].rho;
                 [
-                    plain(&own(1, n)),
+                    vec![(unit(Src::Own(1), n), Factor::One)],
                     tuple_row(n, *tid, tuple),
-                    plain(&own(0, n)),
+                    vec![(unit(Src::Own(0), n), Factor::One)],
                 ]
             }
             RowKind::Challenge(index) => self.ch_rows[index].2.clone(),
@@ -3644,55 +3648,79 @@ impl<F: Scalar> UniformCircuit<F> {
                 write_helper_batch(&mut slots, witness);
             }
         };
+        // Every instance uses the same public tuple widths and challenge powers.
+        // Resolve mask locations and table tags once per lookup.
+        let max_arity = self
+            .lookup_arrays
+            .iter()
+            .flat_map(|&(a, _, _)| self.arrays[a].lookups.iter().map(|(_, tuple)| tuple.len()))
+            .chain(self.tables.iter().map(|&(a, _, _)| self.arrays[a].cells()))
+            .chain(self.exports.iter().map(|(_, _, _, tuple)| tuple.len()))
+            .max()
+            .unwrap_or(0);
+        let powers: Vec<_> = std::iter::successors(Some(beta), |last| Some(*last * beta))
+            .take(max_arity)
+            .collect();
         for &(a, first_cell, _) in &self.lookup_arrays {
             let arr = &self.arrays[a];
             let rmask = (1usize << arr.rho) - 1;
+            let lookups: Vec<_> = arr
+                .lookups
+                .iter()
+                .enumerate()
+                .map(|(j, (tid, tuple))| {
+                    let block = self
+                        .lookup_mask_col
+                        .get(&(a, j))
+                        .map(|&(x, k)| &self.blocks[x][k]);
+                    let mask = self.lookup_mask.get(&(a, j));
+                    (
+                        alpha - F::from(u64::from(*tid) + 1),
+                        tuple,
+                        block,
+                        mask,
+                        &self.blocks[a][first_cell + j],
+                    )
+                })
+                .collect();
             for i in (0..1usize << self.m(a)).filter(|i| self.present(a, *i)) {
-                for (j, (tid, tuple)) in arr.lookups.iter().enumerate() {
-                    let mut f = F::from(*tid as u64 + 1);
-                    let mut power = beta;
-                    for lin in tuple {
-                        f += power * self.eval_w(w, a, lin, i);
-                        power *= beta;
-                    }
-                    let rhs = match self.lookup_mask_col.get(&(a, j)) {
-                        Some(&(x, k)) => w.cell(self.blocks[x][k].index(i)),
-                        None => self
-                            .lookup_mask
-                            .get(&(a, j))
-                            .map_or(F::ONE, |on| on[i & rmask]),
+                for &(tag, tuple, block, mask, target) in &lookups {
+                    let denominator = tuple.iter().zip(&powers).fold(tag, |d, (lin, power)| {
+                        d - *power * self.eval_w(w, a, lin, i)
+                    });
+                    let rhs = match block {
+                        Some(block) => w.cell(block.index(i)),
+                        None => mask.map_or(F::ONE, |on| on[i & rmask]),
                     };
-                    add(self.blocks[a][first_cell + j].index(i), alpha - f, rhs, w);
+                    add(target.index(i), denominator, rhs, w);
                 }
             }
         }
         for &(va, tid, wa) in &self.tables {
+            let tag = alpha - F::from(u64::from(tid) + 1);
+            let values = &self.blocks[va][..self.arrays[va].cells()];
             for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
-                let mut t = F::from(tid as u64 + 1);
-                let mut power = beta;
-                for k in 0..self.arrays[va].cells() {
-                    t += power * w.cell(self.blocks[va][k].index(i));
-                    power *= beta;
-                }
+                let denominator = values
+                    .iter()
+                    .zip(&powers)
+                    .fold(tag, |d, (block, power)| d - *power * w.cell(block.index(i)));
                 add(
                     self.blocks[wa][1].index(i),
-                    alpha - t,
+                    denominator,
                     w.cell(self.blocks[wa][0].index(i)),
                     w,
                 );
             }
         }
         for (_, wa, tid, tuple) in &self.exports {
+            let tag = alpha - F::from(u64::from(*tid) + 1);
             for i in (0..1usize << self.m(*wa)).filter(|i| self.present(*wa, *i)) {
-                let mut t = F::from(*tid as u64 + 1);
-                let mut power = beta;
-                for lin in tuple {
-                    t += power * self.eval_w(w, *wa, lin, i);
-                    power *= beta;
-                }
+                let denominator = tuple.iter().zip(&powers).fold(tag, |d, (lin, power)| {
+                    d - *power * self.eval_w(w, *wa, lin, i)
+                });
                 add(
                     self.blocks[*wa][1].index(i),
-                    alpha - t,
+                    denominator,
                     w.cell(self.blocks[*wa][0].index(i)),
                     w,
                 );
@@ -3940,15 +3968,19 @@ impl<F: Scalar> UniformCircuit<F> {
                 map.map_or(Some(r), |mp| mp[r])
             }
         };
-        let active: Vec<usize> = (0..1usize << rho)
-            .filter(|r| map_at(*r).is_some() && !term.coef[*r].is_zero_vartime())
-            .collect();
-        let constant_coef = active
-            .iter()
-            .all(|r| same_public(term.coef[*r], term.coef[active[0]]));
-        if active.len() <= 1 || constant_coef {
+        if rho == 0 {
             return (term, None);
         }
+        let active =
+            (0..1usize << rho).filter(|r| map_at(*r).is_some() && !term.coef[*r].is_zero_vartime());
+        let mut rest = active.clone();
+        let Some(first) = rest.next() else {
+            return (term, None);
+        };
+        if rest.all(|r| same_public(term.coef[r], term.coef[first])) {
+            return (term, None);
+        }
+        let active: Vec<_> = active.collect();
         if coef_pattern(&term.coef, &active).is_some() {
             return (term, None);
         }
@@ -6806,6 +6838,10 @@ impl<F: Scalar> UniformRel<'_, F> {
 }
 
 impl<F: Scalar> Rel<F> for UniformRel<'_, F> {
+    fn constraint_extent(&self, _shape: &Shape) -> usize {
+        self.c.constraints
+    }
+
     fn abc(&self, shape: &Shape, z: &[F]) -> (Vec<F>, Vec<F>, Vec<F>) {
         self.gather(shape, z)
     }
@@ -7488,35 +7524,37 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
 // Template building: linear combinations over sources, coefficients per r.
 
 pub(crate) fn compact<F: Field>(mut lin: Lin<F>) -> Lin<F> {
-    let nonzero = |t: &Term<F>| t.coef.iter().any(|c| !bool::from(c.is_zero()));
+    let nonzero = |t: &Term<F>| t.coef.iter().any(|c| !c.is_zero_vartime());
     if lin.len() <= 1 {
         lin.retain(nonzero);
         return lin;
     }
     let small = lin.len() <= 8;
-    let mut out: Vec<Term<F>> = Vec::with_capacity(lin.len());
-    let mut index: HashMap<Src, usize> = HashMap::new();
-    for t in lin {
-        // Most template sums have a handful of terms. Comparing their sources
-        // directly avoids allocating a table and cloning every link's row map.
+    let mut index = HashMap::new();
+    let mut used = 0;
+    for read in 0..lin.len() {
+        let (prefix, tail) = lin.split_at_mut(read);
+        let term = &tail[0];
         let prior = if small {
-            out.iter().position(|existing| existing.src == t.src)
+            prefix[..used].iter().position(|t| t.src == term.src)
         } else {
-            index.get(&t.src).copied()
+            index.get(&term.src).copied()
         };
         if let Some(k) = prior {
-            for (a, b) in out[k].coef.iter_mut().zip(t.coef.iter()) {
+            for (a, b) in prefix[k].coef.iter_mut().zip(term.coef.iter()) {
                 *a += b;
             }
         } else {
             if !small {
-                index.insert(t.src.clone(), out.len());
+                index.insert(term.src.clone(), used);
             }
-            out.push(t);
+            lin.swap(used, read);
+            used += 1;
         }
     }
-    out.retain(nonzero);
-    out
+    lin.truncate(used);
+    lin.retain(nonzero);
+    lin
 }
 
 pub(crate) fn plus<F: Field>(a: &Lin<F>, b: &Lin<F>) -> Lin<F> {
@@ -7524,6 +7562,22 @@ pub(crate) fn plus<F: Field>(a: &Lin<F>, b: &Lin<F>) -> Lin<F> {
 }
 
 pub(crate) fn scaled<F: Field>(a: &Lin<F>, s: F) -> Lin<F> {
+    if s.is_zero_vartime() {
+        return vec![];
+    }
+    if same_public(s, F::ONE) {
+        return compact(a.clone());
+    }
+    if same_public(s, -F::ONE) {
+        return compact(
+            a.iter()
+                .map(|t| Term {
+                    src: t.src.clone(),
+                    coef: t.coef.iter().map(|c| -*c).collect(),
+                })
+                .collect(),
+        );
+    }
     compact(
         a.iter()
             .map(|t| Term {
@@ -7859,6 +7913,43 @@ pub(crate) mod tests {
     use iroha_pasta::Eq as Vesta;
 
     type Fv = <Vesta as iroha_pasta::PastaCurve>::ScalarExt;
+
+    #[test]
+    fn compact_and_scale_preserve_first_source_order_and_cancellation() {
+        for cells in [3usize, 10] {
+            let mut terms = Vec::new();
+            for cell in 0..cells {
+                let word = Fv::from(cell as u64 + 1);
+                terms.push(Term {
+                    src: Src::Own(cell),
+                    coef: vec![word, -word].into(),
+                });
+                terms.push(Term {
+                    src: Src::One,
+                    coef: vec![Fv::ONE, Fv::ZERO].into(),
+                });
+            }
+            terms.push(Term {
+                src: Src::Own(0),
+                coef: vec![-Fv::ONE, Fv::ONE].into(),
+            });
+            assert!(scaled(&terms, Fv::ZERO).is_empty());
+            for scale in [Fv::ONE, -Fv::ONE, Fv::from(3)] {
+                let sum = scaled(&terms, scale);
+                assert_eq!(sum.len(), cells);
+                assert_eq!(sum[0].src, Src::One);
+                assert_eq!(
+                    &sum[0].coef[..],
+                    &[Fv::from(cells as u64) * scale, Fv::ZERO]
+                );
+                for (cell, t) in sum.iter().enumerate().skip(1) {
+                    let word = Fv::from(cell as u64 + 1) * scale;
+                    assert_eq!(t.src, Src::Own(cell));
+                    assert_eq!(&t.coef[..], &[word, -word]);
+                }
+            }
+        }
+    }
 
     /// The builder's real pattern: each cell's unit range lookup is followed by
     /// a shifted lookup of the same cell, which stays with its array. Grouping

@@ -41,7 +41,15 @@ impl<F: PrimeField> E<F> {
         }
     }
     fn sub(&self, b: &Self) -> Self {
-        self.add(&b.scale(-F::ONE))
+        Self {
+            lin: plus(&self.lin, &scaled(&b.lin, -F::ONE)),
+            values: self
+                .values
+                .iter()
+                .zip(&b.values)
+                .map(|(a, b)| *a - b)
+                .collect(),
+        }
     }
 }
 struct B<F: PrimeField> {
@@ -90,14 +98,14 @@ impl<F: PrimeField> B<F> {
         self.a.widths.push(width);
         self.own(k)
     }
-    fn equal(&mut self, a: &E<F>, b: &E<F>) {
+    fn require_zero(&mut self, expression: Lin<F>) {
         self.a
             .rows
-            .push([a.sub(b).lin, constant(vec![F::ONE; self.n]), vec![]]);
+            .push([expression, constant(vec![F::ONE; self.n]), vec![]]);
     }
     fn put(&mut self, k: usize, v: &E<F>) {
         self.a.values[k] = v.values.clone();
-        self.equal(&self.own(k), v);
+        self.require_zero(plus(&own(k, self.n), &scaled(&v.lin, -F::ONE)));
     }
     fn mul(&mut self, a: &E<F>, b: &E<F>) -> E<F> {
         let out = self.allocate(
@@ -118,25 +126,21 @@ impl<F: PrimeField> B<F> {
     }
     /// The zero flag of `a` and its inverse, which is zero at zero.
     fn zero_and_inverse(&mut self, a: &E<F>) -> (E<F>, E<F>) {
-        let z = self.allocate(
-            a.values
-                .iter()
-                .map(|v| if *v == F::ZERO { F::ONE } else { F::ZERO })
-                .collect(),
-            1,
-        );
-        let inv = self.allocate(
-            a.values
-                .iter()
-                .map(|v| Option::<F>::from(v.invert()).unwrap_or(F::ZERO))
-                .collect(),
-            255,
-        );
+        let mut inverse = a.values.clone();
+        let mut flags = vec![F::ZERO; inverse.len()];
+        // Before writing the zero flags, use their column for Montgomery
+        // prefix products. Zero denominators retain their zero inverses.
+        ff::BatchInverter::invert_with_external_scratch(&mut inverse, &mut flags);
+        for (flag, value) in flags.iter_mut().zip(&a.values) {
+            *flag = F::conditional_select(&F::ZERO, &F::ONE, value.is_zero());
+        }
+        let z = self.allocate(flags, 1);
+        let inv = self.allocate(inverse, 255);
         self.a.rows.push([a.lin.clone(), z.lin.clone(), vec![]]);
         self.a.rows.push([
             a.lin.clone(),
             inv.lin.clone(),
-            self.constant(F::ONE).sub(&z).lin,
+            plus(&constant(vec![F::ONE; self.n]), &scaled(&z.lin, -F::ONE)),
         ]);
         self.a.rows.push([inv.lin.clone(), z.lin.clone(), vec![]]);
         self.a
@@ -161,18 +165,12 @@ impl<F: PrimeField> B<F> {
         let xx = self.mul(&p[0], &p[0]);
         let num = self.select(&samex, &xx.scale(F::from(3)), &dy);
         let den = self.select(&samex, &p[1].scale(F::from(2)), &dx);
-        let dz = self.zero(&den);
-        let inverse = self.allocate(
-            den.values
-                .iter()
-                .map(|v| Option::<F>::from(v.invert()).unwrap_or(F::ZERO))
-                .collect(),
-            255,
-        );
+        let (dz, den_inverse) = self.zero_and_inverse(&den);
+        let inverse = self.allocate(den_inverse.values, 255);
         self.a.rows.push([
             den.lin.clone(),
             inverse.lin.clone(),
-            self.constant(F::ONE).sub(&dz).lin.clone(),
+            plus(&constant(vec![F::ONE; self.n]), &scaled(&dz.lin, -F::ONE)),
         ]);
         self.a
             .rows
@@ -370,7 +368,7 @@ pub fn additions<F: PrimeField>(
     b.put(8, &out[0]);
     b.put(9, &out[1]);
     for k in [5, 6, 7] {
-        b.equal(&b.own(k), &b.constant(F::ZERO));
+        b.require_zero(own(k, b.n));
     }
     b.a.r_count = p.len();
     zero_absent(&mut b.a, 1);
@@ -405,6 +403,11 @@ fn curve_b3<C: PastaCurve>() -> C::Base {
         "the projective formulas assume y^2 = x^3 + 5"
     );
     C::Base::from(15)
+}
+
+/// Select a witness coordinate with the same field operations for either bit.
+fn select_coordinate<F: PrimeField>(off: &F, on: &F, bit: bool) -> F {
+    F::conditional_select(off, on, (bit as u8).into())
 }
 
 /// The identity flag of an affine point encoded `(0, 0)` at the identity.
@@ -517,7 +520,7 @@ pub fn endoscale<C: PastaCurve>(
     init.put(5, &start[0]);
     init.put(6, &start[1]);
     for k in 0..5 {
-        init.equal(&init.own(k), &init.constant(F::<C>::ZERO));
+        init.require_zero(own(k, init.n));
     }
     // The base's identity flag, which every step lifts with. The start
     // 2 (endo(P) + P) is the identity exactly when P is: a finite P has
@@ -533,8 +536,12 @@ pub fn endoscale<C: PastaCurve>(
             .get(p)
             .cloned()
             .unwrap_or((C::identity(), vec![false; 2 * steps]));
-        let inf = infinity_native(coords(&point));
-        let mut group = (point.endo() + point).double();
+        let (x, y) = (base[0][p], base[1][p]);
+        let endo_x = beta * x;
+        let neg_y = -y;
+        let inf = infinity_native((x, y));
+        let endo = point.endo();
+        let mut group = (endo + point).double();
         let (sx, sy) = coords(&group);
         let mut acc = [sx, sy + inf, one - inf];
         let mut t = F::<C>::ZERO;
@@ -549,11 +556,10 @@ pub fn endoscale<C: PastaCurve>(
             };
             step.a.values[0][p * n + r] = F::<C>::from(s as u64);
             step.a.values[1][p * n + r] = F::<C>::from(e as u64);
-            let mut chosen = if s { point } else { -point };
-            if e {
-                chosen = chosen.endo();
-            }
-            let (cx, cy) = coords(&chosen);
+            let unsigned = C::conditional_select(&point, &endo, (e as u8).into());
+            let chosen = C::conditional_select(&(-unsigned), &unsigned, (s as u8).into());
+            let cx = select_coordinate(&x, &endo_x, e);
+            let cy = select_coordinate(&neg_y, &y, s);
             acc = add_native(double_native(acc, b3), [cx, cy + inf, one - inf], b3);
             group = group.double() + chosen;
             t = t * F::<C>::from(4) + F::<C>::from(s as u64) + F::<C>::from(2 * (e as u64));
@@ -655,7 +661,7 @@ pub fn mixed_mul<C: PastaCurve>(
     init.put(2, &out[0]);
     init.put(3, &out[1]);
     for k in 0..2 {
-        init.equal(&init.own(k), &init.constant(F::<C>::ZERO));
+        init.require_zero(own(k, init.n));
     }
     // The base's identity flag; the start 2 P is the identity exactly when P
     // is, the group having odd order.
@@ -667,7 +673,10 @@ pub fn mixed_mul<C: PastaCurve>(
     let mut scalars = vec![];
     for p in 0..slots {
         let point = bases.get(p).copied().unwrap_or(C::identity());
-        let inf = infinity_native(coords(&point));
+        let (cx, y) = (base[0][p], base[1][p]);
+        let neg_y = -y;
+        let inf = infinity_native((cx, y));
+        let neg_point = -point;
         let mut group = point.double();
         let (sx, sy) = coords(&group);
         let mut acc = [sx, sy + inf, one - inf];
@@ -679,8 +688,8 @@ pub fn mixed_mul<C: PastaCurve>(
             let bit = r < bits && inputs.get(p).is_some_and(|(_, b, _)| b[bits - 1 - r]);
             let v = F::<C>::from(bit as u64);
             step.a.values[0][p * n + r] = v;
-            let chosen = if bit { point } else { -point };
-            let (cx, cy) = coords(&chosen);
+            let chosen = C::conditional_select(&neg_point, &point, (bit as u8).into());
+            let cy = select_coordinate(&neg_y, &y, bit);
             acc = add_native(double_native(acc, b3), [cx, cy + inf, one - inf], b3);
             group = group.double() + chosen;
             t = t.double() + v;
@@ -752,7 +761,7 @@ pub fn mixed_mul<C: PastaCurve>(
             let e = tail.source(link(first + 2, source, vec![Some(bits - 1); 4], one), v);
             tail.put(k, &e);
         } else {
-            tail.equal(&tail.own(k), &tail.constant(F::<C>::ZERO));
+            tail.require_zero(own(k, tail.n));
         }
     }
     let factor = C::ScalarExt::from(2).pow_vartime([bits as u64]) + C::ScalarExt::ONE;
@@ -804,7 +813,7 @@ pub fn mixed_mul<C: PastaCurve>(
     end.put(3, &out[0]);
     end.put(4, &out[1]);
     for k in 0..3 {
-        end.equal(&end.own(k), &end.constant(F::<C>::ZERO));
+        end.require_zero(own(k, end.n));
     }
     let results = inputs
         .iter()
@@ -849,6 +858,24 @@ mod tests {
     use crate::fs::endo_scalar;
     use crate::uniform::Src;
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+
+    #[test]
+    fn batched_zero_flags_and_inverses_match_each_scalar() {
+        fn check<F: PrimeField>() {
+            for values in [[0; 8], [0, 7, 2, 0, 0, 3, 7, 0], [5; 8]] {
+                let mut builder = B::<F>::new("zero test", 0, 3, 1, 1);
+                builder.a.values[0] = values.map(F::from).to_vec();
+                let (flags, inverse) = builder.zero_and_inverse(&builder.own(0));
+                for (i, value) in builder.a.values[0].iter().enumerate() {
+                    assert_eq!(flags.values[i], F::from(u64::from(*value == F::ZERO)));
+                    assert_eq!(inverse.values[i], value.invert().unwrap_or(F::ZERO));
+                }
+                assert_eq!(failing_row(&[builder.a], 0, 1), None);
+            }
+        }
+        check::<<Pallas as PastaCurve>::Base>();
+        check::<<Vesta as PastaCurve>::Base>();
+    }
 
     /// A linear form at instance `i` of `arrays[a]`. Links name arrays from
     /// the ladder's `first` index and read the same ladder.

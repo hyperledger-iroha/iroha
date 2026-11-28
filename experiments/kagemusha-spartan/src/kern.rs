@@ -750,6 +750,32 @@ pub fn outer_round<F: Field>(
 /// Low rows per chunk of a streamed first outer round.
 pub const CHUNK: usize = 1 << 11;
 
+/// The public prefix of constraint rows that can contribute to the first round.
+/// The live high corners are rounded up to a Boolean cube so each omitted
+/// leading variable contributes a factor of `1 - X` to each of A, B and C.
+#[derive(Clone, Copy)]
+pub struct OuterRows {
+    low: usize,
+    low_rows: usize,
+    extent: usize,
+}
+
+impl OuterRows {
+    pub fn new(low: usize, k: usize, extent: usize) -> Self {
+        assert!(low > 0 && extent <= low << k);
+        Self {
+            low,
+            low_rows: extent.min(low),
+            extent,
+        }
+    }
+
+    /// Number of nonempty high corners for the chunk starting at this low row.
+    pub(crate) fn corners(self, start: usize) -> usize {
+        self.extent.saturating_sub(start).div_ceil(self.low)
+    }
+}
+
 /// The unfolded tables of a streamed first outer round, computed by the
 /// caller a chunk at a time: `fill(js, mats, out)` writes, for each selected
 /// matrix `m` (A, B, C), the corners `out[m][hi * js.len() + (j - js.start)]`
@@ -761,14 +787,19 @@ pub type Corners<'a, F> = dyn Fn(std::ops::Range<usize>, [bool; 3], &mut [Vec<F>
 /// of low rows at a time.
 pub fn outer_round_streamed<F: Field>(
     basis: &Basis,
-    low: usize,
+    rows: OuterRows,
     e: &[F],
     fill: &Corners<'_, F>,
 ) -> Vec<F> {
-    let (cube, grid) = (basis.cube, basis.grid);
-    assert_eq!(e.len(), low);
-    let chunk = CHUNK.min(low);
-    let mut acc = (0..low.div_ceil(chunk))
+    assert_eq!(e.len(), rows.low);
+    let sub_cube = rows.corners(0).next_power_of_two();
+    let reduced = (sub_cube < basis.cube).then(|| Basis::new(sub_cube.ilog2() as usize));
+    let sub = reduced.as_ref().unwrap_or(basis);
+    let (cube, grid) = (sub.cube, sub.grid);
+    let points = reduced.as_ref().map(|_| (0..grid).collect::<Vec<_>>());
+    let points = points.as_deref().unwrap_or(&basis.upper);
+    let chunk = CHUNK.min(rows.low);
+    let mut acc = (0..rows.low_rows.div_ceil(chunk))
         .into_par_iter()
         .with_max_len(1)
         .fold(
@@ -781,24 +812,27 @@ pub fn outer_round_streamed<F: Field>(
                 )
             },
             |(mut acc, mut corners, mut ext, mut tables), ci| {
-                let js = ci * chunk..((ci + 1) * chunk).min(low);
+                let js = ci * chunk..((ci + 1) * chunk).min(rows.low_rows);
                 let n = js.len();
+                let live = rows.corners(js.start);
                 for t in tables.iter_mut().take(2) {
                     t.clear();
-                    t.resize(cube * n, F::ZERO);
+                    t.resize(live * n, F::ZERO);
                 }
                 fill(js.clone(), [true, true, false], &mut tables);
+                let (ca, cb) = corners.split_at_mut(cube);
+                ca[live..].fill(F::ZERO);
+                cb[live..].fill(F::ZERO);
                 for (jj, j) in js.enumerate() {
                     let weight = e[j];
-                    let (ca, cb) = corners.split_at_mut(cube);
-                    for hi in 0..cube {
+                    for hi in 0..live {
                         ca[hi] = weight * tables[0][hi * n + jj];
                         cb[hi] = tables[1][hi * n + jj];
                     }
                     let (ga, gb) = ext.split_at_mut(grid);
-                    basis.extend(ca, ga);
-                    basis.extend(cb, gb);
-                    for &g in &basis.upper {
+                    sub.extend(ca, ga);
+                    sub.extend(cb, gb);
+                    for &g in points {
                         acc[g] += ga[g] * gb[g];
                     }
                 }
@@ -807,36 +841,63 @@ pub fn outer_round_streamed<F: Field>(
         )
         .map(|(acc, ..)| acc)
         .reduce(|| vec![F::ZERO; grid], add_into);
+    if reduced.is_some() {
+        // In the {0,1,inf} basis, each frozen axis multiplies AB by
+        // (1-X)^2, with values [1,0,1]. C is multilinear and contributes
+        // only at full Boolean points, where satisfaction cancels AB.
+        let mut full = vec![F::ZERO; basis.grid];
+        for (prefix, part) in full.chunks_exact_mut(grid).enumerate() {
+            if !digits(prefix, basis.k - sub.k).contains(&1) {
+                part.copy_from_slice(&acc);
+            }
+        }
+        for &g in &basis.inputs {
+            full[g] = F::ZERO;
+        }
+        acc = full;
+    }
     basis.to_grid(&mut acc);
     acc
 }
 
 /// [`fold_top`] (without a support) of the unfolded `Az, Bz, Cz`, which
 /// `fill` computes a chunk of low rows at a time.
-pub fn fold_top_streamed<F: Field>(
-    k: usize,
-    low: usize,
-    r: &[F],
-    fill: &Corners<'_, F>,
-) -> [Vec<F>; 3] {
-    assert_eq!(r.len(), k);
-    let cube = 1usize << k;
+pub fn fold_top_streamed<F: Field>(rows: OuterRows, r: &[F], fill: &Corners<'_, F>) -> [Vec<F>; 3] {
+    let low = rows.low;
+    // For a chunk with an empty high corner, the dot product takes at most
+    // 2^k - 1 multiplications per row, and walks both tables contiguously.
+    // A fully populated chunk still uses the 2^k - 1 interpolation tree.
+    let weights = crate::grid::eq_table(r);
+    let cube = weights.len();
     let chunk = CHUNK.min(low);
     let mut out = [vec![F::ZERO; low], vec![F::ZERO; low], vec![F::ZERO; low]];
     let [oa, ob, oc] = &mut out;
-    oa.par_chunks_mut(chunk)
-        .zip(ob.par_chunks_mut(chunk))
-        .zip(oc.par_chunks_mut(chunk))
+    oa[..rows.low_rows]
+        .par_chunks_mut(chunk)
+        .zip(ob[..rows.low_rows].par_chunks_mut(chunk))
+        .zip(oc[..rows.low_rows].par_chunks_mut(chunk))
         .enumerate()
         .for_each(|(ci, ((a, b), c))| {
             let js = ci * chunk..ci * chunk + a.len();
             let n = js.len();
+            let live = rows.corners(js.start);
             let mut tables = [
-                vec![F::ZERO; cube * n],
-                vec![F::ZERO; cube * n],
-                vec![F::ZERO; cube * n],
+                vec![F::ZERO; live * n],
+                vec![F::ZERO; live * n],
+                vec![F::ZERO; live * n],
             ];
-            fill(js, [true, true, true], &mut tables);
+            fill(js.clone(), [true, true, true], &mut tables);
+            if live < cube {
+                for (table, folded) in tables.iter().zip([a, b, c]) {
+                    for (hi, part) in table.chunks_exact(n).enumerate() {
+                        let len = (rows.extent - (hi * low + js.start)).min(n);
+                        for (value, &source) in folded[..len].iter_mut().zip(part) {
+                            *value += weights[hi] * source;
+                        }
+                    }
+                }
+                return;
+            }
             let mut corners = vec![F::ZERO; cube];
             for (table, folded) in tables.iter().zip([a, b, c]) {
                 for (jj, value) in folded.iter_mut().enumerate() {
@@ -1820,6 +1881,55 @@ mod tests {
                     .sum()
             })
             .collect()
+    }
+
+    #[test]
+    fn streamed_constraint_prefix_matches_dense_round_and_fold_on_both_fields() {
+        fn check<F: ff::PrimeField>() {
+            let cases = [0, 1, 119, 128, 129, 256, 383, 1023, 1024].map(|extent| (3, 128, extent));
+            // In the last case the final high corner ends inside one chunk
+            // and is wholly absent from the next chunk.
+            for (k, low, extent) in cases
+                .into_iter()
+                .chain([(4, 16, 33), (2, 2 * CHUNK, 3 * CHUNK - 17)])
+            {
+                let n = low << k;
+                let r: Vec<_> = (0..k).map(|i| F::from((19 + 4 * i) as u64)).collect();
+                let e: Vec<_> = (0..low).map(|i| F::from((37 * i + 11) as u64)).collect();
+                let basis = Basis::new(k);
+                let rows = OuterRows::new(low, k, extent);
+                let mut tables = [vec![F::ZERO; n], vec![F::ZERO; n], vec![F::ZERO; n]];
+                for i in 0..extent {
+                    tables[0][i] = F::from((i + 57) as u64);
+                    tables[1][i] = F::from((i * i + 3) as u64);
+                    tables[2][i] = tables[0][i] * tables[1][i];
+                }
+                let fill = |js: std::ops::Range<usize>, mats: [bool; 3], out: &mut [Vec<F>; 3]| {
+                    assert!(js.end <= extent.min(low));
+                    for m in 0..3 {
+                        if mats[m] {
+                            for (hi, chunk) in out[m].chunks_exact_mut(js.len()).enumerate() {
+                                assert!(hi < rows.corners(js.start));
+                                chunk.copy_from_slice(
+                                    &tables[m][hi * low + js.start..hi * low + js.end],
+                                );
+                            }
+                        }
+                    }
+                };
+                assert_eq!(
+                    outer_round_streamed(&basis, rows, &e, &fill),
+                    outer_round(&basis, &tables[0], &tables[1], &tables[2], &e, false),
+                    "outer grid extent {extent}"
+                );
+                let folded = fold_top_streamed(rows, &r, &fill);
+                for (actual, dense) in folded.iter().zip(&tables) {
+                    assert_eq!(*actual, fold_top(dense, &r, None), "fold extent {extent}");
+                }
+            }
+        }
+        check::<iroha_pasta::Fp>();
+        check::<iroha_pasta::Fq>();
     }
 
     #[test]

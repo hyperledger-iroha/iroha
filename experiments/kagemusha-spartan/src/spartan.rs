@@ -1780,14 +1780,16 @@ fn prove_rows<C: PastaCurve>(
     let mut outer = Vec::new();
     let mut rx: Vec<Vec<F<C>>> = Vec::new();
     let mut position = 0;
+    let extent = rel.constraint_extent(shape);
     for (i, &k) in shape.outer_blocks().iter().enumerate() {
         let extender = Extender::new(k);
         let basis = crate::kern::Basis::new(k);
         let e_low = crate::prof::time("o.eq", || eq_table(&tau[position + k..]));
         let streamed = stream && i == 0;
         let low = (1usize << shape.sx) >> k;
+        let covered = crate::kern::OuterRows::new(low, k, extent);
         let corners = |js: std::ops::Range<usize>, mats: [bool; 3], out: &mut [Vec<F<C>>; 3]| {
-            let ranges: Vec<std::ops::Range<usize>> = (0..1usize << k)
+            let ranges: Vec<std::ops::Range<usize>> = (0..covered.corners(js.start))
                 .map(|hi| hi * low + js.start..hi * low + js.end)
                 .collect();
             rel.abc_ranges(shape, &zv, &ranges, mats, out);
@@ -1796,7 +1798,7 @@ fn prove_rows<C: PastaCurve>(
             if old_kernels {
                 round_values(&extender, &a, &b, Some(&c), Some(&e_low))
             } else if streamed {
-                crate::kern::outer_round_streamed(&basis, low, &e_low, &corners)
+                crate::kern::outer_round_streamed(&basis, covered, &e_low, &corners)
             } else {
                 crate::kern::outer_round(&basis, &a, &b, &c, &e_low, i == 0 && assume_satisfied)
             }
@@ -1833,7 +1835,7 @@ fn prove_rows<C: PastaCurve>(
             b = fold_top(&b, &r);
             c = fold_top(&c, &r);
         } else if streamed {
-            [a, b, c] = crate::kern::fold_top_streamed(k, low, &r, &corners);
+            [a, b, c] = crate::kern::fold_top_streamed(covered, &r, &corners);
         } else {
             a = crate::kern::fold_top(&a, &r, None);
             b = crate::kern::fold_top(&b, &r, None);

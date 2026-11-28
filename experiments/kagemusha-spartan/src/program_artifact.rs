@@ -57,9 +57,7 @@ fn check_tape_degrees(
     check_register_degrees(&Regs::of(inputs, ops, outputs), layout, declared)
 }
 
-/// `check_tape_degrees` over the tape's register program: one saturating
-/// degree byte per (live register, variable), so the table stays small for
-/// any instruction count.
+/// Check formal degrees over the physical register stream, including aliased writes.
 fn check_register_degrees(
     regs: &Regs,
     (sx, sz, challenges): (usize, usize, usize),
@@ -74,6 +72,78 @@ fn check_register_degrees(
         .checked_mul(vars)
         .filter(|&n| n <= MAX_PROGRAM_BYTES)
         .ok_or("matrix tape degree table bound")?;
+    // All current wallet layouts fit. Keep the bytewise check for wider
+    // coordinate sets, for small layouts where it takes less memory, and for
+    // reporting the exact coordinate and degree of a rejected program.
+    if sx + sz < u64::BITS as usize
+        && vars >= size_of::<MultilinearDegrees>()
+        && multilinear_degrees_fit(regs, sx + sz, declared)
+    {
+        return Ok(());
+    }
+    check_byte_degrees(regs, sx, sz, declared, cells)
+}
+
+#[derive(Clone, Copy, Default)]
+struct MultilinearDegrees {
+    /// Bits 0..63 indicate coordinate dependence. The high bit means at least
+    /// one coordinate has formal degree greater than one.
+    support: u64,
+    challenge: [u8; 2],
+}
+
+fn multilinear_degrees_fit(regs: &Regs, coordinates: usize, declared: (usize, usize)) -> bool {
+    const NONLINEAR: u64 = 1 << 63;
+    let mut degree = vec![MultilinearDegrees::default(); regs.count];
+    for (i, &r) in regs.inputs.iter().enumerate() {
+        if i < coordinates {
+            degree[r as usize].support = 1 << i;
+        } else {
+            degree[r as usize].challenge[i - coordinates] = 1;
+        }
+    }
+    for (op, dest) in regs.ops.iter() {
+        degree[dest as usize] = match op {
+            Op::Add(a, b) | Op::Sub(a, b) => {
+                let (a, b) = (degree[a as usize], degree[b as usize]);
+                MultilinearDegrees {
+                    support: a.support | b.support,
+                    challenge: std::array::from_fn(|i| a.challenge[i].max(b.challenge[i])),
+                }
+            }
+            Op::Mul(a, b) => {
+                let (a, b) = (degree[a as usize], degree[b as usize]);
+                // Formal degrees add: a shared coordinate occurs twice, and
+                // a nonlinear operand remains nonlinear. Dead slots do not
+                // affect the result until a declared output uses them.
+                let repeated = (a.support & b.support) != 0;
+                MultilinearDegrees {
+                    support: a.support | b.support | (u64::from(repeated) << 63),
+                    challenge: std::array::from_fn(|i| {
+                        a.challenge[i].saturating_add(b.challenge[i])
+                    }),
+                }
+            }
+            Op::Scale(a, _) => degree[a as usize],
+            Op::Const(_) => MultilinearDegrees::default(),
+        };
+    }
+    regs.out.iter().all(|&out| {
+        let d = degree[out as usize];
+        d.support & NONLINEAR == 0
+            && usize::from(d.challenge[0]) <= declared.0
+            && usize::from(d.challenge[1]) <= declared.1
+    })
+}
+
+fn check_byte_degrees(
+    regs: &Regs,
+    sx: usize,
+    sz: usize,
+    declared: (usize, usize),
+    cells: usize,
+) -> Result<(), String> {
+    let vars = regs.inputs.len();
     // Every bound checked below is at most 128, so saturation can only make
     // a refusal certain.
     let mut degree = vec![0u8; cells];
@@ -754,6 +824,56 @@ mod tests {
         assert!(check_tape_degrees(&ops, 5, layout, honest, (1, 2)).is_err());
         assert!(check_tape_degrees(&[Op::Mul(6, 0)], 6, layout, [0, 0, 0], (1, 2)).is_err());
         assert!(check_tape_degrees(&ops, 6, layout, [99, 0, 0], (1, 2)).is_err());
+    }
+
+    #[test]
+    fn register_degree_masks_match_byte_degrees_at_layout_boundaries() {
+        for coordinates in [14, 16, 44, 63, 64] {
+            for challenges in 0..=2 {
+                let inputs = coordinates + challenges;
+                let layout = (coordinates / 2, coordinates - coordinates / 2, challenges);
+                let last_coord = coordinates as Slot - 1;
+                let slot = inputs as Slot;
+                let mut ops = vec![
+                    Op::Mul(0, last_coord),          // Distinct coordinates.
+                    Op::Mul(last_coord, last_coord), // Includes bit 62 in the widest mask.
+                    Op::Const(0),                    // A clean value after a nonlinear one.
+                    Op::Add(slot + 1, slot + 2),
+                    Op::Scale(slot + 3, 0),
+                    Op::Sub(slot, slot),
+                    Op::Mul(slot + 5, last_coord),
+                ];
+                for ch in coordinates..inputs {
+                    let mut power = ch as Slot;
+                    for _ in 0..8 {
+                        ops.push(Op::Mul(power, power));
+                        power = slot + ops.len() as Slot - 1;
+                    }
+                    ops.push(Op::Mul(power, slot));
+                }
+                // Keeping each intermediate as an output in turn changes
+                // last uses and exercises the compiler's aliased writes.
+                for out in slot..slot + ops.len() as Slot {
+                    let regs = Regs::of(inputs, &ops, [slot, out, slot + 2]);
+                    for declared in [(0, 0), (1, 1), (1, 128), (128, 128)] {
+                        let oracle = check_byte_degrees(
+                            &regs,
+                            layout.0,
+                            layout.1,
+                            declared,
+                            regs.count * inputs,
+                        );
+                        if coordinates < 64 {
+                            assert_eq!(
+                                multilinear_degrees_fit(&regs, coordinates, declared),
+                                oracle.is_ok()
+                            );
+                        }
+                        assert_eq!(check_register_degrees(&regs, layout, declared), oracle);
+                    }
+                }
+            }
+        }
     }
 
     /// A canonical, in-bounds tape whose real degree exceeds its declaration
