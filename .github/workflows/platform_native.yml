@@ -496,6 +496,16 @@ jobs:
           set -euo pipefail
           cargo check --locked --tests -p iroha_test_network -p integration_tests -p iroha_cli --features integration_tests/atomic-private-settlement-smoke \
             2>&1 | tee target/platform-consumers/check.log
+      - name: Exercise packed archive publication and retained readers on Windows
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_core --lib query::native_context_archive::packed::tests:: -- --nocapture \
+            2>&1 | tee target/platform-consumers/packed-archive.log
+      - name: Exercise native evidence publication barriers on Windows
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_core --lib native_evidence_publication_syncs_and_never_replaces_existing_bytes -- --nocapture \
+            2>&1 | tee target/platform-consumers/evidence-publication.log
       - name: Retain native consumer compilation results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
