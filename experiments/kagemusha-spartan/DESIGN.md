@@ -933,6 +933,55 @@ At the signed dimensions, the four fixed-entropy openings reproduced every proof
 transcript challenges and the next blinding scalars. The full-wallet timings use fresh proof entropy each time.
 The candidate passed 378 active wallet tests and all four signed-original checks.
 
+**Wallet witness construction and public constraint padding.** Four more paired runs per cohort compared
+signed revisions `37ac218541` and `8f373f068b` on the same M4 Max and signed 968f program bundle.
+Each process installed the programs in two independent wallets, performed two Bootstraps, one Load and two
+transfers, independently verified both 10,231-byte Payments, and checked both balances, lineage roots and zero Burn.
+Baseline ran or launched first in pairs 1 and 4. The table reports arithmetic means. The host also ran other workloads.
+
+| Full wallet | Elapsed (s), baseline → candidate | Seconds saved | Elapsed saved | Process CPU (s), baseline → candidate | Faster pairs |
+|---|---:|---:|---:|---:|---:|
+| Sequential, six workers | 40.8768 → 40.5275 | 0.349 | 0.85% | 143.981 → 144.295 | 3/4 |
+| Simultaneous, three workers per version | 65.7695 → 63.8375 | 1.932 | 2.94% | 154.770 → 151.144 | 4/4 |
+
+| By pair, seconds (baseline / candidate) | Pair 1 | Pair 2 | Pair 3 | Pair 4 |
+|---|---:|---:|---:|---:|
+| Sequential elapsed | 41.301 / 41.003 | 40.691 / 40.618 | 40.923 / 39.775 | 40.592 / 40.714 |
+| Sequential CPU | 145.475 / 145.720 | 143.396 / 144.800 | 143.913 / 141.684 | 143.140 / 144.977 |
+| Simultaneous elapsed | 65.474 / 63.546 | 64.470 / 62.448 | 65.539 / 63.680 | 67.595 / 65.676 |
+| Simultaneous CPU | 153.874 / 150.324 | 151.763 / 148.141 | 154.211 / 150.615 | 159.234 / 155.493 |
+
+| Unprofiled full-wallet components | Sequential seconds, baseline → candidate | Simultaneous seconds, baseline → candidate |
+|---|---:|---:|
+| First Send through final Receive | 27.180 → 26.722 | 43.863 → 42.712 |
+| Time outside the exchange | 13.697 → 13.805 | 21.907 → 21.125 |
+| Both installations (included above) | 2.950 → 3.014 | 4.531 → 4.402 |
+
+Two additional sequential profile pairs used six workers and reversed the order. Timers sum the seven operations
+for each process. The outer timers cover all outer rounds. Installation includes decoding and authentication.
+
+| Profiled work | Mean seconds, baseline → candidate |
+|---|---:|
+| Both installations | 2.924 → 2.823 |
+| Primary witness wiring | 5.495 → 4.690 |
+| Primary program check and memory release | 3.645 → 3.505 |
+| Primary helper and matrix instantiation | 0.215 → 0.160 |
+| Secondary helper and matrix instantiation | 0.020 → 0.015 |
+| Primary outer sumcheck | 0.845 → 0.705 |
+| Secondary outer sumcheck | 0.305 → 0.225 |
+| Primary IPA | 4.408 → 4.314 |
+| Secondary IPA | 1.959 → 1.960 |
+
+Complete curve ladders reuse affine coordinates and batch witness inversions. The first outer sumcheck
+factors out public padding from its multilinear evaluations. Lookup helpers reuse challenge powers and
+resolved masks, and the template compiler avoids temporary coefficient lists. Installation checks coordinate
+multilinearity using register bitsets and tracks the degrees of both challenges separately.
+
+In an isolated 16-slot ladder test, Pallas CPU fell from 70.5 to 10.4 ms and Vesta from 63.0 to 9.6 ms.
+Witness cells, constraints and results matched the reference for both curves. Checking degrees on the ten
+signed tapes took 171.8 → 37.0 ms median CPU per installation.
+The candidate passed 382 active wallet tests and all four signed-original checks. The full-wallet measurements use software fixture signing.
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
