@@ -79,25 +79,62 @@ pub(super) fn straus_block<C: PastaCurve, const BASES: usize, const ODDS: usize>
     }
     let beta = C::AffineExt::endo_beta();
     let endo_xs: Vec<_> = xs.iter().map(|&x| x * beta).collect();
+    accumulate::<C, _>(
+        output,
+        columns,
+        &mut scratch,
+        (&mut dx[..m], &mut dy[..m]),
+        |add| {
+            let row = add.row * m..(add.row + 1) * m;
+            let px = if add.endomorphism { &endo_xs } else { &xs };
+            (&px[row.clone()], &ys[row], add.negative)
+        },
+    )
+}
+
+/// Evaluate signed binary columns and add the original low generator.
+/// The coordinate table and schedule contain only public values.
+pub(super) fn accumulate<'a, C: PastaCurve, D>(
+    output: &mut [C::AffineExt],
+    columns: &[Vec<D>],
+    scratch: &mut Scratch<C::Base>,
+    (dx, dy): (&mut [C::Base], &mut [C::Base]),
+    coordinates: impl Fn(&D) -> (&'a [C::Base], &'a [C::Base], bool),
+) -> bool {
+    let m = output.len();
     let mut ax = vec![C::Base::ZERO; m];
     let mut ay = ax.clone();
     let mut started = false;
     for column in columns.iter().rev() {
-        if started && !ba_double(&mut ax, &mut ay, &mut scratch) {
-            return false;
+        let mut additions = column.iter();
+        if started {
+            if let Some(add) = additions.next() {
+                let (x, y, negative) = coordinates(add);
+                if !ba_double_add(
+                    &mut ax,
+                    &mut ay,
+                    x,
+                    y,
+                    negative,
+                    scratch,
+                    (&mut *dx, &mut *dy),
+                ) {
+                    return false;
+                }
+            } else if !ba_double(&mut ax, &mut ay, scratch) {
+                return false;
+            }
         }
-        for add in column {
-            let row = add.row * m..(add.row + 1) * m;
-            let px = if add.endomorphism { &endo_xs } else { &xs };
-            let (x, y) = (&px[row.clone()], &ys[row]);
+        for add in additions {
+            let (x, y, negative) = coordinates(add);
             if started {
-                if !ba_add(&mut ax, &mut ay, x, y, add.negative, &mut scratch) {
+                if !ba_add(&mut ax, &mut ay, x, y, negative, scratch) {
                     return false;
                 }
             } else {
                 ax.copy_from_slice(x);
                 ay.copy_from_slice(y);
-                if add.negative {
+                if negative {
                     for v in &mut ay {
                         *v = -*v;
                     }
@@ -111,7 +148,7 @@ pub(super) fn straus_block<C: PastaCurve, const BASES: usize, const ODDS: usize>
             dx[i] = p.x();
             dy[i] = p.y();
         }
-        if !ba_add(&mut ax, &mut ay, &dx, &dy, false, &mut scratch) {
+        if !ba_add(&mut ax, &mut ay, &dx, &dy, false, scratch) {
             return false;
         }
         for (i, p) in output.iter_mut().enumerate() {
