@@ -63,6 +63,11 @@ on:
       - ".cargo/**"
       - ".github/workflows/platform_native.yml"
   workflow_dispatch:
+  # Windows CI test branch only: GitHub runs workflow_dispatch only for workflows on the
+  # default branch, so this branch runs the workflow on its own pushes.
+  push:
+    branches:
+      - "claude/windows-ci-*"
 
 permissions:
   contents: read
