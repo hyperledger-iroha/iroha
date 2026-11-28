@@ -128,7 +128,9 @@ pub fn native_continuous_clock_nanos() -> io::Result<u128> {
 /// # Errors
 /// Refuses native-unit conversion overflow. Requires the native Windows 10+ API.
 pub fn native_continuous_clock_nanos() -> io::Result<u128> {
-    #[link(name = "kernel32")]
+    // Console applications import this Windows API through OneCore.lib.
+    // https://learn.microsoft.com/en-us/windows/win32/sysinfo/interrupt-time
+    #[link(name = "OneCore")]
     unsafe extern "system" {
         #[link_name = "QueryInterruptTimePrecise"]
         fn query_interrupt_time_precise(value: *mut u64);

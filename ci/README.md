@@ -405,6 +405,14 @@ remain selected; this diagnostic matrix does not qualify a shipping feature grap
 A supported feature or dependency that forwards a mutation selector fails before
 Cargo starts and requires an explicit ownership review.
 
+## Native platform fixtures
+
+The hosted Windows component job assigns its OS-selected LocalAppData directory
+owner to the runner's effective user before testing current-user custody. This
+setup is restricted to ephemeral GitHub-hosted runners and changes only the
+selected directory's owner. Native application admission retains its existing
+ownership and ancestor checks and never repairs a user's permissions.
+
 ## Environment toggle attribution
 
 When the base environment inventory omits a reference, the environment guard
