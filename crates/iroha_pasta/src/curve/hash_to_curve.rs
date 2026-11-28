@@ -6,17 +6,16 @@
 //! on `E'`, and the 3-isogeny back to the Pasta curve. The domain separation
 //! tag is `domain_prefix || "-" || curve_id || "_XMD:BLAKE2b_SSWU_RO_"`.
 //!
-//! Every constant and every operation order matches `pasta_curves`, and the
-//! result is compared with it point by point in `tests/curve_oracle.rs`.
+//! Both the scalar and batch maps are compared point by point against
+//! `pasta_curves` in `tests/curve_oracle.rs`. The batch map shares an
+//! inversion across independent public SWU denominators.
 //!
-//! Timing posture: public inputs only. The simplified SWU map has no
-//! value-dependent branches, but its square root (`sqrt_ratio`) uses the
-//! table method with value-indexed lookups (see `crate::field`), which is not
-//! hardened against cache-timing observers. The addition on `E'` also branches
+//! Timing posture: public inputs only. The square roots use the table method
+//! with value-indexed lookups (see `crate::field`), and the batch map uses
+//! variable-time inversion. The addition on `E'` also branches
 //! on the (negligible-probability) cases `q0 = +-q1`, as the reference does.
 //! Use it for public messages such as generator indices, never for
-//! secret-derived values; a constant-time variant would have to scan the whole
-//! square-root tables with `conditional_select`.
+//! secret-derived values.
 //!
 //! Failure posture: fail closed. If the isogeny output ever failed the curve
 //! check (an arithmetic or constant error),
@@ -29,7 +28,7 @@ use blake2::{Blake2b512, Digest};
 use ff::{Field, FromUniformBytes, PrimeField};
 use subtle::{ConditionallySelectable, ConstantTimeEq};
 
-use crate::curve::PastaCurve;
+use crate::{curve::PastaCurve, field::PastaField};
 
 /// Hash-to-curve failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,13 +87,31 @@ pub fn hash_to_field<F: FromUniformBytes<64>>(
     domain_prefix: &str,
     message: &[u8],
 ) -> Result<[F; 2], HashToCurveError> {
+    let dst_len_byte = domain_length(curve_id, domain_prefix)?;
+    Ok(expand_message(
+        curve_id,
+        domain_prefix,
+        dst_len_byte,
+        message,
+    ))
+}
+
+fn domain_length(curve_id: &str, domain_prefix: &str) -> Result<u8, HashToCurveError> {
     let dst_len = DST_SUFFIX
         .len()
         .checked_add(1)
         .and_then(|n| n.checked_add(curve_id.len()))
         .and_then(|n| n.checked_add(domain_prefix.len()))
         .ok_or(HashToCurveError::DomainTooLong)?;
-    let dst_len_byte = u8::try_from(dst_len).map_err(|_| HashToCurveError::DomainTooLong)?;
+    u8::try_from(dst_len).map_err(|_| HashToCurveError::DomainTooLong)
+}
+
+fn expand_message<F: FromUniformBytes<64>>(
+    curve_id: &str,
+    domain_prefix: &str,
+    dst_len_byte: u8,
+    message: &[u8],
+) -> [F; 2] {
     let dst = |h: &mut Blake2b512| {
         h.update(domain_prefix.as_bytes());
         h.update(b"-");
@@ -136,7 +153,7 @@ pub fn hash_to_field<F: FromUniformBytes<64>>(
         little.reverse();
         *slot = F::from_uniform_bytes(&little);
     }
-    Ok(out)
+    out
 }
 
 /// A point on the isogenous curve `E'` in Jacobian coordinates
@@ -225,25 +242,54 @@ impl<F: Field> Jacobian<F> {
     }
 }
 
-/// The simplified SWU map onto `E'` for one field element (constant time).
-fn map_to_curve_simple_swu<C: HashToCurveParams>(u: &C::Base) -> Jacobian<C::Base> {
-    let a = C::ISO_A;
-    let b = C::ISO_B;
-    let z = C::Z;
-    let z_u2 = z * u.square();
+/// The first SWU candidate x-coordinate is `num/div`; the second is
+/// `z_u2 * num/div`. The specified exceptional case keeps `div` nonzero.
+fn swu_candidates<C: HashToCurveParams>(u: &C::Base) -> (C::Base, C::Base, C::Base) {
+    let z_u2 = C::Z * u.square();
     let ta = z_u2.square() + z_u2;
-    let num_x1 = b * (ta + C::Base::ONE);
-    let div = a * C::Base::conditional_select(&-ta, &z, ta.is_zero());
+    let num_x1 = C::ISO_B * (ta + C::Base::ONE);
+    let div = C::ISO_A * C::Base::conditional_select(&-ta, &C::Z, ta.is_zero());
+    (z_u2, num_x1, div)
+}
+
+fn swu_point<C: HashToCurveParams>(
+    u: &C::Base,
+    z_u2: C::Base,
+    first_x: C::Base,
+    square: subtle::Choice,
+    y1: C::Base,
+) -> (C::Base, C::Base) {
+    let y2 = C::THETA * z_u2 * *u * y1;
+    let x = C::Base::conditional_select(&(z_u2 * first_x), &first_x, square);
+    let y = C::Base::conditional_select(&y2, &y1, square);
+    let y = C::Base::conditional_select(&(-y), &y, u.is_odd().ct_eq(&y.is_odd()));
+    (x, y)
+}
+
+/// Finish SWU in affine coordinates after inverting the public denominator.
+fn affine_swu<C: HashToCurveParams>(
+    (u, z_u2, num): (C::Base, C::Base, C::Base),
+    inverse: C::Base,
+) -> Jacobian<C::Base> {
+    let x1 = num * inverse;
+    let (square, y1) = ((x1.square() + C::ISO_A) * x1 + C::ISO_B).sqrt_alt();
+    let (x, y) = swu_point::<C>(&u, z_u2, x1, square, y1);
+    Jacobian {
+        x,
+        y,
+        z: C::Base::ONE,
+    }
+}
+
+/// The simplified SWU map onto `E'` for one field element.
+fn map_to_curve_simple_swu<C: HashToCurveParams>(u: &C::Base) -> Jacobian<C::Base> {
+    let (z_u2, num_x1, div) = swu_candidates::<C>(u);
     let num2_x1 = num_x1.square();
     let div2 = div.square();
     let div3 = div2 * div;
-    let num_gx1 = (num2_x1 + a * div2) * num_x1 + b * div3;
-    let num_x2 = z_u2 * num_x1;
+    let num_gx1 = (num2_x1 + C::ISO_A * div2) * num_x1 + C::ISO_B * div3;
     let (gx1_square, y1) = C::Base::sqrt_ratio(&num_gx1, &div3);
-    let y2 = C::THETA * z_u2 * *u * y1;
-    let num_x = C::Base::conditional_select(&num_x2, &num_x1, gx1_square);
-    let y = C::Base::conditional_select(&y2, &y1, gx1_square);
-    let y = C::Base::conditional_select(&(-y), &y, u.is_odd().ct_eq(&y.is_odd()));
+    let (num_x, y) = swu_point::<C>(u, z_u2, num_x1, gx1_square, y1);
     Jacobian {
         x: num_x * div,
         y: y * div3,
@@ -288,6 +334,49 @@ pub(crate) fn hash_to_curve<C: HashToCurveParams>(
     let q1 = map_to_curve_simple_swu::<C>(&us[1]);
     let r = q0.add(&q1, &C::ISO_A);
     jacobian_to_curve::<C>(&iso_map::<C>(&r))
+}
+
+/// Map two field elements per message in bounded batches. Montgomery's trick
+/// gives each first x-coordinate in affine form, so a square root of g(x)
+/// replaces a square root of a ratio. SWU's sign rule selects the same y.
+pub(crate) fn hash_to_curve_batch<C: HashToCurveParams, M: AsRef<[u8]>>(
+    domain_prefix: &str,
+    messages: &[M],
+) -> Result<Vec<C>, HashToCurveError> {
+    const BATCH: usize = 32;
+    let dst_len = domain_length(C::CURVE_ID, domain_prefix)?;
+    let mut result = Vec::with_capacity(messages.len());
+    let capacity = messages.len().min(BATCH) * 2;
+    let mut candidates = Vec::with_capacity(capacity);
+    let mut inverses = Vec::with_capacity(capacity);
+    let mut prefix = vec![C::Base::ZERO; capacity];
+    for batch in messages.chunks(BATCH) {
+        candidates.clear();
+        inverses.clear();
+        for message in batch {
+            for u in
+                expand_message::<C::Base>(C::CURVE_ID, domain_prefix, dst_len, message.as_ref())
+            {
+                let (z_u2, num, div) = swu_candidates::<C>(&u);
+                candidates.push((u, z_u2, num));
+                inverses.push(div);
+            }
+        }
+        let len = inverses.len();
+        if !crate::field::batch_invert_nonzero(
+            &mut inverses,
+            &mut prefix[..len],
+            C::Base::invert_vartime,
+        ) {
+            return Err(HashToCurveError::OffCurve);
+        }
+        let affine = |i: usize| affine_swu::<C>(candidates[i], inverses[i]);
+        for i in (0..len).step_by(2) {
+            let sum = affine(i).add(&affine(i + 1), &C::ISO_A);
+            result.push(jacobian_to_curve::<C>(&iso_map::<C>(&sum))?);
+        }
+    }
+    Ok(result)
 }
 
 /// Converts the isogeny output to a point of `C`, failing closed when it is
@@ -339,6 +428,59 @@ mod tests {
     use crate::curve::{Ep, Eq};
     use crate::field::{Fp, Fq};
     use group::Group;
+
+    #[test]
+    fn batched_swu_handles_zero_and_both_candidate_branches() {
+        fn check<C: HashToCurveParams>() {
+            let mut used = [false; 2];
+            for i in 0..64 {
+                let u = C::Base::from(i);
+                let (z_u2, num, div) = swu_candidates::<C>(&u);
+                if i == 0 {
+                    assert_eq!(div, C::ISO_A * C::Z);
+                }
+                let inverse = div.invert_vartime().unwrap();
+                let affine = affine_swu::<C>((u, z_u2, num), inverse);
+                let projective = map_to_curve_simple_swu::<C>(&u);
+                let z2 = projective.z.square();
+                assert_eq!(affine.x * z2, projective.x);
+                assert_eq!(affine.y * z2 * projective.z, projective.y);
+                used[usize::from(affine.x == num * inverse)] = true;
+            }
+            assert_eq!(used, [true, true]);
+        }
+        check::<Ep>();
+        check::<Eq>();
+    }
+
+    #[test]
+    fn batched_hashes_preserve_order_and_domain_bounds() {
+        fn check<C: PastaCurve>() {
+            let messages: Vec<_> = (0..65_u64).map(u64::to_le_bytes).collect();
+            let max_domain = "d".repeat(255 - 1 - C::CURVE_ID.len() - DST_SUFFIX.len());
+            for domain in ["", &max_domain] {
+                let expected: Vec<_> = messages
+                    .iter()
+                    .map(|message| C::hash_to_curve(domain, message).unwrap())
+                    .collect();
+                for len in [0, 1, 31, 32, 33, 65] {
+                    assert_eq!(
+                        C::hash_to_curve_batch(domain, &messages[..len]).unwrap(),
+                        expected[..len]
+                    );
+                }
+            }
+            let long = max_domain + "x";
+            for len in [0, 1] {
+                assert_eq!(
+                    C::hash_to_curve_batch(&long, &messages[..len]),
+                    Err(HashToCurveError::DomainTooLong)
+                );
+            }
+        }
+        check::<Ep>();
+        check::<Eq>();
+    }
 
     #[test]
     fn hash_to_field_is_deterministic_and_domain_separated() {

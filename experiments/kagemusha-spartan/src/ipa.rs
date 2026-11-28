@@ -85,12 +85,11 @@ impl<C: PastaCurve> Gens<C> {
             .enumerate()
             .for_each(|(batch, out)| {
                 let first = batch * batch_size;
-                let points: Vec<C> = (first..first + out.len())
-                    .map(|i| {
-                        C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes())
-                            .expect("hash to curve")
-                    })
+                let messages: Vec<_> = (first..first + out.len())
+                    .map(|i| (i as u64).to_le_bytes())
                     .collect();
+                let points =
+                    C::hash_to_curve_batch(GENERATOR_DOMAIN, &messages).expect("hash to curve");
                 C::batch_normalize(&points, out);
             });
         let u = affine.pop().expect("U generator");

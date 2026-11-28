@@ -60,8 +60,11 @@ gadget or recursion code.
   nested Rayon workers. The shared cap covers digits, bucket queues and inversion
   buffers, wave results and table-construction scratch; retained tables, caller
   inputs, allocator metadata and worker stacks are outside this scratch limit.
-- Hash-to-curve fails closed: an off-curve result is an error, never a
-  substitute point.
+- `PastaCurve::hash_to_curve_batch(domain, messages)` hashes public messages
+  in order and shares one field inversion across up to 32 messages. It checks
+  every mapped point and returns the same point encoding for each message as
+  `PastaCurve::hash_to_curve`. Both methods return an error for an off-curve
+  result.
 - The portable implementation is the reference. Any later accelerated path
   must produce identical bytes.
 - No `unsafe` code (`#![forbid(unsafe_code)]`).

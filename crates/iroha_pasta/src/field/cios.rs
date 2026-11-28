@@ -81,17 +81,24 @@ pub const fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
     (ret as u64, (ret >> 64) as u64)
 }
 
+/// Computes the low 256 bits of `a - b = a + !b + 1` with one carry chain.
+#[inline(always)]
+const fn wrapping_difference(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let (d0, carry) = adc(a[0], !b[0], 1);
+    let (d1, carry) = adc(a[1], !b[1], carry);
+    let (d2, carry) = adc(a[2], !b[2], carry);
+    let (d3, _) = adc(a[3], !b[3], carry);
+    [d0, d1, d2, d3]
+}
+
 /// Returns `t - m` when `t >= m`, otherwise `t`, in constant time.
 ///
 /// Requires `t < 2m`.
 #[inline(always)]
 pub const fn reduce_once(t: [u64; 4], p: &Modulus) -> [u64; 4] {
-    let (d0, b) = sbb(t[0], p.m[0], 0);
-    let (d1, b) = sbb(t[1], p.m[1], b);
-    let (d2, b) = sbb(t[2], p.m[2], b);
-    let (d3, b) = sbb(t[3], p.m[3], b);
-    // `b == 1` means `t < m`: keep `t`. Build an all-ones mask for that case.
-    let keep = 0u64.wrapping_sub(b);
+    let [d0, d1, d2, d3] = wrapping_difference(&t, &p.m);
+    // -m <= t - m < m and m < 2^255, so bit 255 is the exact sign.
+    let keep = 0u64.wrapping_sub(d3 >> 63);
     [
         (t[0] & keep) | (d0 & !keep),
         (t[1] & keep) | (d1 & !keep),
@@ -131,12 +138,9 @@ pub const fn sub(a: &[u64; 4], b: &[u64; 4], p: &Modulus) -> [u64; 4] {
         lt_modulus(a, p) && lt_modulus(b, p),
         "sub operands must be canonical"
     );
-    let (d0, br) = sbb(a[0], b[0], 0);
-    let (d1, br) = sbb(a[1], b[1], br);
-    let (d2, br) = sbb(a[2], b[2], br);
-    let (d3, br) = sbb(a[3], b[3], br);
-    // On underflow add the modulus back.
-    let mask = 0u64.wrapping_sub(br);
+    let [d0, d1, d2, d3] = wrapping_difference(a, b);
+    // Canonical operands give -m < a - b < m, so the sign selects the add-back.
+    let mask = 0u64.wrapping_sub(d3 >> 63);
     let (d0, c) = adc(d0, p.m[0] & mask, 0);
     let (d1, c) = adc(d1, p.m[1] & mask, c);
     let (d2, c) = adc(d2, p.m[2] & mask, c);
@@ -412,6 +416,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn signed_difference_handles_limb_carries_and_bit_255() {
+        let one = [1, 0, 0, 0];
+        for p in [P, Q] {
+            let two_m = add_raw(&p.m, &p.m);
+            let mut values = vec![[0; 4], one, sub_raw(&two_m, &one)];
+            for boundary in [
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+                [0, 0, 0, 1 << 62],
+                p.m,
+                [0, 0, 0, 1 << 63],
+            ] {
+                values.extend([sub_raw(&boundary, &one), boundary, add_raw(&boundary, &one)]);
+            }
+            for a in &values {
+                let under = lt_modulus(a, &p);
+                let reduced = if under { *a } else { sub_raw(a, &p.m) };
+                assert_eq!(reduce_once(*a, &p), reduced);
+                for b in &values {
+                    let difference = sub_raw(a, b);
+                    assert_eq!(wrapping_difference(a, b), difference);
+                    if under && lt_modulus(b, &p) {
+                        let expected = if a.iter().rev().lt(b.iter().rev()) {
+                            add_raw(&difference, &p.m)
+                        } else {
+                            difference
+                        };
+                        assert_eq!(sub(a, b, &p), expected);
+                    }
+                }
+            }
+        }
+    }
+
     fn add_raw(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
         let (d0, c) = adc(a[0], b[0], 0);
         let (d1, c) = adc(a[1], b[1], c);
@@ -495,6 +535,12 @@ mod tests {
         let w = mul_wide(&[2, 0, 0, 0], &[0, 0, 0, 1 << 63]);
         assert_eq!(w, [0, 0, 0, 0, 1, 0, 0, 0]);
         for p in [P, Q] {
+            // At the REDC input ceiling, (mR - 1) / R is -1/R modulo m.
+            let one = [1, 0, 0, 0];
+            let mut ceiling = [u64::MAX; 8];
+            ceiling[4..].copy_from_slice(&sub_raw(&p.m, &one));
+            let inverse_r = from_mont(&one, &p);
+            assert_eq!(mont_reduce(ceiling, &p), sub_raw(&p.m, &inverse_r));
             // 2^256 mod m = 2^256 - 3m because 3m < 2^256 < 4m.
             let three_m = add_raw(&add_raw(&p.m, &p.m), &p.m);
             let expected = sub_raw(&[0; 4], &three_m);

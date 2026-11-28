@@ -141,21 +141,24 @@ macro_rules! curve_suite {
 
         // Hash-to-curve: every ParamsIPA generator index below 2^16, w and u.
         let mine = iroha_pasta::curve::hash_to_curve::hasher::<M>("Halo2-Parameters").unwrap();
-        let mismatches: usize = (0u32..256)
-            .into_par_iter()
-            .map(|chunk| {
-                // The reference hasher is not Sync; build one per chunk.
-                let theirs = T::hash_to_curve("Halo2-Parameters");
-                (chunk * 256..(chunk + 1) * 256)
-                    .filter(|i| {
-                        let mut message = [0u8; 5];
-                        message[1..5].copy_from_slice(&i.to_le_bytes());
-                        mine(&message).to_bytes() != theirs(&message).to_bytes()
-                    })
-                    .count()
-            })
-            .sum();
-        assert_eq!(mismatches, 0);
+        (0u32..256).into_par_iter().for_each(|chunk| {
+            // The reference hasher is not Sync; build one per chunk.
+            let theirs = T::hash_to_curve("Halo2-Parameters");
+            let messages: Vec<_> = (chunk * 256..(chunk + 1) * 256)
+                .map(|i| {
+                    let mut message = [0u8; 5];
+                    message[1..].copy_from_slice(&i.to_le_bytes());
+                    message
+                })
+                .collect();
+            let batch = M::hash_to_curve_batch("Halo2-Parameters", &messages).unwrap();
+            assert_eq!(batch.len(), messages.len());
+            for (message, point) in messages.iter().zip(batch) {
+                let expected = theirs(message).to_bytes();
+                assert_eq!(mine(message).to_bytes(), expected);
+                assert_eq!(point.to_bytes(), expected);
+            }
+        });
         let theirs = T::hash_to_curve("Halo2-Parameters");
         for message in [
             &[1u8][..],

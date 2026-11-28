@@ -5,16 +5,27 @@
 use num_bigint::{BigInt, BigUint, Sign};
 use num_integer::Integer;
 use num_traits::{One, Zero};
+use std::sync::LazyLock;
+
+use ::p256::elliptic_curve::{
+    group::ff::PrimeField, hazmat::FieldArithmetic, point::AffineCoordinates,
+};
+use ::p256::{AffinePoint, FieldBytes, NistP256, ProjectivePoint, Scalar};
+
+static BASE_MODULUS: LazyLock<BigUint> =
+    LazyLock::new(|| hex("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff"));
+static SCALAR_MODULUS: LazyLock<BigUint> =
+    LazyLock::new(|| hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"));
 
 fn hex(s: &str) -> BigUint {
     BigUint::parse_bytes(s.as_bytes(), 16).expect("hex constant")
 }
 
 pub fn p() -> BigUint {
-    hex("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff")
+    BASE_MODULUS.clone()
 }
 pub fn n() -> BigUint {
-    hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+    SCALAR_MODULUS.clone()
 }
 pub fn b() -> BigUint {
     hex("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b")
@@ -39,7 +50,45 @@ pub fn modp(x: &BigInt, m: &BigUint) -> BigUint {
 }
 
 pub fn inv(x: &BigUint, m: &BigUint) -> BigUint {
+    // A canonical witness denominator can go straight through the constant-time
+    // field inversion. Keep the reference exponentiation for other moduli and
+    // unreduced inputs, including its result for zero.
+    if x < m && (m == &*BASE_MODULUS || m == &*SCALAR_MODULUS) {
+        fn inverse<F: PrimeField<Repr = FieldBytes>>(bytes: FieldBytes) -> BigUint {
+            let element = F::from_repr(bytes).expect("canonical field element");
+            BigUint::from_bytes_be(&element.invert().unwrap_or(F::ZERO).to_repr())
+        }
+        let bytes = field_bytes(x).expect("P-256 denominator fits 32 bytes");
+        return if m == &*BASE_MODULUS {
+            inverse::<<NistP256 as FieldArithmetic>::FieldElement>(bytes)
+        } else {
+            inverse::<Scalar>(bytes)
+        };
+    }
     x.modpow(&(m - 2u32), m)
+}
+
+fn field_bytes(value: &BigUint) -> Option<FieldBytes> {
+    let bytes = value.to_bytes_be();
+    let mut word = FieldBytes::default();
+    let start = word.len().checked_sub(bytes.len())?;
+    word[start..].copy_from_slice(&bytes);
+    Some(word)
+}
+
+fn affine(point: &Point) -> Option<AffinePoint> {
+    AffinePoint::from_coordinates(&field_bytes(&point.x)?, &field_bytes(&point.y)?).into_option()
+}
+
+fn coordinates(point: ProjectivePoint) -> Option<Point> {
+    if point == ProjectivePoint::IDENTITY {
+        return None;
+    }
+    let point = point.to_affine();
+    Some(Point {
+        x: BigUint::from_bytes_be(&point.x()),
+        y: BigUint::from_bytes_be(&point.y()),
+    })
 }
 
 fn sub_mod(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
@@ -56,21 +105,31 @@ pub fn on_curve(pt: &Point) -> bool {
 /// Affine addition of two points with distinct x (incomplete; `None` result
 /// would be the point at infinity, which callers never produce).
 pub fn add(a: &Point, c: &Point) -> Point {
+    add_with_slope(a, c).1
+}
+
+/// The affine witness needs both the chord and the resulting coordinates.
+pub(crate) fn add_with_slope(a: &Point, c: &Point) -> (BigUint, Point) {
     let p = p();
     assert_ne!(a.x, c.x, "incomplete addition: distinct x");
     let lam = sub_mod(&c.y, &a.y, &p) * inv(&sub_mod(&c.x, &a.x, &p), &p) % &p;
     let x3 = sub_mod(&sub_mod(&(&lam * &lam % &p), &a.x, &p), &c.x, &p);
     let y3 = sub_mod(&(&lam * sub_mod(&a.x, &x3, &p) % &p), &a.y, &p);
-    Point { x: x3, y: y3 }
+    (lam, Point { x: x3, y: y3 })
 }
 
 pub fn double(a: &Point) -> Point {
+    double_with_slope(a).1
+}
+
+/// The tangent and coordinates of the doubled affine point.
+pub(crate) fn double_with_slope(a: &Point) -> (BigUint, Point) {
     let p = p();
     let num = (BigUint::from(3u32) * &a.x * &a.x + (&p - 3u32)) % &p;
     let lam = num * inv(&(BigUint::from(2u32) * &a.y % &p), &p) % &p;
     let x3 = sub_mod(&(&lam * &lam % &p), &(BigUint::from(2u32) * &a.x % &p), &p);
     let y3 = sub_mod(&(&lam * sub_mod(&a.x, &x3, &p) % &p), &a.y, &p);
-    Point { x: x3, y: y3 }
+    (lam, Point { x: x3, y: y3 })
 }
 
 pub fn neg(a: &Point) -> Point {
@@ -83,6 +142,13 @@ pub fn neg(a: &Point) -> Point {
 
 /// Complete scalar multiplication (handles the identity internally).
 pub fn mul(base: &Point, k: &BigUint) -> Option<Point> {
+    if k < &*SCALAR_MODULUS
+        && let Some(point) = affine(base)
+    {
+        let scalar = Scalar::from_repr(field_bytes(k).expect("reduced scalar fits 32 bytes"))
+            .expect("scalar below the group order");
+        return coordinates(ProjectivePoint::from(point) * scalar);
+    }
     let mut acc: Option<Point> = None;
     for i in (0..k.bits()).rev() {
         acc = acc.map(|a| double(&a));
@@ -148,10 +214,7 @@ pub(crate) fn verified_point(
     r: &BigUint,
     s: &BigUint,
 ) -> Option<(BigUint, BigUint, Point)> {
-    use ::p256::elliptic_curve::{
-        group::ff::PrimeField, ops::LinearCombination, point::AffineCoordinates,
-    };
-    use ::p256::{AffinePoint, FieldBytes, ProjectivePoint, Scalar};
+    use ::p256::elliptic_curve::ops::LinearCombination;
 
     let n = n();
     if r.is_zero() || s.is_zero() || r >= &n || s >= &n {
@@ -160,17 +223,7 @@ pub(crate) fn verified_point(
     let w = inv(s, &n);
     let u1 = z * &w % &n;
     let u2 = r * &w % &n;
-    let field_bytes = |value: &BigUint| {
-        let bytes = value.to_bytes_be();
-        let mut word = FieldBytes::default();
-        let start = word.len().checked_sub(bytes.len())?;
-        word[start..].copy_from_slice(&bytes);
-        Some(word)
-    };
-    let key = field_bytes(&q.x)
-        .zip(field_bytes(&q.y))
-        .and_then(|(x, y)| AffinePoint::from_coordinates(&x, &y).into_option());
-    let point = if let Some(key) = key {
+    let point = if let Some(key) = affine(q) {
         let scalar = |u: &BigUint| {
             Scalar::from_repr(field_bytes(u).expect("reduced P-256 scalar fits 32 bytes"))
                 .into_option()
@@ -180,14 +233,7 @@ pub(crate) fn verified_point(
             (ProjectivePoint::GENERATOR, scalar(&u1)),
             (ProjectivePoint::from(key), scalar(&u2)),
         ]);
-        if sum == ProjectivePoint::IDENTITY {
-            return None;
-        }
-        let sum = sum.to_affine();
-        Point {
-            x: BigUint::from_bytes_be(&sum.x()),
-            y: BigUint::from_bytes_be(&sum.y()),
-        }
+        coordinates(sum)?
     } else {
         // Protocol callers validate their keys. Direct arithmetic callers can
         // supply raw coordinates, on which the original affine formulas operate.
@@ -331,6 +377,47 @@ mod tests {
     fn generator_order() {
         assert!(on_curve(&generator()));
         assert!(mul(&generator(), &n()).is_none());
+    }
+
+    #[test]
+    fn witness_inverses_match_modular_exponentiation() {
+        for modulus in [p(), n(), BigUint::from(101u32)] {
+            for x in [
+                BigUint::zero(),
+                BigUint::one(),
+                &modulus - 1u32,
+                scalar_below("witness denominator", &modulus),
+                modulus.clone(),
+                &modulus * 3u32 + 7u32,
+            ] {
+                assert_eq!(inv(&x, &modulus), x.modpow(&(&modulus - 2u32), &modulus));
+            }
+        }
+    }
+
+    #[test]
+    fn witness_slopes_and_products_match_curve_equations() {
+        let modulus = p();
+        let g = generator();
+        let (tangent, two) = double_with_slope(&g);
+        assert_eq!(
+            (&tangent * &g.y * 2u32 + 3u32) % &modulus,
+            (&g.x * &g.x * 3u32) % &modulus
+        );
+        let (chord, three) = add_with_slope(&g, &two);
+        assert_eq!(
+            (&chord * sub_mod(&two.x, &g.x, &modulus)) % &modulus,
+            sub_mod(&two.y, &g.y, &modulus)
+        );
+        assert_eq!(mul(&g, &BigUint::from(2u32)), Some(two));
+        assert_eq!(mul(&g, &BigUint::from(3u32)), Some(three.clone()));
+        let mut sum = None;
+        for k in 0..19u32 {
+            assert_eq!(mul(&three, &BigUint::from(k)), sum);
+            sum = add_any(sum, Some(three.clone()));
+        }
+        assert_eq!(mul(&three, &(&n() - 1u32)), Some(neg(&three)));
+        assert_eq!(mul(&three, &(&n() + 1u32)), Some(three));
     }
 
     #[test]

@@ -145,6 +145,17 @@ pub trait PastaCurve:
     /// failed the curve check (an internal error; the map fails closed).
     fn hash_to_curve(domain_prefix: &str, message: &[u8]) -> Result<Self, HashToCurveError>;
 
+    /// Hash each public message under the same domain, preserving input order.
+    /// Independent SWU candidates share an inversion in bounded batches.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same domain and curve-check errors as [`Self::hash_to_curve`].
+    fn hash_to_curve_batch<M: AsRef<[u8]>>(
+        domain_prefix: &str,
+        messages: &[M],
+    ) -> Result<Vec<Self>, HashToCurveError>;
+
     /// Returns the homogeneous projective coordinates `(X, Y, Z)`.
     fn projective_coordinates(&self) -> (Self::Base, Self::Base, Self::Base);
 
@@ -879,6 +890,16 @@ macro_rules! impl_pasta_curve {
                 message: &[u8],
             ) -> Result<Self, HashToCurveError> {
                 crate::curve::hash_to_curve::hash_to_curve::<$name>(domain_prefix, message)
+            }
+
+            fn hash_to_curve_batch<M: AsRef<[u8]>>(
+                domain_prefix: &str,
+                messages: &[M],
+            ) -> Result<Vec<Self>, HashToCurveError> {
+                crate::curve::hash_to_curve::hash_to_curve_batch::<$name, M>(
+                    domain_prefix,
+                    messages,
+                )
             }
 
             fn projective_coordinates(&self) -> ($base, $base, $base) {

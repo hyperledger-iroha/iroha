@@ -31,6 +31,8 @@
 //!   one-product checks; `r, s <= n - 1`, `x(P) <= p - 1` and
 //!   `x(P) = r + flag n` as integer additions with boolean carries.
 
+use std::sync::LazyLock;
+
 use num_bigint::{BigInt, BigUint, Sign};
 use num_integer::Integer;
 use num_traits::{One, Zero};
@@ -68,17 +70,26 @@ pub(crate) fn pow2(k: usize) -> BigUint {
     BigUint::one() << k
 }
 
-fn fp_modulus() -> BigUint {
+fn fp_modulus() -> &'static BigUint {
     use ff::PrimeField;
-    BigUint::from_bytes_le((-Fp::from(1u64)).to_repr().as_ref()) + 1u32
+    static MODULUS: LazyLock<BigUint> =
+        LazyLock::new(|| BigUint::from_bytes_le((-Fp::one()).to_repr().as_ref()) + 1u32);
+    &MODULUS
 }
 
 pub(crate) fn fp_u(x: &BigUint) -> Fp {
-    use ff::PrimeField;
-    let mut repr = [0u8; 32];
-    let bytes = (x % fp_modulus()).to_bytes_le();
-    repr[..bytes.len()].copy_from_slice(&bytes);
-    Fp::from_repr(repr).unwrap()
+    let reduced;
+    let x = if x.bits() > 256 {
+        reduced = x % fp_modulus();
+        &reduced
+    } else {
+        x
+    };
+    let mut limbs = [0; 4];
+    for (limb, digit) in limbs.iter_mut().zip(x.iter_u64_digits()) {
+        *limb = digit;
+    }
+    Fp::from_raw(limbs)
 }
 
 fn fp_i(x: &BigInt) -> Fp {
@@ -136,13 +147,33 @@ pub(crate) fn recompose(first: usize, widths: &[usize], n: usize) -> Lin<Fp> {
 
 /// Chunk values of `x` for `widths`.
 pub(crate) fn chunk_values(x: &BigUint, widths: &[usize]) -> Vec<Fp> {
-    let mut shift = 0;
+    if widths.iter().any(|&width| width > 64) {
+        let mut shift = 0;
+        return widths
+            .iter()
+            .map(|&width| {
+                let value = fp_u(&((x >> shift) % pow2(width)));
+                shift += width;
+                value
+            })
+            .collect();
+    }
+    // A chunk crosses at most one word boundary. Keep the remaining high bits
+    // for the next chunk and zero-extend past the integer's most significant word.
+    let mut digits = x.iter_u64_digits();
+    let mut buffer = 0u128;
+    let mut available = 0;
     widths
         .iter()
-        .map(|w| {
-            let v = fp_u(&((x >> shift) % pow2(*w)));
-            shift += w;
-            v
+        .map(|&width| {
+            if available < width {
+                buffer |= u128::from(digits.next().unwrap_or(0)) << available;
+                available += 64;
+            }
+            let value = (buffer & ((1u128 << width) - 1)) as u64;
+            buffer >>= width;
+            available -= width;
+            Fp::from(value)
         })
         .collect()
 }
@@ -625,8 +656,10 @@ impl CheckShape {
 }
 
 /// Value array cells: three limbs, then their chunks (88 + 88 + 80 bits).
-fn value_chunks() -> [Vec<usize>; 3] {
-    [L, L, 256 - 2 * L].map(chunk_widths)
+fn value_chunks() -> &'static [Vec<usize>; 3] {
+    static WIDTHS: LazyLock<[Vec<usize>; 3]> =
+        LazyLock::new(|| [L, L, 256 - 2 * L].map(chunk_widths));
+    &WIDTHS
 }
 
 pub fn value_cells_count() -> usize {
@@ -670,23 +703,18 @@ fn value_widths() -> Vec<u16> {
 pub fn comb_bits(u: &BigUint) -> Vec<bool> {
     let n = p256::n();
     let inv2 = (&n + 1u32) >> 1;
-    let b = (u + pow2(256) - 1u32) % &n * &inv2 % &n;
-    (0..256)
-        .map(|t| ((&b >> t) % 2u32) == BigUint::one())
-        .collect()
+    let b: BigUint = (u + pow2(256) - 1u32) % &n * &inv2 % &n;
+    (0..256).map(|t| b.bit(t)).collect()
 }
 
-/// Slope of the addition a + c: the chord, or the tangent when equal.
-fn slope(a: &Point, c: &Point) -> BigUint {
-    let p = p256::p();
+/// Return the chord or tangent and the finite sum used by the witness.
+fn finite_sum_with_slope(a: &Point, c: &Point) -> (BigUint, Point) {
     if a.x == c.x {
         assert_eq!(a.y, c.y, "opposite points have no sum");
-        let num = (BigUint::from(3u32) * &a.x * &a.x + &p - 3u32) % &p;
-        return num * p256::inv(&(BigUint::from(2u32) * &a.y % &p), &p) % &p;
+        p256::double_with_slope(a)
+    } else {
+        p256::add_with_slope(a, c)
     }
-    let dx = (&c.x + &p - &a.x) % &p;
-    let dy = (&c.y + &p - &a.y) % &p;
-    dy * p256::inv(&dx, &p) % &p
 }
 
 /// Where a check input reads from.
@@ -1209,15 +1237,12 @@ pub fn comb_with_key_table(
                 }
             }
             // double_add(acc, e0) = 2 acc + e0, then + e1, e2, e3.
-            let l1 = slope(&accp, &e[0]);
-            let rp = p256::add(&accp, &e[0]);
-            let l2 = slope(&rp, &accp);
-            let out = p256::add(&rp, &accp);
+            let (l1, rp) = p256::add_with_slope(&accp, &e[0]);
+            let (l2, out) = p256::add_with_slope(&rp, &accp);
             let mut vals: Vec<BigUint> = vec![l1, rp.x.clone(), l2, out.x.clone(), out.y.clone()];
             let mut a = out;
             for ej in &e[1..] {
-                let l = slope(&a, ej);
-                let sum = p256::add(&a, ej);
+                let (l, sum) = p256::add_with_slope(&a, ej);
                 vals.extend([l, sum.x.clone(), sum.y.clone()]);
                 a = sum;
             }
@@ -1271,9 +1296,7 @@ pub fn comb_with_key_table(
             accp = a;
         }
         // The final addition P = acc + C and the per-signature values.
-        let lam = slope(&accp, &cpt);
-        let pt =
-            p256::add_any(Some(accp.clone()), Some(cpt.clone())).expect("P is not the identity");
+        let (lam, pt) = finite_sum_with_slope(&accp, &cpt);
         assert_eq!(pt, expected_point, "comb computes u1 G + u2 Q");
         assert_eq!(&pt.x % &nn, *r, "x(P) = r (mod n)");
         let t2 = &accp.x * ((&accp.x + &cpt.x) % &p) % &p;
@@ -2879,9 +2902,9 @@ pub fn key_tables(first: usize, fam: usize, q: &Point) -> KeyTables {
     let mut dp: Vec<Point> = vec![q.clone()];
     let mut dl: Vec<BigUint> = vec![&q.x * &q.x % &p];
     for s in 1..=KT_DOUBLINGS {
-        let prev = dp[s - 1].clone();
-        dl.push(slope(&prev, &prev));
-        dp.push(p256::double(&prev));
+        let (tangent, next) = p256::double_with_slope(&dp[s - 1]);
+        dl.push(tangent);
+        dp.push(next);
     }
     let step_of_point = |i: usize| if i < 16 { 16 * i } else { 16 * (i - 16) + 1 };
     let key_point = |i: usize| dp[step_of_point(i)].clone();
@@ -2895,9 +2918,7 @@ pub fn key_tables(first: usize, fam: usize, q: &Point) -> KeyTables {
     }
     let add = |a: &Point, c: &Point, sign: i64| -> Add {
         let cs = if sign < 0 { p256::neg(c) } else { c.clone() };
-        let lam = slope(a, &cs);
-        let out =
-            p256::add_any(Some(a.clone()), Some(cs)).expect("a table entry is not the identity");
+        let (lam, out) = finite_sum_with_slope(a, &cs);
         Add {
             c: c.clone(),
             sign,
@@ -3248,6 +3269,53 @@ mod tests {
     use crate::uniform::UniformCircuit;
     use ff::Field;
     use iroha_pasta::Eq as Vesta;
+
+    #[test]
+    fn native_witness_cells_match_integer_reduction_and_bit_slices() {
+        use ff::PrimeField;
+        let modulus = BigUint::from_bytes_le((-Fp::ONE).to_repr().as_ref()) + 1u32;
+        let reference = |v: &BigUint| {
+            let bytes = (v % &modulus).to_bytes_le();
+            let mut repr = [0; 32];
+            repr[..bytes.len()].copy_from_slice(&bytes);
+            Fp::from_repr(repr).unwrap()
+        };
+        let pattern =
+            BigUint::from_bytes_le(&(0..80).map(|i| (37 * i + 9) as u8).collect::<Vec<_>>());
+        for x in [
+            BigUint::zero(),
+            &modulus - 1u32,
+            modulus.clone(),
+            &modulus + 1u32,
+            pow2(256) - 1u32,
+            pow2(256),
+            pattern,
+        ] {
+            assert_eq!(fp_u(&x), reference(&x));
+            assert_eq!(fp_i(&-BigInt::from(x.clone())), -reference(&x));
+            for widths in [
+                vec![],
+                vec![0, 64, 1, 0, 63, 62, 7],
+                chunk_widths(713),
+                vec![88, 88, 80, 269],
+            ] {
+                let mut shift = 0;
+                let expected: Vec<_> = widths
+                    .iter()
+                    .map(|&w| {
+                        let v = reference(&((&x >> shift) % pow2(w)));
+                        shift += w;
+                        v
+                    })
+                    .collect();
+                assert_eq!(chunk_values(&x, &widths), expected);
+            }
+        }
+        assert_eq!(
+            *value_chunks(),
+            [chunk_widths(88), chunk_widths(88), chunk_widths(80)]
+        );
+    }
 
     fn small() -> (
         UniformCircuit<Fp>,
