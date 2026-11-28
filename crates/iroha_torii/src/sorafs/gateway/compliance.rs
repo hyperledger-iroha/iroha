@@ -776,7 +776,7 @@ impl FileGatewayComplianceStore {
         #[cfg(windows)]
         let directory = Arc::new(
             iroha_fs::OwnerDirectory::open(parent)
-                .map_err(|error| persistence_io("retain checkpoint directory", error))?,
+                .map_err(|error| persistence_io("retain checkpoint directory", &error))?,
         );
         Ok(Self {
             #[cfg(windows)]
@@ -2746,7 +2746,7 @@ fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError>
     #[cfg(windows)]
     iroha_fs::OwnerDirectory::open(path)
         .and_then(|directory| directory.revalidate())
-        .map_err(|error| persistence_io("validate checkpoint directory custody", error))?;
+        .map_err(|error| persistence_io("validate checkpoint directory custody", &error))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

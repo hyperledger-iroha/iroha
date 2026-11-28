@@ -6,7 +6,7 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
     fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
         self.directory
             .revalidate()
-            .map_err(|error| persistence_io("revalidate checkpoint directory", error))?;
+            .map_err(|error| persistence_io("revalidate checkpoint directory", &error))?;
         let lock_path = checkpoint_lock_path(&self.path)?;
         let lock_name = lock_path.file_name().ok_or_else(|| {
             GatewayComplianceError::Persistence("checkpoint lease has no filename".into())
@@ -14,14 +14,14 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         let file = self
             .directory
             .open_lock(lock_name)
-            .map_err(|error| persistence_io("open private checkpoint lease", error))?;
+            .map_err(|error| persistence_io("open private checkpoint lease", &error))?;
         let snapshot = iroha_fs::FileSnapshot::of(&file, true)
-            .map_err(|error| persistence_io("inspect checkpoint lease custody", error))?;
+            .map_err(|error| persistence_io("inspect checkpoint lease custody", &error))?;
         match file.try_lock() {
             Ok(()) => {}
             Err(fs::TryLockError::WouldBlock) => return Err(GatewayComplianceError::LeaseHeld),
             Err(fs::TryLockError::Error(error)) => {
-                return Err(persistence_io("lock checkpoint lease", error));
+                return Err(persistence_io("lock checkpoint lease", &error));
             }
         }
         let lease = FileGatewayComplianceStoreLease {
@@ -48,9 +48,9 @@ impl FileGatewayComplianceStoreLease {
                 })?,
                 &self._lock_file,
             )
-            .map_err(|error| persistence_io("revalidate checkpoint lease", error))?;
+            .map_err(|error| persistence_io("revalidate checkpoint lease", &error))?;
         if iroha_fs::FileSnapshot::of(&self._lock_file, true)
-            .map_err(|error| persistence_io("reinspect checkpoint lease", error))?
+            .map_err(|error| persistence_io("reinspect checkpoint lease", &error))?
             != self.lock_snapshot
         {
             return Err(GatewayComplianceError::Persistence(
@@ -59,7 +59,7 @@ impl FileGatewayComplianceStoreLease {
         }
         self.directory
             .revalidate()
-            .map_err(|error| persistence_io("revalidate checkpoint directory", error))
+            .map_err(|error| persistence_io("revalidate checkpoint directory", &error))
     }
 
     fn read_current(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
@@ -71,18 +71,18 @@ impl FileGatewayComplianceStoreLease {
             let Some(mut original) = self
                 .directory
                 .open_retained_regular_optional(name)
-                .map_err(|error| persistence_io("open checkpoint original", error))?
+                .map_err(|error| persistence_io("open checkpoint original", &error))?
             else {
                 return Ok(checkpoint_store_snapshot(None));
             };
             let before = original
                 .snapshot()
-                .map_err(|error| persistence_io("inspect checkpoint original", error))?;
+                .map_err(|error| persistence_io("inspect checkpoint original", &error))?;
             let length = usize::try_from(
                 original
                     .file()
                     .metadata()
-                    .map_err(|error| persistence_io("inspect checkpoint extent", error))?
+                    .map_err(|error| persistence_io("inspect checkpoint extent", &error))?
                     .len(),
             )
             .unwrap_or(usize::MAX);
@@ -101,7 +101,7 @@ impl FileGatewayComplianceStoreLease {
                         .saturating_add(1),
                 )
                 .read_to_end(&mut bytes)
-                .map_err(|error| persistence_io("read bounded checkpoint", error))?;
+                .map_err(|error| persistence_io("read bounded checkpoint", &error))?;
             if bytes.len() > self.max_bytes {
                 return Err(GatewayComplianceError::ResourceLimit {
                     resource: "compliance checkpoint bytes",
@@ -113,7 +113,7 @@ impl FileGatewayComplianceStoreLease {
                 || before
                     != original
                         .snapshot()
-                        .map_err(|error| persistence_io("reinspect checkpoint original", error))?
+                        .map_err(|error| persistence_io("reinspect checkpoint original", &error))?
             {
                 return Err(GatewayComplianceError::Persistence(
                     "compliance checkpoint changed during bounded read".into(),
@@ -185,7 +185,7 @@ impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
             return Err(if published || conflict {
                 GatewayComplianceError::CheckpointConflict
             } else {
-                persistence_io("publish private checkpoint", error)
+                persistence_io("publish private checkpoint", &error)
             });
         }
         let durable = self
