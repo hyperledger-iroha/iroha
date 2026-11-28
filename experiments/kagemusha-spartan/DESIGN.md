@@ -1087,6 +1087,32 @@ The candidate passed 202 Pasta tests, 382 wallet tests and four signed-original 
 passed two JavaScript tests and 16 Rust admission tests. Its encoded contract bytes matched the previous
 fixture.
 
+Two additional six-worker profile pairs reversed version order. Each row averages totals for seven openings
+per curve per process, including two cold table preparations where indicated. Kernel timers measure elapsed
+time. The native opening CPU row uses OS process samples.
+
+| Matched wallet profiles | Primary Vesta (s) | Secondary Pallas (s) |
+|---|---:|---:|
+| Cold table preparation | 0.334 / 0.286 | 0.220 / 0.150 |
+| First generator fold, prepared table | 2.528 / 2.091 | 1.479 / 1.047 |
+| Remaining generator folds | 4.411 / 4.321 | 2.581 / 2.601 |
+| All generator folds, including preparation | 7.273 / 6.698 | 4.280 / 3.798 |
+| All L/R sums | 6.660 / 6.121 | 2.999 / 3.237 |
+| Complete IPA, including preparation | 14.766 / 13.538 | 7.698 / 7.567 |
+| Native opening, sampled process CPU | 46.270 / 41.950 | 20.735 / 20.000 |
+
+Two reversed, fixed-entropy proof pairs separately exercised Vesta at 2¹⁸ columns and Pallas at 2¹⁷. Each cold
+case starts with an unprepared generator table and no inherited claim. Its warm case reuses the table and
+includes one inherited claim. Each interval includes table setup. All four cases reproduced the archived proof
+bytes, next transcript challenge and next blinding scalar.
+
+| Fixed-entropy opening | Mean elapsed (s) | Mean measured process CPU (s) |
+|---|---:|---:|
+| Vesta, cold | 3.570 / 2.550 | 8.390 / 7.287 |
+| Vesta, warm | 2.841 / 2.071 | 7.333 / 6.540 |
+| Pallas, cold | 1.625 / 1.348 | 4.297 / 3.980 |
+| Pallas, warm | 1.860 / 1.389 | 3.898 / 3.501 |
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
