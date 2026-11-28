@@ -191,7 +191,15 @@ mod tests {
             env_of(&[("TERM_PROGRAM", "Apple_Terminal")])
         ));
         assert!(supports_color_with(true, env_of(&[("CLICOLOR", "1")])));
-        assert!(!supports_color_with(true, env_of(&[("CLICOLOR", "0")])));
+        // CLICOLOR=0 does not disable an independently capable native terminal.
+        assert_eq!(
+            supports_color_with(true, env_of(&[("CLICOLOR", "0")])),
+            cfg!(windows)
+        );
+        assert!(!supports_color_with(
+            true,
+            env_of(&[("CLICOLOR", "0"), ("TERM", "dumb")])
+        ));
         assert_eq!(supports_color_with(true, env_of(&[])), cfg!(windows));
     }
 

@@ -136,7 +136,8 @@ impl PublicInput {
 }
 
 #[cfg(windows)]
-pub(crate) struct PublicInput {
+/// Retained public deployment input with native identity and mutation checks.
+pub struct PublicInput {
     file: iroha_fs::RetainedFile,
     snapshot: iroha_fs::FileSnapshot,
     pub(crate) bytes: Vec<u8>,
