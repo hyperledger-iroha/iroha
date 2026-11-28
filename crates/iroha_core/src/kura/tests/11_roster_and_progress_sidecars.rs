@@ -32,6 +32,40 @@ mod native_mutation_directory_barriers {
     }
 
     #[test]
+    fn native_evidence_publication_syncs_and_never_replaces_existing_bytes() {
+        with_namespace(|kura, namespace| {
+            let parent = &namespace.directories[0].expected_path;
+            let path = parent.join("evidence.bin");
+            let temporary = parent.join(".evidence.tmp");
+            assert!(
+                kura.publish_bound_noclobber_file_locked(
+                    &namespace,
+                    &path,
+                    &temporary,
+                    b"original evidence",
+                    "native evidence test",
+                )
+                .unwrap()
+            );
+            assert!(!temporary.exists());
+            assert_eq!(fs::read(&path).unwrap(), b"original evidence");
+            assert!(
+                !kura
+                    .publish_bound_noclobber_file_locked(
+                        &namespace,
+                        &path,
+                        &temporary,
+                        b"different evidence",
+                        "native evidence test",
+                    )
+                    .unwrap()
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"original evidence");
+            assert!(!temporary.exists());
+        });
+    }
+
+    #[test]
     fn native_mutation_barriers_sync_original_directories_and_release_ancestry() {
         with_namespace(|kura, namespace| {
             let original_ids: Vec<_> = namespace

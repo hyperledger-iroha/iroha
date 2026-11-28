@@ -11,6 +11,12 @@ pub(crate) enum ArchiveDirectory {
 }
 
 impl ArchiveDirectory {
+    pub(super) fn sync_all(&self) -> io::Result<()> {
+        self.revalidate()?;
+        self.owner()?.sync()?;
+        self.revalidate()
+    }
+
     pub(crate) fn from_owner(owner: OwnerDirectory) -> Self {
         Self::Owner(owner)
     }
@@ -171,16 +177,36 @@ pub(super) fn publish_named_record(
     staged: &RecordName,
     bytes: &[u8],
 ) -> io::Result<()> {
+    publish_stored(directory, target, staged, bytes, bytes)
+}
+
+/// Compare either stored form while the canonical reader retains its original identity.
+pub(super) fn accept_existing(
+    directory: &ArchiveDirectory,
+    mut file: ArchiveFile,
+    staged: &RecordName,
+    original: &[u8],
+    context: bool,
+) -> io::Result<()> {
+    packed::verify_original(directory, &mut file, original, context)?;
+    directory.sync_all()?;
+    remove_matching_stage(directory, staged, original, context)?;
+    file.revalidate()?;
+    directory.revalidate()
+}
+
+/// Stream either form through the exclusive private creator and its native no-replace move.
+pub(super) fn publish_stored(
+    directory: &ArchiveDirectory,
+    target: &RecordName,
+    staged: &RecordName,
+    stored: &(impl packed::StoredContent + ?Sized),
+    original: &[u8],
+) -> io::Result<()> {
     let owner = directory.owner()?;
+    let context = target.is_context();
     match open_named_record(directory, target) {
-        Ok(mut file) => {
-            verify_stream(&mut file, bytes)?;
-            owner.sync()?;
-            remove_matching_stage(directory, staged, bytes)?;
-            file.revalidate()?;
-            directory.revalidate()?;
-            return Ok(());
-        }
+        Ok(file) => return accept_existing(directory, file, staged, original, context),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
@@ -188,8 +214,8 @@ pub(super) fn publish_named_record(
     // exact private single-link stage and authors a fresh original from retained bytes.
     // No recovered file is converted into a creator or mutable publication capability.
     owner.remove_private(staged.as_str())?;
-    let mut pending = owner.create_retained_private(staged.as_str(), bytes.len().max(1))?;
-    pending.write_all(bytes)?;
+    let mut pending = owner.create_retained_private(staged.as_str(), stored.len().max(1))?;
+    stored.write_to(&mut pending)?;
     let source = pending.finish_private()?;
     #[cfg(test)]
     process_crash::observe(target, process_crash::Boundary::StageSynced);
@@ -203,19 +229,14 @@ pub(super) fn publish_named_record(
     let mut moved = match moved {
         Ok(moved) => moved,
         Err(error) if !published && error.kind() == io::ErrorKind::AlreadyExists => {
-            let mut file = open_named_record(directory, target)?;
-            verify_stream(&mut file, bytes)?;
-            owner.sync()?;
-            remove_matching_stage(directory, staged, bytes)?;
-            file.revalidate()?;
-            directory.revalidate()?;
-            return Ok(());
+            let file = open_named_record(directory, target)?;
+            return accept_existing(directory, file, staged, original, context);
         }
         // In particular, do not erase either name following uncertain publication.
         Err(error) => return Err(error),
     };
     moved.rewind()?;
-    verify_stream(&mut moved, bytes)?;
+    stored.verify(&mut moved)?;
     moved.require_source_absent()?;
     directory.revalidate()?;
     #[cfg(test)]
@@ -228,17 +249,19 @@ pub(super) fn publish_named_record(
     Ok(())
 }
 
-fn remove_matching_stage(
+/// Remove only the retained private stage whose decoded bytes match the original.
+pub(super) fn remove_matching_stage(
     directory: &ArchiveDirectory,
     name: &RecordName,
     expected: &[u8],
+    context: bool,
 ) -> io::Result<()> {
     let mut original = match open_named_record(directory, name) {
         Ok(original) => original,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    verify_stream(&mut original, expected)?;
+    packed::verify_original(directory, &mut original, expected, context)?;
     original.revalidate()?;
     let snapshot = original.snapshot;
     // Transfer only the exact observed private snapshot to the canonical DELETE opener.
