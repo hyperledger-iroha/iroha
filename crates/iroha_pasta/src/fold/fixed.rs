@@ -1,5 +1,8 @@
 //! First-round IPA folding over an immutable, reusable public basis.
 
+#[path = "joint.rs"]
+mod joint;
+
 use super::straus::{Addition, add_digits, straus_block};
 use super::*;
 use std::{
@@ -110,7 +113,7 @@ impl<C: PastaCurve> FixedGeneratorBasis<C> {
         &self,
         shifted: &[C::AffineExt],
         u: &C::ScalarExt,
-        columns: &[Vec<Addition>],
+        schedule: &Schedule,
     ) -> Vec<C::AffineExt> {
         let (low, high) = self.split_at(self.len() / 2);
         let mut out = low.to_vec();
@@ -120,7 +123,11 @@ impl<C: PastaCurve> FixedGeneratorBasis<C> {
             .zip(shifted.par_chunks(block))
             .with_max_len(1)
             .for_each(|((output, h), q)| {
-                if !straus_block::<C, 2, ODDS>([h, q], output, columns) {
+                let ok = match schedule {
+                    Schedule::Joint(columns) => joint::fold_block::<C>([h, q], output, columns),
+                    Schedule::Wide(columns) => straus_block::<C, 2, ODDS>([h, q], output, columns),
+                };
+                if !ok {
                     fold_block_reference::<C>(output, h, u);
                 }
             });
@@ -128,11 +135,27 @@ impl<C: PastaCurve> FixedGeneratorBasis<C> {
     }
 }
 
-fn schedule<C: PastaCurve>(u: &C::ScalarExt) -> Option<Vec<Vec<Addition>>> {
+enum Schedule {
+    Joint(Vec<Vec<joint::Digit>>),
+    Wide(Vec<Vec<Addition>>),
+}
+
+fn schedule<C: PastaCurve>(u: &C::ScalarExt) -> Option<Schedule> {
     let d = C::glv_decompose(u)?;
     let mask = (1u128 << SHIFT) - 1;
     if d.k1 <= mask && d.k2 <= mask {
         return None;
+    }
+    let mut columns = Vec::new();
+    if d.k1 >> 65 == 0 && d.k2 >> 65 == 0 {
+        let signed = |v: u128, negative: bool| if negative { -(v as i64) } else { v as i64 };
+        for (base, (a, b)) in [(d.k1 & mask, d.k2 & mask), (d.k1 >> SHIFT, d.k2 >> SHIFT)]
+            .into_iter()
+            .enumerate()
+        {
+            joint::digits(base, signed(a, d.k1_neg), signed(b, d.k2_neg), &mut columns);
+        }
+        return Some(Schedule::Joint(columns));
     }
     let mut columns = Vec::new();
     for (endo, scalar, negative) in [(false, d.k1, d.k1_neg), (true, d.k2, d.k2_neg)] {
@@ -140,7 +163,7 @@ fn schedule<C: PastaCurve>(u: &C::ScalarExt) -> Option<Vec<Vec<Addition>>> {
             add_digits::<2>(&mut columns, base, endo, &wnaf_u128(part, WINDOW), negative);
         }
     }
-    Some(columns)
+    Some(Schedule::Wide(columns))
 }
 
 fn shifted_points<C: PastaCurve>(high: &[C::AffineExt]) -> Vec<C::AffineExt> {
@@ -258,7 +281,8 @@ mod tests {
                 assert_eq!(C::from(*p) * C::ScalarExt::from(1u64 << SHIFT), C::from(*q));
             }
             basis.shifted.set(shifted).unwrap();
-            assert!(schedule::<C>(&wallet).is_some());
+            assert!(matches!(schedule::<C>(&wallet), Some(Schedule::Joint(_))));
+            assert!(matches!(schedule::<C>(&full), Some(Schedule::Wide(_))));
             for u in [
                 C::ScalarExt::ZERO,
                 C::ScalarExt::ONE,

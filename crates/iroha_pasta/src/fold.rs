@@ -168,6 +168,47 @@ fn ba_add<F: PastaField>(
     true
 }
 
+/// Folds an affine double and its first signed add into 2P + Q.
+/// For T = P + Q with slope `s`, the slope of T + P is
+/// `-s - 2 * yP / (xT - xP)`. This skips the square for doubling P and the
+/// multiplication for yT. Either zero denominator retries the original operations
+/// from P. The two work slices held odd-table coordinates earlier in this block.
+fn ba_double_add<F: PastaField>(
+    ax: &mut [F],
+    ay: &mut [F],
+    px: &[F],
+    py: &[F],
+    negative: bool,
+    scratch: &mut Scratch<F>,
+    (slope, sum_x): (&mut [F], &mut [F]),
+) -> bool {
+    let m = ax.len();
+    for i in 0..m {
+        scratch.den[i] = px[i] - ax[i];
+    }
+    if !invert_all(&mut scratch.den[..m], &mut scratch.prefix[..m]) {
+        return ba_double(ax, ay, scratch) && ba_add(ax, ay, px, py, negative, scratch);
+    }
+    for i in 0..m {
+        let qy = if negative { -py[i] } else { py[i] };
+        let first = (qy - ay[i]) * scratch.den[i];
+        let xt = first.square() - ax[i] - px[i];
+        slope[i] = first;
+        sum_x[i] = xt;
+        scratch.den[i] = xt - ax[i];
+    }
+    if !invert_all(&mut scratch.den[..m], &mut scratch.prefix[..m]) {
+        return ba_double(ax, ay, scratch) && ba_add(ax, ay, px, py, negative, scratch);
+    }
+    for i in 0..m {
+        let second = -slope[i] - ay[i].double() * scratch.den[i];
+        let xr = second.square() - ax[i] - sum_x[i];
+        ay[i] = second * (ax[i] - xr) - ay[i];
+        ax[i] = xr;
+    }
+    true
+}
+
 /// Folds one block in lockstep: `lo[i] <- lo[i] + u * hi[i]`. Returns false
 /// (leaving `lo` untouched) on any exceptional case.
 fn fold_block<C: PastaCurve>(
@@ -219,16 +260,31 @@ fn fold_block<C: PastaCurve>(
     let mut ay = vec![C::Base::ZERO; m];
     let mut started = false;
     for pos in (0..len).rev() {
-        if started && !ba_double(&mut ax, &mut ay, &mut s) {
-            return false;
-        }
-        for (digit, xs) in [
+        let mut additions = [
             (ch.d1.get(pos).copied().unwrap_or(0), &tx),
             (ch.d2.get(pos).copied().unwrap_or(0), &tzx),
-        ] {
-            if digit == 0 {
-                continue;
+        ]
+        .into_iter()
+        .filter(|(digit, _)| *digit != 0);
+        if started {
+            if let Some((digit, xs)) = additions.next() {
+                let j = (usize::from(digit.unsigned_abs()) - 1) / 2;
+                if !ba_double_add(
+                    &mut ax,
+                    &mut ay,
+                    &xs[j],
+                    &ty[j],
+                    digit < 0,
+                    &mut s,
+                    (&mut dx, &mut dy),
+                ) {
+                    return false;
+                }
+            } else if !ba_double(&mut ax, &mut ay, &mut s) {
+                return false;
             }
+        }
+        for (digit, xs) in additions {
             let j = (usize::from(digit.unsigned_abs()) - 1) / 2;
             if started {
                 if !ba_add(&mut ax, &mut ay, &xs[j], &ty[j], digit < 0, &mut s) {
@@ -418,6 +474,55 @@ mod tests {
             assert_eq!(h, 150);
             assert_eq!(&ours[..h], &reference::<Eq>(&g, &u)[..]);
         }
+    }
+
+    #[test]
+    fn double_and_add_matches_complete_group_operations_on_both_curves() {
+        fn check<C: PastaCurve>() {
+            let generator = C::generator();
+            let p = [generator, generator.double(), -generator];
+            // Exercise both exceptional denominators in the middle of a batch.
+            for q_mid in [generator, p[1], -p[1], p[1].double(), -p[1].double()] {
+                let q = [p[1] + generator, q_mid, p[1].double()];
+                let pa = crate::curve::batch_normalize(&p);
+                let qa = crate::curve::batch_normalize(&q);
+                let qx: Vec<_> = qa.iter().map(PastaAffine::x).collect();
+                let qy: Vec<_> = qa.iter().map(PastaAffine::y).collect();
+                for negative in [false, true] {
+                    let mut x: Vec<_> = pa.iter().map(PastaAffine::x).collect();
+                    let mut y: Vec<_> = pa.iter().map(PastaAffine::y).collect();
+                    let mut slope = [C::Base::ZERO; 3];
+                    let mut sum_x = [C::Base::ZERO; 3];
+                    let mut s = Scratch {
+                        den: vec![C::Base::ZERO; 3],
+                        prefix: vec![C::Base::ZERO; 3],
+                    };
+                    let expected = std::array::from_fn::<_, 3, _>(|i| {
+                        (p[i].double() + if negative { -q[i] } else { q[i] }).to_affine()
+                    });
+                    let finite = ba_double_add(
+                        &mut x,
+                        &mut y,
+                        &qx,
+                        &qy,
+                        negative,
+                        &mut s,
+                        (&mut slope, &mut sum_x),
+                    );
+                    assert_eq!(
+                        finite,
+                        expected.iter().all(|q| !bool::from(q.is_identity()))
+                    );
+                    if finite {
+                        for (i, point) in expected.iter().enumerate() {
+                            assert_eq!((x[i], y[i]), (point.x(), point.y()));
+                        }
+                    }
+                }
+            }
+        }
+        check::<Ep>();
+        check::<Eq>();
     }
 
     #[test]
