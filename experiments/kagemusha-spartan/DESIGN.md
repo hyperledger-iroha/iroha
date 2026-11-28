@@ -1011,6 +1011,32 @@ In the sequential comparison, the candidate used 2.372 more CPU-seconds on avera
 the candidate was faster in all four pairs and saved 4.578 CPU-seconds on average. The slowest
 simultaneous pair took over 1,000 s for both versions. All pairs are included.
 
+Two additional six-worker profile pairs reversed the version order. The figures below sum the seven
+openings per wallet process on each curve, then average the two runs per version. Each curve has two
+cold table preparations. Process CPU for the native opening stage is estimated from OS samples.
+The full profiled runs took 243.545 / 279.712 s and 471.258 / 214.867 s (baseline / candidate).
+
+| Profiled opening work | Primary Vesta, baseline → candidate (s) | Secondary Pallas, baseline → candidate (s) |
+|---|---:|---:|
+| Cold table preparation | 1.477 → 0.650 | 0.761 → 0.371 |
+| Cached first generator fold | 9.406 → 3.973 | 5.229 → 2.483 |
+| All subsequent generator folds | 16.009 → 9.125 | 8.717 → 4.978 |
+| All generator folds including preparation | 26.892 → 13.747 | 14.707 → 7.831 |
+| Complete IPA including preparation | 47.750 → 26.797 | 26.771 → 14.389 |
+| Native opening stage, sampled CPU | 51.680 → 47.310 | 26.625 → 21.580 |
+
+A separate six-worker, fixed-entropy proof check used the signed dimensions for Vesta (2¹⁸ columns)
+and Pallas (2¹⁷). Cold openings had no inherited claim. Warm openings included one. Both revisions
+reproduced every archived proof byte, the next transcript challenge and the next blinding scalar in
+all four cases. The wallet suite passed 382 active tests and all four signed-original checks. Timing used software fixture signing.
+
+| Fixed-entropy opening including table preparation | Mean elapsed, baseline → candidate (s) | Mean process CPU, baseline → candidate (s) |
+|---|---:|---:|
+| Vesta, cold | 8.702 → 5.472 | 7.455 → 6.675 |
+| Vesta, warm | 5.801 → 5.648 | 6.511 → 6.009 |
+| Pallas, cold | 3.840 → 2.909 | 3.688 → 3.274 |
+| Pallas, warm | 3.782 → 2.506 | 3.471 → 2.938 |
+
 Run the benchmark from this experiment with `KAGEMUSHA_SPARTAN_DEVICE_ARTIFACTS` set to the signed bundle directory.
 
 ```sh
